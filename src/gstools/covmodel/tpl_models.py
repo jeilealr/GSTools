@@ -211,6 +211,9 @@ class TPLGaussian(TPLCovModel):
             k, self.dim, self.len_rescaled, self.hurst, self.len_low_rescaled
         )
 
+    def _roughness(self):
+        return 2 * self.hurst
+
 
 class TPLExponential(TPLCovModel):
     r"""Truncated-Power-Law with Exponential modes.
@@ -343,6 +346,9 @@ class TPLExponential(TPLCovModel):
         return tpl_exp_spec_dens(
             k, self.dim, self.len_rescaled, self.hurst, self.len_low_rescaled
         )
+
+    def _roughness(self):
+        return 2 * self.hurst
 
 
 class TPLStable(TPLCovModel):
@@ -499,6 +505,9 @@ class TPLStable(TPLCovModel):
             - self.len_low_rescaled ** (2 * self.hurst)
         )
 
+    def _roughness(self):
+        return 2 * self.hurst
+
 
 class TPLSimple(CovModel):
     r"""The simply truncated power law model.
@@ -573,3 +582,6 @@ class TPLSimple(CovModel):
     def cor(self, h):
         """TPL Simple - normalized correlation function."""
         return np.maximum(1 - np.abs(h, dtype=np.double), 0.0) ** self.nu
+
+    def _roughness(self):
+        return 1.0
