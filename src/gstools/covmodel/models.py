@@ -1004,12 +1004,7 @@ class JBessel(CovModel):
     def cor(self, h):
         """J-Bessel correlation."""
         h = np.asarray(h, dtype=np.double)
-        h_gz = np.logical_not(np.isclose(h, 0))
-        hh = h[h_gz]
-        res = np.ones_like(h)
-        nu = self.nu
-        res[h_gz] = sps.gamma(nu + 1) * sps.jv(nu, hh) / (hh / 2.0) ** nu
-        return res
+        return sps.hyp0f1(self.nu + 1, -0.25 * h**2)
 
     def spectral_density(self, k):  # noqa: D102
         k = np.asarray(k, dtype=np.double)
