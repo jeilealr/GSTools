@@ -191,6 +191,7 @@ class Gaussian(CovModel):
     def _roughness(self):
         return 2.0
 
+
 class Exponential(CovModel):
     r"""The Exponential covariance model.
 

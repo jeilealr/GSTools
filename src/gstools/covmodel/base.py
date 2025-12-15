@@ -1179,7 +1179,7 @@ class CovModel:
             return self._roughness()
         return self.calc_roughness()
 
-    def calc_roughness(self, x=1e-3, dx=1e-6):
+    def calc_roughness(self, x=1e-4, dx=1e-4):
         """Calculate the roughness of the model.
 
         This ignores the nugget of the model.
@@ -1188,10 +1188,10 @@ class CovModel:
         ----------
         x : :class:`float`, optional
             Point at which the derivative is calculated.
-            Default: ``1e-3``
+            Default: ``1e-4``
         dx : :class:`float`, optional
             Step size for the derivative calculation.
-            Default: ``1e-6``
+            Default: ``1e-4``
 
         Returns
         -------
@@ -1213,7 +1213,7 @@ class CovModel:
             """Function for derivative calculation."""
             return np.log(1 - self.cor(np.exp(h)))
 
-        return derivative(f, np.log(x), dx=dx)
+        return derivative(f, np.log(x), dx=dx, order=1)
 
     def __eq__(self, other):
         """Compare CovModels."""
