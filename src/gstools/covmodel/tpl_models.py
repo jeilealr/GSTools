@@ -212,6 +212,8 @@ class TPLGaussian(TPLCovModel):
         )
 
     def _roughness(self):
+        if self.len_low > 0:
+            return 2.0  # roughness of gaussian model
         return 2 * self.hurst
 
 
@@ -348,6 +350,8 @@ class TPLExponential(TPLCovModel):
         )
 
     def _roughness(self):
+        if self.len_low > 0:
+            return 1.0  # roughness of exponential model
         return 2 * self.hurst
 
 
@@ -506,6 +510,8 @@ class TPLStable(TPLCovModel):
         )
 
     def _roughness(self):
+        if self.len_low > 0:
+            return self.alpha  # roughness of stable model
         return 2 * self.hurst
 
 
