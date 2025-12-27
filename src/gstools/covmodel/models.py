@@ -1060,7 +1060,9 @@ class JBessel(CovModel):
     def calc_integral_scale(self):  # noqa: D102
         return (
             self.len_rescaled
-            * np.sqrt(np.pi) * sps.gamma(self.nu + 1) / sps.gamma(self.nu + 0.5)
+            * np.sqrt(np.pi)
+            * sps.gamma(self.nu + 1)
+            / sps.gamma(self.nu + 0.5)
         )
 
     def _roughness(self):
