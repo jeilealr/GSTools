@@ -6,7 +6,7 @@ The roughness describes the power-law behavior of a variogram at the origin
 ([Wu2016]_):
 
 .. math::
-   \gamma(r) \sim c \cdot r^\alpha
+   \gamma(r) \sim c \cdot r^\alpha \quad (r \to 0)
 
 The exponent :math:`\alpha` is the roughness information, bounded by
 :math:`0 \le \alpha \le 2`.
