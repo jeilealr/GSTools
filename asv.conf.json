@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "project": "GSTools",
+  "project_url": "https://github.com/jeilealr/GSTools",
+  "repo": ".",
+  "branches": ["main"],
+  "benchmark_dir": "benchmarks",
+  "env_dir": ".asv/env",
+  "results_dir": ".asv/results",
+  "html_dir": ".asv/html",
+  "show_commit_url": "https://github.com/jeilealr/GSTools/commit/",
+  "environment_type": "conda",
+  "conda_channels": ["conda-forge"],
+  "pythons": ["3.12"],
+  "matrix": {
+    "req": {
+      "numpy": [""]
+    }
+  },
+  "install_command": [
+    "in-dir={env_dir} python -m pip install {build_dir}[rust]"
+  ]
+}

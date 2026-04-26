@@ -1,0 +1,48 @@
+name: ASV Benchmarks
+
+on:
+  workflow_dispatch:
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: conda-incubator/setup-miniconda@v3
+        with:
+          activate-environment: asv
+          python-version: "3.12"
+          channels: conda-forge
+          auto-activate-base: false
+
+      - name: Install ASV
+        shell: bash -l {0}
+        run: |
+          conda install -y -c conda-forge asv
+
+      - name: Configure ASV machine
+        shell: bash -l {0}
+        run: |
+          asv machine --yes
+
+      - name: Run ASV benchmarks
+        shell: bash -l {0}
+        run: |
+          asv run
+
+      - name: Publish ASV report
+        shell: bash -l {0}
+        run: |
+          asv publish
+
+      - name: Upload ASV results
+        uses: actions/upload-artifact@v4
+        with:
+          name: asv-results
+          path: |
+            .asv/results/
+            .asv/html/
