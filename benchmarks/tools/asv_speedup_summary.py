@@ -5,14 +5,15 @@ The summary is optional. ASV itself remains the source of truth for benchmark
 storage and visualization.
 
 Usage:
-    python tools/asv_speedup_summary.py
-    python tools/asv_speedup_summary.py --results-dir .asv/results
+    python benchmarks/tools/asv_speedup_summary.py
+    python benchmarks/tools/asv_speedup_summary.py --results-dir .asv/results
+    python benchmarks/tools/asv_speedup_summary.py --include-legacy
 
 Speedup is calculated as:
     cython_fallback_time / rust_core_time
 
 Values greater than 1.0 mean Rust was faster on the same machine, commit,
-environment, and benchmark.
+environment, benchmark, and non-backend parameter combination.
 """
 
 from __future__ import annotations
@@ -25,6 +26,14 @@ from pathlib import Path
 
 
 BACKENDS = ("cython_fallback", "rust_core")
+LEGACY_BENCHMARKS = {
+    "time_srf",
+    "peakmem_srf",
+    "time_variogram",
+    "peakmem_variogram",
+    "time_krige",
+    "peakmem_krige",
+}
 
 
 def parse_args():
@@ -39,6 +48,11 @@ def parse_args():
         "--all",
         action="store_true",
         help="Include non-time benchmarks as ratios too.",
+    )
+    parser.add_argument(
+        "--include-legacy",
+        action="store_true",
+        help="Include removed BackendBenchmarks rows from older saved results.",
     )
     return parser.parse_args()
 
@@ -70,6 +84,14 @@ def is_number(value):
     return isinstance(value, (int, float)) and not math.isnan(value)
 
 
+def flatten_values(values):
+    if isinstance(values, list):
+        for value in values:
+            yield from flatten_values(value)
+        return
+    yield values
+
+
 def backend_values(entry):
     result = entry.get("result")
     params = entry.get("params") or []
@@ -78,7 +100,7 @@ def backend_values(entry):
 
     values = {}
     combinations = itertools.product(*params)
-    for combo, value in zip(combinations, result):
+    for combo, value in zip(combinations, flatten_values(result)):
         if not is_number(value):
             continue
         combo_values = [str(item).strip("'\"") for item in combo]
@@ -88,11 +110,40 @@ def backend_values(entry):
     return values
 
 
+def backend_rows(entry):
+    result = entry.get("result")
+    params = entry.get("params") or []
+    if not isinstance(result, list) or not params:
+        return []
+
+    rows = []
+    combinations = itertools.product(*params)
+    for combo, value in zip(combinations, flatten_values(result)):
+        if not is_number(value):
+            continue
+        combo_values = [str(item).strip("'\"") for item in combo]
+        backend = next(
+            (candidate for candidate in BACKENDS if candidate in combo_values),
+            None,
+        )
+        if backend is None:
+            continue
+        case_values = [item for item in combo_values if item not in BACKENDS]
+        rows.append(
+            {
+                "backend": backend,
+                "case": "/".join(case_values) if case_values else "-",
+                "value": float(value),
+            }
+        )
+    return rows
+
+
 def short_benchmark_name(name):
     return name.rsplit(".", maxsplit=1)[-1]
 
 
-def collect_speedups(results_dir, include_all):
+def collect_speedups(results_dir, include_all, include_legacy):
     rows = []
     for path in iter_result_files(results_dir):
         data = load_json(path)
@@ -103,23 +154,32 @@ def collect_speedups(results_dir, include_all):
         env_name = data.get("env_name", path.stem)
         results = data.get("results", {})
         for benchmark, raw_result in results.items():
+            benchmark_name = short_benchmark_name(benchmark)
+            if not include_legacy and benchmark_name in LEGACY_BENCHMARKS:
+                continue
             if not include_all and ".time_" not in benchmark:
                 continue
-            values = backend_values(result_entry(raw_result, result_columns))
-            cython = values.get("cython_fallback")
-            rust = values.get("rust_core")
-            if not is_number(cython) or not is_number(rust) or rust == 0:
-                continue
-            rows.append(
-                {
-                    "commit": commit,
-                    "env": env_name,
-                    "benchmark": short_benchmark_name(benchmark),
-                    "cython": cython,
-                    "rust": rust,
-                    "speedup": cython / rust,
-                }
-            )
+            by_case = {}
+            for row in backend_rows(result_entry(raw_result, result_columns)):
+                by_case.setdefault(row["case"], {})[row["backend"]] = row[
+                    "value"
+                ]
+            for case, values in by_case.items():
+                cython = values.get("cython_fallback")
+                rust = values.get("rust_core")
+                if not is_number(cython) or not is_number(rust) or rust == 0:
+                    continue
+                rows.append(
+                    {
+                        "commit": commit,
+                        "env": env_name,
+                        "benchmark": benchmark_name,
+                        "case": case,
+                        "cython": cython,
+                        "rust": rust,
+                        "speedup": cython / rust,
+                    }
+                )
     return rows
 
 
@@ -132,6 +192,7 @@ def print_table(rows):
         "commit",
         "env",
         "benchmark",
+        "case",
         "cython",
         "rust",
         "speedup",
@@ -141,6 +202,7 @@ def print_table(rows):
             row["commit"],
             row["env"],
             row["benchmark"],
+            row["case"],
             f"{row['cython']:.6g}",
             f"{row['rust']:.6g}",
             f"{row['speedup']:.3f}x",
@@ -165,7 +227,7 @@ def print_table(rows):
 
 def main():
     args = parse_args()
-    rows = collect_speedups(args.results_dir, args.all)
+    rows = collect_speedups(args.results_dir, args.all, args.include_legacy)
     print_table(rows)
 
 
