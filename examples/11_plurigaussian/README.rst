@@ -18,7 +18,7 @@ implementation, not the method itself.
 With a spatial lithotype, we perform bigaussian and trigaussian
 simulations for two- and three-dimensional realisations, respectively.
 In contrast, the tree-based approach allows an arbitrary number of SRFs,
-yielding a fully *pluri*gaussian simulation.
+yielding a fully *pluri*\ gaussian simulation.
 This may sound more complicated than it is; we will clarify everything
 in the examples that follow.
 

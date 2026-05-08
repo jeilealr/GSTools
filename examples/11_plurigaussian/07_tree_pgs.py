@@ -6,7 +6,7 @@ In typical PGS workflows, the lithotype is defined through a spatial rule. A
 more flexible approach can be taken such that the lithotype is represented as a
 decision tree. More specifically, this is given as a binary tree, where each
 node is a decision based on the values of the spatial random
-fields `Sektnan et al., 2024 <https://doi.org/10.1007/s11004-024-10162-5>`. The
+fields `Sektnan et al., 2024 <https://doi.org/10.1007/s11004-024-10162-5>`__. The
 leaf nodes are then assigned a discrete value which is given to the cell that
 is being evaluated. Here, a simple example is provided showing how to use the
 tree based approach in conducting plurigaussian simulation.

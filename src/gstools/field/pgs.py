@@ -301,16 +301,21 @@ class PGS:
         ----------
         config : dict
             Mapping of node IDs to node specifications. Each entry must include:
-            - 'type': 'decision' or 'leaf'
-            - For decision nodes:
-            • 'func' (callable) and 'args' (dict)
-            • Optional 'yes_branch' and 'no_branch' keys naming other nodes
-            - For leaf nodes:
+
+            * 'type': 'decision' or 'leaf'
+            * For decision nodes:
+
+                * 'func' (callable) and 'args' (dict)
+                * Optional 'yes_branch' and 'no_branch' keys naming other nodes
+
+            * For leaf nodes:
+
         Notes
         -----
-        - Call :py:meth:`build_tree` to link nodes and obtain the root before using
-        :py:meth:`decide`.
-        - The tree is immutable once built; rebuild to apply a new config.
+
+        * Call :py:meth:`build_tree` to link nodes and obtain the root before using :py:meth:`decide`.
+        * The tree is immutable once built; rebuild to apply a new config.
+
         """
 
         def __init__(self, config):
