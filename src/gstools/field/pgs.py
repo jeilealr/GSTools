@@ -69,7 +69,7 @@ class PGS:
         self._lithotypes = None
         self._pos_lith = None
         self._tree = None
-        self._field_names = [f"Z{i+1}" for i in range(len(self._fields))]
+        self._field_names = [f"Z{i + 1}" for i in range(len(self._fields))]
         try:
             self._mapping = np.stack(self._fields, axis=1)
         except np.AxisError:
