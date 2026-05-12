@@ -119,7 +119,7 @@ def ds_simulate(
         if max_radius is not None:
             dists = np.linalg.norm((valid - x_i).astype(np.float64), axis=1)
             valid = valid[dists <= max_radius]
-        return valid[:n_neighbors]12
+        return valid[:n_neighbors]
 
     def _simulate_node(x_i):
         nbrs = _get_neighbors(x_i)
@@ -127,8 +127,8 @@ def ds_simulate(
             return _rand_ti()
 
         lags = (nbrs - x_i).astype(np.float64)  # (k, dim)
-        data_event_sim = sg[tuple(nbrs.T)]        # (k,)
-        cond_mask = is_cond[tuple(nbrs.T)]        # (k,)
+        data_event_sim = sg[tuple(nbrs.T)]  # (k,)
+        cond_mask = is_cond[tuple(nbrs.T)]  # (k,)
         lag_norms = np.linalg.norm(lags, axis=1)  # (k,)
 
         best_d, best_v = np.inf, None
@@ -155,11 +155,17 @@ def ds_simulate(
                 ti_coords = np.round(y + lags).astype(int)
                 data_event_ti = ti_data[tuple(ti_coords.T)]
                 dist_val = training_image.distance(
-                    data_event_sim, data_event_ti, cond_mask, cond_weight, lag_norms
+                    data_event_sim,
+                    data_event_ti,
+                    cond_mask,
+                    cond_weight,
+                    lag_norms,
                 )
                 if dist_val < best_d:
                     best_d, best_v, best_data_event_ti = (
-                        dist_val, ti_data[tuple(y)], data_event_ti
+                        dist_val,
+                        ti_data[tuple(y)],
+                        data_event_ti,
                     )
                 if dist_val <= threshold:
                     break
@@ -188,7 +194,7 @@ def ds_simulate(
             ).astype(int)
             if np.any(sw_lo > sw_hi):
                 return _rand_ti()
-12
+
             sw_shape = tuple(sw_hi - sw_lo + 1)
             sw_size = int(np.prod(sw_shape))
             max_scan = min(max_scan_ti, sw_size)
@@ -206,14 +212,18 @@ def ds_simulate(
                 )
                 if dist_val < best_d:
                     best_d, best_v, best_data_event_ti_p = (
-                        dist_val, ti_data[tuple(y)], data_event_ti_p
+                        dist_val,
+                        ti_data[tuple(y)],
+                        data_event_ti_p,
                     )
                 if dist_val <= threshold:
                     break
 
             if best_v is None:
                 return _rand_ti()
-            return training_image.adjust_value(best_v, de_sg_p, best_data_event_ti_p)
+            return training_image.adjust_value(
+                best_v, de_sg_p, best_data_event_ti_p
+            )
 
     path = np.argwhere(np.isnan(sg))
     path = path[rng.permutation(len(path))]
@@ -252,7 +262,7 @@ class DirectSampling(Field):
     boundary : str, optional
         Search-window strategy: ``"strict"`` (default) or ``"partial"``.
     max_radius : float, optional
-        Exclude SG neighbours beyond this Euclidean distance from the12
+        Exclude SG neighbours beyond this Euclidean distance from the
         data event. Default: ``None`` (no limit).
     seed : int or nan, optional
         Master RNG seed. Default: nan.
@@ -288,7 +298,9 @@ class DirectSampling(Field):
         self._threshold = float(threshold)
         self._cond_weight = float(cond_weight)
         self._boundary = boundary
-        self._max_radius = float(max_radius) if max_radius is not None else None
+        self._max_radius = (
+            float(max_radius) if max_radius is not None else None
+        )
         self._cond_pos = None
         self._cond_val = None
         self.rng = RNG(None if np.isnan(seed) else int(seed))
