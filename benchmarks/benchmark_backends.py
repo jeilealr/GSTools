@@ -2,7 +2,7 @@
 
 Usage:
     cd /path/to/MPS-Tools/GSTools
-    python -m pip install -e ".[benchmark]"
+    # See benchmarks/README.md for ASV and optional cProfile setup.
     asv machine --yes
     asv run --quick --show-stderr --bench benchmark_backends
     asv run HEAD^! --bench benchmark_backends
@@ -15,12 +15,17 @@ Backend speedup should be interpreted as:
     speedup = cython_fallback_time / rust_core_time
 
 Values greater than 1.0 mean the Rust backend is faster on the same machine
-for the same benchmark and commit.
+for the same benchmark, commit, and thread label.
+
+By default the suite uses one GSTools thread. For local OpenMP scaling
+experiments, set GSTOOLS_BENCHMARK_THREADS, for example:
+    GSTOOLS_BENCHMARK_THREADS=1,2,4,8,16 asv run HEAD^!
 """
 
 from __future__ import annotations
 
 import contextlib
+import os
 
 import numpy as np
 
@@ -28,6 +33,29 @@ import gstools as gs
 
 
 BACKENDS = ("cython_fallback", "rust_core")
+
+
+def _configured_thread_counts():
+    raw = os.environ.get("GSTOOLS_BENCHMARK_THREADS", "1")
+    thread_counts = []
+    for item in raw.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        if item.startswith("threads_"):
+            label = item
+            value = item.removeprefix("threads_")
+        else:
+            label = f"threads_{item}"
+            value = item
+        int(value)
+        thread_counts.append(label)
+    if not thread_counts:
+        raise ValueError("GSTOOLS_BENCHMARK_THREADS did not define threads")
+    return tuple(thread_counts)
+
+
+THREAD_COUNTS = _configured_thread_counts()
 VARIOGRAM_CASES = (
     "full_900",
     "sampled_5000_to_1500",
@@ -43,9 +71,13 @@ FIELD_CASES = (
 
 
 @contextlib.contextmanager
-def gstools_backend(use_core):
-    """Temporarily force either gstools-core or the Cython fallback."""
-    previous = (gs.config._GSTOOLS_CORE_AVAIL, gs.config.USE_GSTOOLS_CORE)
+def gstools_backend(use_core, num_threads):
+    """Temporarily force backend and GSTools thread count."""
+    previous = (
+        gs.config._GSTOOLS_CORE_AVAIL,
+        gs.config.USE_GSTOOLS_CORE,
+        gs.config.NUM_THREADS,
+    )
     try:
         if use_core:
             if not previous[0]:
@@ -55,9 +87,14 @@ def gstools_backend(use_core):
         else:
             gs.config._GSTOOLS_CORE_AVAIL = False
             gs.config.USE_GSTOOLS_CORE = False
+        gs.config.NUM_THREADS = num_threads
         yield
     finally:
-        gs.config._GSTOOLS_CORE_AVAIL, gs.config.USE_GSTOOLS_CORE = previous
+        (
+            gs.config._GSTOOLS_CORE_AVAIL,
+            gs.config.USE_GSTOOLS_CORE,
+            gs.config.NUM_THREADS,
+        ) = previous
 
 
 def _use_core(backend):
@@ -66,6 +103,12 @@ def _use_core(backend):
     if backend == "cython_fallback":
         return False
     raise ValueError(f"Unknown backend: {backend}")
+
+
+def _num_threads(thread_count):
+    if thread_count.startswith("threads_"):
+        return int(thread_count.removeprefix("threads_"))
+    raise ValueError(f"Unknown thread count: {thread_count}")
 
 
 def _random_points(seed, count, scale):
@@ -99,8 +142,8 @@ def _make_krige_data(seed, cond_count, target_count, scale=50.0):
 class VariogramWorkflowBenchmarks:
     """Variogram workflow benchmarks by case and backend."""
 
-    params = [VARIOGRAM_CASES, BACKENDS]
-    param_names = ["case", "backend"]
+    params = [VARIOGRAM_CASES, BACKENDS, THREAD_COUNTS]
+    param_names = ["case", "backend", "threads"]
 
     def setup_cache(self):
         return {
@@ -109,16 +152,17 @@ class VariogramWorkflowBenchmarks:
             "sampled_15000_to_4500": _make_variogram_data(20220503, 15000),
         }
 
-    def setup(self, data, case, backend):
+    def setup(self, data, case, backend, threads):
         if backend == "rust_core" and not gs.config._GSTOOLS_CORE_AVAIL:
             raise NotImplementedError("gstools_core is not available")
+        _num_threads(threads)
 
-    def time_variogram_estimate(self, data, case, backend):
-        with gstools_backend(_use_core(backend)):
+    def time_variogram_estimate(self, data, case, backend, threads):
+        with gstools_backend(_use_core(backend), _num_threads(threads)):
             self._run_variogram(data, case)
 
-    def peakmem_variogram_estimate(self, data, case, backend):
-        with gstools_backend(_use_core(backend)):
+    def peakmem_variogram_estimate(self, data, case, backend, threads):
+        with gstools_backend(_use_core(backend), _num_threads(threads)):
             self._run_variogram(data, case)
 
     def _run_variogram(self, data, case):
@@ -141,8 +185,8 @@ class VariogramWorkflowBenchmarks:
 class KrigingWorkflowBenchmarks:
     """Global kriging workflow benchmarks by case and backend."""
 
-    params = [KRIGE_CASES, BACKENDS]
-    param_names = ["case", "backend"]
+    params = [KRIGE_CASES, BACKENDS, THREAD_COUNTS]
+    param_names = ["case", "backend", "threads"]
 
     def setup_cache(self):
         return {
@@ -151,16 +195,17 @@ class KrigingWorkflowBenchmarks:
             "extra_large_360x6000": _make_krige_data(20220508, 360, 6000),
         }
 
-    def setup(self, data, case, backend):
+    def setup(self, data, case, backend, threads):
         if backend == "rust_core" and not gs.config._GSTOOLS_CORE_AVAIL:
             raise NotImplementedError("gstools_core is not available")
+        _num_threads(threads)
 
-    def time_global_krige(self, data, case, backend):
-        with gstools_backend(_use_core(backend)):
+    def time_global_krige(self, data, case, backend, threads):
+        with gstools_backend(_use_core(backend), _num_threads(threads)):
             self._run_krige(data, case)
 
-    def peakmem_global_krige(self, data, case, backend):
-        with gstools_backend(_use_core(backend)):
+    def peakmem_global_krige(self, data, case, backend, threads):
+        with gstools_backend(_use_core(backend), _num_threads(threads)):
             self._run_krige(data, case)
 
     def _run_krige(self, data, case):
@@ -184,8 +229,8 @@ class KrigingWorkflowBenchmarks:
 class RandomFieldWorkflowBenchmarks:
     """SRF and CondSRF workflow benchmarks by case and backend."""
 
-    params = [FIELD_CASES, BACKENDS]
-    param_names = ["case", "backend"]
+    params = [FIELD_CASES, BACKENDS, THREAD_COUNTS]
+    param_names = ["case", "backend", "threads"]
 
     def setup_cache(self):
         return {
@@ -197,16 +242,17 @@ class RandomFieldWorkflowBenchmarks:
             "condsrf": _make_krige_data(20220510, 40, 1000),
         }
 
-    def setup(self, data, case, backend):
+    def setup(self, data, case, backend, threads):
         if backend == "rust_core" and not gs.config._GSTOOLS_CORE_AVAIL:
             raise NotImplementedError("gstools_core is not available")
+        _num_threads(threads)
 
-    def time_field_generation(self, data, case, backend):
-        with gstools_backend(_use_core(backend)):
+    def time_field_generation(self, data, case, backend, threads):
+        with gstools_backend(_use_core(backend), _num_threads(threads)):
             self._run_field(data, case)
 
-    def peakmem_field_generation(self, data, case, backend):
-        with gstools_backend(_use_core(backend)):
+    def peakmem_field_generation(self, data, case, backend, threads):
+        with gstools_backend(_use_core(backend), _num_threads(threads)):
             self._run_field(data, case)
 
     def _run_field(self, data, case):

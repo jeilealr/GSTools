@@ -41,9 +41,8 @@ htmlcov/
 .coverage
 .coverage.*
 .cache
-.asv/env/
-.asv/results/
-.asv/html/
+.asv/*
+.asv-openmp/*
 nosetests.xml
 coverage.xml
 *.cover

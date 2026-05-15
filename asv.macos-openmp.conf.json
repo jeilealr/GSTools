@@ -5,26 +5,32 @@
   "repo": ".",
   "branches": ["main"],
   "benchmark_dir": "benchmarks",
-  "env_dir": ".asv/env",
-  "results_dir": ".asv/results",
-  "html_dir": ".asv/html",
+  "env_dir": ".asv-openmp/env",
+  "results_dir": ".asv-openmp/results",
+  "html_dir": ".asv-openmp/html",
   "show_commit_url": "https://github.com/jeilealr/GSTools/commit/",
   "environment_type": "conda",
   "conda_channels": ["conda-forge"],
   "pythons": ["3.12"],
   "matrix": {
     "req": {
+      "cython": [""],
       "emcee": [""],
+      "extension-helpers": [""],
       "hankel": [""],
+      "llvm-openmp": [""],
       "meshio": [""],
       "numpy": [""],
       "pyevtk": [""],
       "scipy": [""],
-      "gstools-cython": [""]
+      "setuptools": [""],
+      "wheel": [""]
     }
   },
   "install_command": [
     "in-dir={env_dir} python -m pip install gstools_core>=1.0.0",
+    "in-dir={env_dir} python {conf_dir}/benchmarks/tools/install_macos_openmp_cython.py {env_dir}",
+    "in-dir={env_dir} python {conf_dir}/benchmarks/tools/check_cython_openmp.py --fail-if-no-openmp",
     "in-dir={env_dir} python -m pip install --no-deps {build_dir}"
   ]
 }

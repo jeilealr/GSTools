@@ -7,10 +7,13 @@ call sites before making algorithmic changes.
 
 Usage:
     cd /path/to/MPS-Tools/GSTools
-    python benchmarks/tools/profile_benchmark_workflows.py --list
-    python benchmarks/tools/profile_benchmark_workflows.py --case variogram-sampled
-    python benchmarks/tools/profile_benchmark_workflows.py --case krige-large \
-        --backend rust_core --limit 30
+    ASV_ENV="$(ls -td .asv/env/* | head -n 1)"
+    "$ASV_ENV/bin/python" benchmarks/tools/profile_benchmark_workflows.py --list
+    "$ASV_ENV/bin/python" benchmarks/tools/profile_benchmark_workflows.py \
+        --case variogram-sampled
+    "$ASV_ENV/bin/python" benchmarks/tools/profile_benchmark_workflows.py \
+        --case krige-large \
+        --backend rust_core --threads threads_1 --limit 30
 """
 
 from __future__ import annotations
@@ -80,6 +83,14 @@ CASES = {
     ),
 }
 
+THREAD_COUNTS = (
+    "threads_1",
+    "threads_2",
+    "threads_4",
+    "threads_8",
+    "threads_16",
+)
+
 
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
@@ -114,6 +125,12 @@ def parse_args():
         help="Backend label to force while profiling.",
     )
     parser.add_argument(
+        "--threads",
+        default="threads_1",
+        choices=THREAD_COUNTS,
+        help="GSTools thread count label.",
+    )
+    parser.add_argument(
         "--list",
         action="store_true",
         help="List available workflow cases and exit.",
@@ -134,8 +151,9 @@ def load_suite_class(class_name):
     except ModuleNotFoundError as err:
         print(
             "Could not import GSTools benchmark dependencies. Activate the "
-            "GSTools benchmark environment or install the project dependencies "
-            f"first. Original error: {err}",
+            "GSTools benchmark environment, run this script with an ASV env "
+            "Python from .asv/env/<env-id>/bin/python, or install the project "
+            f"dependencies first. Original error: {err}",
             file=sys.stderr,
         )
         raise SystemExit(1) from err
@@ -151,6 +169,7 @@ def run_case(
     limit,
     sort,
     backend,
+    threads,
 ):
     suite_cls = load_suite_class(class_name)
     suite = suite_cls()
@@ -160,10 +179,10 @@ def run_case(
     profiler = cProfile.Profile()
     profiler.enable()
     for _ in range(repeat):
-        method(data, *params, backend)
+        method(data, *params, backend, threads)
     profiler.disable()
 
-    print(f"\n== {name} [{backend}] ==")
+    print(f"\n== {name} [{backend}, {threads}] ==")
     stats = pstats.Stats(profiler, stream=sys.stdout)
     stats.strip_dirs().sort_stats(sort).print_stats(limit)
 
@@ -185,6 +204,7 @@ def main():
             args.limit,
             args.sort,
             args.backend,
+            args.threads,
         )
 
 

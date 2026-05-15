@@ -13,7 +13,7 @@ Speedup is calculated as:
     cython_fallback_time / rust_core_time
 
 Values greater than 1.0 mean Rust was faster on the same machine, commit,
-environment, benchmark, and non-backend parameter combination.
+environment, benchmark, case, and thread-count combination.
 """
 
 from __future__ import annotations
@@ -26,6 +26,7 @@ from pathlib import Path
 
 
 BACKENDS = ("cython_fallback", "rust_core")
+THREAD_PREFIX = "threads_"
 LEGACY_BENCHMARKS = {
     "time_srf",
     "peakmem_srf",
@@ -128,11 +129,24 @@ def backend_rows(entry):
         )
         if backend is None:
             continue
-        case_values = [item for item in combo_values if item not in BACKENDS]
+        case_values = [
+            item
+            for item in combo_values
+            if item not in BACKENDS and not item.startswith(THREAD_PREFIX)
+        ]
+        threads = next(
+            (
+                item
+                for item in combo_values
+                if item.startswith(THREAD_PREFIX)
+            ),
+            "-",
+        )
         rows.append(
             {
                 "backend": backend,
                 "case": "/".join(case_values) if case_values else "-",
+                "threads": threads,
                 "value": float(value),
             }
         )
@@ -161,10 +175,9 @@ def collect_speedups(results_dir, include_all, include_legacy):
                 continue
             by_case = {}
             for row in backend_rows(result_entry(raw_result, result_columns)):
-                by_case.setdefault(row["case"], {})[row["backend"]] = row[
-                    "value"
-                ]
-            for case, values in by_case.items():
+                key = (row["case"], row["threads"])
+                by_case.setdefault(key, {})[row["backend"]] = row["value"]
+            for (case, threads), values in by_case.items():
                 cython = values.get("cython_fallback")
                 rust = values.get("rust_core")
                 if not is_number(cython) or not is_number(rust) or rust == 0:
@@ -175,6 +188,7 @@ def collect_speedups(results_dir, include_all, include_legacy):
                         "env": env_name,
                         "benchmark": benchmark_name,
                         "case": case,
+                        "threads": threads,
                         "cython": cython,
                         "rust": rust,
                         "speedup": cython / rust,
@@ -193,6 +207,7 @@ def print_table(rows):
         "env",
         "benchmark",
         "case",
+        "threads",
         "cython",
         "rust",
         "speedup",
@@ -203,6 +218,7 @@ def print_table(rows):
             row["env"],
             row["benchmark"],
             row["case"],
+            row["threads"],
             f"{row['cython']:.6g}",
             f"{row['rust']:.6g}",
             f"{row['speedup']:.3f}x",
