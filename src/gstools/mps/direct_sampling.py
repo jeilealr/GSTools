@@ -9,8 +9,11 @@ The following classes and functions are provided
    DirectSampling
 """
 
+from concurrent.futures import ThreadPoolExecutor
+
 import numpy as np
 
+from gstools import config
 from gstools.field.base import Field
 from gstools.random.rng import RNG
 
@@ -45,6 +48,37 @@ def _precompute_offsets(shape, max_offset=None):
     return offsets[idx]
 
 
+def _build_dag(path, n_neighbors, sim_shape, offset_arr,
+               informed_init, path_pos_map, max_radius=None):
+    N = len(path)
+    sim_shape_arr = np.array(sim_shape)
+
+    informed = informed_init.copy()
+    indegree = np.zeros(N, dtype=np.int32)
+    out_edges = [[] for _ in range(N)]
+
+    for i, x_i in enumerate(path):
+        found = 0
+        for offset in offset_arr:
+            if found >= n_neighbors:
+                break
+            if max_radius is not None and np.linalg.norm(offset.astype(float)) > max_radius:
+                break  # offset_arr is distance-sorted; all remaining also exceed max_radius
+            nb = x_i + offset
+            if np.any(nb < 0) or np.any(nb >= sim_shape_arr):
+                continue
+            if not informed[tuple(nb)]:
+                continue
+            found += 1
+            j = path_pos_map[int(np.ravel_multi_index(tuple(nb), sim_shape))]
+            if j >= 0:  # conditioning nodes have j == -1; skip them
+                indegree[i] += 1
+                out_edges[j].append(i)
+        informed[tuple(x_i)] = True  # mark after processing, not before
+
+    return indegree, out_edges
+
+
 def ds_simulate(
     training_image,
     sim_shape,
@@ -56,6 +90,7 @@ def ds_simulate(
     cond_weight=1.0,
     boundary="strict",
     max_radius=None,
+    num_threads=None,
 ):
     """Direct Sampling univariate simulation (Mariethoz2010, Juda2022).
 
@@ -105,29 +140,54 @@ def ds_simulate(
             is_cond[idx] = True
             informed[idx] = True
 
+    n_threads = (
+        num_threads if num_threads is not None else (config.NUM_THREADS or 1)
+    )
+    executor = (
+        ThreadPoolExecutor(max_workers=n_threads) if n_threads > 1 else None
+    )
+    use_parallel_outer = executor is not None
+
     max_off_int = int(np.ceil(max_radius)) if max_radius is not None else None
     offset_arr = _precompute_offsets(sim_shape, max_off_int)
     max_scan_ti = max(1, int(scan_fraction * ti_size))
 
-    def _rand_ti():
-        return ti_data[tuple(rng.integers(0, s) for s in ti_shape)]
+    path = np.argwhere(np.isnan(sg))
+    path = path[rng.permutation(len(path))]
+    node_seeds = rng.integers(0, 2**63, size=len(path))
 
-    def _get_neighbors(x_i):
+    path_flat = np.ravel_multi_index(path.T, sim_shape)
+    path_pos_map = np.full(int(np.prod(sim_shape)), -1, dtype=np.intp)
+    for i, f in enumerate(path_flat):
+        path_pos_map[f] = i
+
+    def _rand_ti(node_rng):
+        return ti_data[tuple(node_rng.integers(0, s) for s in ti_shape)]
+
+    def _get_neighbors(x_i, informed_in):
         cands = x_i + offset_arr
         valid = cands[np.all((cands >= 0) & (cands < sim_shape_arr), axis=1)]
-        valid = valid[informed[tuple(valid.T)]]
+        valid = valid[informed_in[tuple(valid.T)]]
+
+        curr_idx = path_pos_map[
+            int(np.ravel_multi_index(tuple(x_i), sim_shape))
+        ]
+        if curr_idx >= 0:
+            valid_idx = path_pos_map[np.ravel_multi_index(valid.T, sim_shape)]
+            valid = valid[(valid_idx < curr_idx) | (valid_idx == -1)]
+
         if max_radius is not None:
             dists = np.linalg.norm((valid - x_i).astype(np.float64), axis=1)
             valid = valid[dists <= max_radius]
         return valid[:n_neighbors]
 
-    def _simulate_node(x_i):
-        nbrs = _get_neighbors(x_i)
+    def _simulate_node(x_i, node_rng, sg_in, informed_in):
+        nbrs = _get_neighbors(x_i, informed_in)
         if len(nbrs) == 0:
-            return _rand_ti()
+            return _rand_ti(node_rng)
 
         lags = (nbrs - x_i).astype(np.float64)  # (k, dim)
-        data_event_sim = sg[tuple(nbrs.T)]  # (k,)
+        data_event_sim = sg_in[tuple(nbrs.T)]  # (k,)
         cond_mask = is_cond[tuple(nbrs.T)]  # (k,)
         lag_norms = np.linalg.norm(lags, axis=1)  # (k,)
 
@@ -140,12 +200,12 @@ def ds_simulate(
                 ti_shape - 1, np.floor(ti_shape - 1 - lags.max(axis=0))
             ).astype(int)
             if np.any(win_lo > win_hi):
-                return _rand_ti()
+                return _rand_ti(node_rng)
 
             win_shape = tuple(win_hi - win_lo + 1)
             win_size = int(np.prod(win_shape))
             max_scan = min(max_scan_ti, win_size)
-            start = int(rng.integers(0, win_size))
+            start = int(node_rng.integers(0, win_size))
 
             best_data_event_ti = None
             for k in range(max_scan):
@@ -171,7 +231,7 @@ def ds_simulate(
                     break
 
             if best_v is None:
-                return _rand_ti()
+                return _rand_ti(node_rng)
             return training_image.adjust_value(
                 best_v, data_event_sim, best_data_event_ti
             )
@@ -182,7 +242,7 @@ def ds_simulate(
             # a valid strict window when rotation/affinity stretches the template.
             placeable = np.all(np.abs(lags) < ti_shape, axis=1)
             if not np.any(placeable):
-                return _rand_ti()
+                return _rand_ti(node_rng)
             lags_p = lags[placeable]
             de_sg_p = data_event_sim[placeable]
             cm_p = cond_mask[placeable]
@@ -193,12 +253,12 @@ def ds_simulate(
                 ti_shape - 1, np.floor(ti_shape - 1 - lags_p.max(axis=0))
             ).astype(int)
             if np.any(sw_lo > sw_hi):
-                return _rand_ti()
+                return _rand_ti(node_rng)
 
             sw_shape = tuple(sw_hi - sw_lo + 1)
             sw_size = int(np.prod(sw_shape))
             max_scan = min(max_scan_ti, sw_size)
-            start = int(rng.integers(0, sw_size))
+            start = int(node_rng.integers(0, sw_size))
 
             best_data_event_ti_p = None
             for k in range(max_scan):
@@ -220,23 +280,66 @@ def ds_simulate(
                     break
 
             if best_v is None:
-                return _rand_ti()
+                return _rand_ti(node_rng)
             return training_image.adjust_value(
                 best_v, de_sg_p, best_data_event_ti_p
             )
 
-    path = np.argwhere(np.isnan(sg))
-    path = path[rng.permutation(len(path))]
-
-    for x_i in path:
-        x_i_t = tuple(x_i)
-        val = _simulate_node(x_i)
-        if np.isnan(val):
-            raise ValueError(
-                f"Simulation produced NaN at {x_i}. Check TI data."
+    try:
+        if use_parallel_outer:
+            indegree, out_edges = _build_dag(
+                path, n_neighbors, sim_shape, offset_arr, informed,
+                path_pos_map, max_radius
             )
-        sg[x_i_t] = val
-        informed[x_i_t] = True
+            ready = [i for i in range(len(path)) if indegree[i] == 0]
+
+            while ready:
+                batch = ready
+                ready = []
+                sg_snap = sg.copy()
+                informed_snap = informed.copy()
+
+                futures = [
+                    executor.submit(
+                        _simulate_node,
+                        path[i],
+                        np.random.default_rng(int(node_seeds[i])),
+                        sg_snap,
+                        informed_snap,
+                    )
+                    for i in batch
+                ]
+                for i, fut in zip(batch, futures):
+                    val = fut.result()
+                    x_i_t = tuple(path[i])
+                    if np.isnan(val):
+                        raise ValueError(
+                            f"Simulation produced NaN at {path[i]}. Check TI data."
+                        )
+                    sg[x_i_t] = val
+                    informed[x_i_t] = True
+                    for j in out_edges[i]:
+                        indegree[j] -= 1
+                        if indegree[j] == 0:
+                            ready.append(j)
+        else:
+            for i, x_i in enumerate(path):
+                x_i_t = tuple(x_i)
+                val = _simulate_node(
+                    x_i,
+                    np.random.default_rng(int(node_seeds[i])),
+                    sg,
+                    informed,
+                )
+                if np.isnan(val):
+                    raise ValueError(
+                        f"Simulation produced NaN at {x_i}. Check TI data."
+                    )
+                sg[x_i_t] = val
+                informed[x_i_t] = True
+    finally:
+        if executor is not None:
+            executor.shutdown(wait=True)
 
     return sg
 
@@ -279,6 +382,7 @@ class DirectSampling(Field):
         cond_weight=1.0,
         boundary="strict",
         max_radius=None,
+        num_threads=None,
         seed=np.nan,
     ):
         if boundary not in _VALID_BOUNDARY:
@@ -301,6 +405,7 @@ class DirectSampling(Field):
         self._max_radius = (
             float(max_radius) if max_radius is not None else None
         )
+        self._num_threads = num_threads
         self._cond_pos = None
         self._cond_val = None
         self.rng = RNG(None if np.isnan(seed) else int(seed))
@@ -362,6 +467,7 @@ class DirectSampling(Field):
             cond_weight=self._cond_weight,
             boundary=self._boundary,
             max_radius=self._max_radius,
+            num_threads=self._num_threads,
         )
         return self.post_field(field, name, post_process, save)
 
@@ -454,6 +560,15 @@ class DirectSampling(Field):
     def max_radius(self):
         """:class:`float` or :any:`None`: Euclidean cap on SG neighbour selection."""
         return self._max_radius
+
+    @property
+    def num_threads(self):
+        """:class:`int` or :any:`None`: Number of threads for outer DAG parallelism."""
+        return self._num_threads
+
+    @num_threads.setter
+    def num_threads(self, value):
+        self._num_threads = None if value is None else int(value)
 
     def __repr__(self):
         return (
