@@ -111,6 +111,11 @@ class TrainingImage:
         """str: Distance metric (e.g. ``"l1"``, ``"l2"``, ``"l3.5"``, or ``"variation"``)."""
         return self._distance_type
 
+    @property
+    def distance_power(self):
+        """float: Spatial-decay exponent δ for node weighting."""
+        return self._distance_power
+
     # ------------------------------------------------------------------
     # Distance
     # ------------------------------------------------------------------
@@ -168,7 +173,8 @@ class TrainingImage:
             return lp_dist(
                 data_event_sim, data_event_ti, w, self._d_max, self._p_norm
             )
-        return variation_dist(data_event_sim, data_event_ti, w, self._d_max)
+        else:  # _p_norm is None → distance="variation"
+            return variation_dist(data_event_sim, data_event_ti, w, self._d_max)
 
     def adjust_value(self, ti_val, data_event_sim, data_event_ti):
         """Adjust matched TI value before assignment to SG.

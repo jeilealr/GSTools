@@ -107,7 +107,9 @@ def ds_simulate(
         Distance threshold for early acceptance (Juda2022 §2).
         ``0.0`` → DSBC mode.
     scan_fraction : float
-        Maximum TI scan fraction per node (Mariethoz2010 §3 ¶24).
+        Fraction of the per-node search window to scan (Mariethoz2010 §3 ¶24).
+        Evaluates at most ``floor(f · |window|)`` candidates per node.
+        ``1.0`` → full window scan.
     seed : int
         RNG seed.
     conditions : dict, optional
@@ -128,8 +130,6 @@ def ds_simulate(
     ti_data = training_image.data
     ti_shape = np.array(ti_data.shape)
     sim_shape_arr = np.array(sim_shape)
-    ti_size = int(ti_shape.prod())
-
     sg = np.full(sim_shape, np.nan)
     is_cond = np.zeros(sim_shape, dtype=bool)
     informed = np.zeros(sim_shape, dtype=bool)
@@ -150,7 +150,6 @@ def ds_simulate(
 
     max_off_int = int(np.ceil(max_radius)) if max_radius is not None else None
     offset_arr = _precompute_offsets(sim_shape, max_off_int)
-    max_scan_ti = max(1, int(scan_fraction * ti_size))
 
     path = np.argwhere(np.isnan(sg))
     path = path[rng.permutation(len(path))]
@@ -158,8 +157,7 @@ def ds_simulate(
 
     path_flat = np.ravel_multi_index(path.T, sim_shape)
     path_pos_map = np.full(int(np.prod(sim_shape)), -1, dtype=np.intp)
-    for i, f in enumerate(path_flat):
-        path_pos_map[f] = i
+    path_pos_map[path_flat] = np.arange(len(path_flat))
 
     def _rand_ti(node_rng):
         return ti_data[tuple(node_rng.integers(0, s) for s in ti_shape)]
@@ -204,7 +202,7 @@ def ds_simulate(
 
             win_shape = tuple(win_hi - win_lo + 1)
             win_size = int(np.prod(win_shape))
-            max_scan = min(max_scan_ti, win_size)
+            max_scan = max(1, int(scan_fraction * win_size))
             start = int(node_rng.integers(0, win_size))
 
             best_data_event_ti = None
@@ -230,8 +228,6 @@ def ds_simulate(
                 if dist_val <= threshold:
                     break
 
-            if best_v is None:
-                return _rand_ti(node_rng)
             return training_image.adjust_value(
                 best_v, data_event_sim, best_data_event_ti
             )
@@ -257,7 +253,7 @@ def ds_simulate(
 
             sw_shape = tuple(sw_hi - sw_lo + 1)
             sw_size = int(np.prod(sw_shape))
-            max_scan = min(max_scan_ti, sw_size)
+            max_scan = max(1, int(scan_fraction * sw_size))
             start = int(node_rng.integers(0, sw_size))
 
             best_data_event_ti_p = None
@@ -279,8 +275,6 @@ def ds_simulate(
                 if dist_val <= threshold:
                     break
 
-            if best_v is None:
-                return _rand_ti(node_rng)
             return training_image.adjust_value(
                 best_v, de_sg_p, best_data_event_ti_p
             )
@@ -357,7 +351,7 @@ class DirectSampling(Field):
     n_neighbors : int, optional
         Maximum neighbors in data event. Default: 32.
     scan_fraction : float, optional
-        Maximum fraction of TI to scan per node. Default: 1.
+        Fraction of the per-node search window to scan. Default: 1.
     threshold : float, optional
         Distance threshold. 0.0 -> DSBC mode. Default: 0.0.
     cond_weight : float, optional
@@ -526,7 +520,7 @@ class DirectSampling(Field):
 
     @property
     def scan_fraction(self):
-        """:class:`float`: Maximum fraction of TI to scan per node."""
+        """:class:`float`: Fraction of the per-node search window to scan."""
         return self._scan_fraction
 
     @scan_fraction.setter

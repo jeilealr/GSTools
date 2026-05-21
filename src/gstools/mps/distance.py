@@ -176,4 +176,5 @@ def variation_dist(data_event_sim, data_event_ti, node_weights, d_max):
     diffs = (data_event_sim - data_event_sim.mean()) - (
         data_event_ti - data_event_ti.mean()
     )
-    return float(np.sqrt(np.dot(node_weights, (diffs / d_max) ** 2)))
+    # 2*d_max: |diffs_i| ≤ 2*d_max always → each squared term ≤ 1 → d ∈ [0, 1]
+    return float(np.sqrt(np.dot(node_weights, (diffs / (2 * d_max)) ** 2)))
