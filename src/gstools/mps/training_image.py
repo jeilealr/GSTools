@@ -174,7 +174,9 @@ class TrainingImage:
                 data_event_sim, data_event_ti, w, self._d_max, self._p_norm
             )
         else:  # _p_norm is None → distance="variation"
-            return variation_dist(data_event_sim, data_event_ti, w, self._d_max)
+            return variation_dist(
+                data_event_sim, data_event_ti, w, self._d_max
+            )
 
     def adjust_value(self, ti_val, data_event_sim, data_event_ti):
         """Adjust matched TI value before assignment to SG.

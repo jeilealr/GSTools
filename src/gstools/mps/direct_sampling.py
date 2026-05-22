@@ -48,8 +48,15 @@ def _precompute_offsets(shape, max_offset=None):
     return offsets[idx]
 
 
-def _build_dag(path, n_neighbors, sim_shape, offset_arr,
-               informed_init, path_pos_map, max_radius=None):
+def _build_dag(
+    path,
+    n_neighbors,
+    sim_shape,
+    offset_arr,
+    informed_init,
+    path_pos_map,
+    max_radius=None,
+):
     N = len(path)
     sim_shape_arr = np.array(sim_shape)
 
@@ -62,7 +69,10 @@ def _build_dag(path, n_neighbors, sim_shape, offset_arr,
         for offset in offset_arr:
             if found >= n_neighbors:
                 break
-            if max_radius is not None and np.linalg.norm(offset.astype(float)) > max_radius:
+            if (
+                max_radius is not None
+                and np.linalg.norm(offset.astype(float)) > max_radius
+            ):
                 break  # offset_arr is distance-sorted; all remaining also exceed max_radius
             nb = x_i + offset
             if np.any(nb < 0) or np.any(nb >= sim_shape_arr):
@@ -170,9 +180,8 @@ def ds_simulate(
         curr_idx = path_pos_map[
             int(np.ravel_multi_index(tuple(x_i), sim_shape))
         ]
-        if curr_idx >= 0:
-            valid_idx = path_pos_map[np.ravel_multi_index(valid.T, sim_shape)]
-            valid = valid[(valid_idx < curr_idx) | (valid_idx == -1)]
+        valid_idx = path_pos_map[np.ravel_multi_index(valid.T, sim_shape)]
+        valid = valid[(valid_idx < curr_idx) | (valid_idx == -1)]
 
         if max_radius is not None:
             dists = np.linalg.norm((valid - x_i).astype(np.float64), axis=1)
@@ -282,8 +291,13 @@ def ds_simulate(
     try:
         if use_parallel_outer:
             indegree, out_edges = _build_dag(
-                path, n_neighbors, sim_shape, offset_arr, informed,
-                path_pos_map, max_radius
+                path,
+                n_neighbors,
+                sim_shape,
+                offset_arr,
+                informed,
+                path_pos_map,
+                max_radius,
             )
             ready = [i for i in range(len(path)) if indegree[i] == 0]
 
@@ -550,10 +564,28 @@ class DirectSampling(Field):
         """:class:`str`: Search-window strategy (``"strict"`` or ``"partial"``)."""
         return self._boundary
 
+    @boundary.setter
+    def boundary(self, value):
+        if value not in _VALID_BOUNDARY:
+            raise ValueError(
+                f"DirectSampling: boundary must be one of {_VALID_BOUNDARY!r}, "
+                f"got {value!r}"
+            )
+        self._boundary = value
+
     @property
     def max_radius(self):
         """:class:`float` or :any:`None`: Euclidean cap on SG neighbour selection."""
         return self._max_radius
+
+    @max_radius.setter
+    def max_radius(self, value):
+        if value is not None and float(value) <= 0:
+            raise ValueError(
+                f"DirectSampling: max_radius must be a positive float, "
+                f"got {value!r}"
+            )
+        self._max_radius = float(value) if value is not None else None
 
     @property
     def num_threads(self):
