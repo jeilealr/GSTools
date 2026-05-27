@@ -44,6 +44,7 @@ htmlcov/
 .asv/*
 .asv-openmp/*
 .asv-ci/*
+asv.ci.*.json
 nosetests.xml
 coverage.xml
 *.cover

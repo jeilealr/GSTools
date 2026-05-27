@@ -2,7 +2,7 @@ name: Super-Linter
 
 on:
   # This workflow is cheap compared with ASV/compiler checks, so run it on
-  # every PR and push to main to catch metadata/documentation issues early.
+  # every PR and push to main to catch workflow/configuration issues early.
   pull_request:
   push:
     branches:
@@ -19,7 +19,7 @@ permissions:
 
 jobs:
   lint_repository_metadata:
-    name: Lint GitHub Actions, YAML, JSON, and Markdown
+    name: Lint GitHub Actions, YAML, and JSON
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -36,9 +36,9 @@ jobs:
           # Lint changed files only. This avoids introducing unrelated failures
           # from old Markdown/YAML while still checking new PR changes.
           VALIDATE_ALL_CODEBASE: false
-          # Opt-in mode: these true values make Super-Linter skip Python. Ruff
-          # already owns Python linting in main.yml.
+          # Opt-in mode: these true values make Super-Linter skip Python and
+          # Markdown. Ruff owns Python linting in main.yml. Prose/style checks
+          # should use a dedicated tool such as Vale or textlint if added later.
           VALIDATE_GITHUB_ACTIONS: true
           VALIDATE_JSON: true
-          VALIDATE_MARKDOWN: true
           VALIDATE_YAML: true

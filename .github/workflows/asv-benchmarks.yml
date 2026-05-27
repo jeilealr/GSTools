@@ -124,7 +124,7 @@ jobs:
           activate-environment: gstools-benchmark-driver
           python-version: "3.12"
           channels: conda-forge
-          auto-activate-base: false
+          conda-remove-defaults: true
 
       - name: Install ASV driver
         run: |
@@ -136,7 +136,7 @@ jobs:
           # a temporary config so each matrix child can pin one dependency set.
           conda run -n gstools-benchmark-driver python benchmarks/tools/write_asv_ci_config.py \
             --base-config asv.conf.json \
-            --output ".asv-ci/config/${{ matrix.case-id }}.json" \
+            --output "${GITHUB_WORKSPACE}/asv.ci.${{ matrix.case-id }}.json" \
             --python-version "${{ matrix.python-version }}" \
             --numpy "${{ matrix.numpy }}" \
             --scipy "${{ matrix.scipy }}" \
@@ -147,7 +147,7 @@ jobs:
       - name: Configure ASV machine
         run: |
           conda run -n gstools-benchmark-driver asv \
-            --config ".asv-ci/config/${{ matrix.case-id }}.json" \
+            --config "${GITHUB_WORKSPACE}/asv.ci.${{ matrix.case-id }}.json" \
             machine --yes
 
       - name: Run 1-thread ASV availability check
@@ -157,7 +157,7 @@ jobs:
           GSTOOLS_BENCHMARK_THREADS: "1"
         run: |
           conda run -n gstools-benchmark-driver asv \
-            --config ".asv-ci/config/${{ matrix.case-id }}.json" \
+            --config "${GITHUB_WORKSPACE}/asv.ci.${{ matrix.case-id }}.json" \
             run 'HEAD^!' --quick --bench benchmark_backends --show-stderr
 
       - name: Upload ASV availability results
@@ -168,7 +168,7 @@ jobs:
         with:
           name: asv-1-thread-${{ matrix.case-id }}
           path: |
-            .asv-ci/config/${{ matrix.case-id }}.json
+            asv.ci.${{ matrix.case-id }}.json
             .asv-ci/results/${{ matrix.case-id }}
             .asv-ci/html/${{ matrix.case-id }}
           if-no-files-found: ignore
@@ -220,7 +220,7 @@ jobs:
           activate-environment: gstools-benchmark-openmp
           python-version: ${{ matrix.python-version }}
           channels: conda-forge
-          auto-activate-base: false
+          conda-remove-defaults: true
 
       - name: Install benchmark and build requirements
         run: |
