@@ -1,0 +1,20 @@
+version: 2
+updates:
+  # Dependabot version updates do not run benchmark CI every week. They only
+  # check whether workflow actions such as actions/checkout or Super-Linter
+  # have newer versions, then open PRs for review.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      # Weekly is a low-noise maintenance cadence. Change to monthly if the
+      # update PRs become distracting.
+      interval: "weekly"
+      day: "monday"
+      time: "05:00"
+    groups:
+      # Group action bumps into one PR where possible, instead of one PR per
+      # action version.
+      github-actions:
+        patterns:
+          - "*"
+    open-pull-requests-limit: 5

@@ -19,7 +19,8 @@ for the same benchmark, commit, and thread label.
 
 By default the suite uses one GSTools thread. For local OpenMP scaling
 experiments, set GSTOOLS_BENCHMARK_THREADS, for example:
-    GSTOOLS_BENCHMARK_THREADS=1,2,4,8,16 asv run HEAD^!
+    GSTOOLS_BENCHMARK_THREADS=1,2,4,8,16 \
+        asv --config asv.openmp.conf.json run 'HEAD^!'
 """
 
 from __future__ import annotations
@@ -27,10 +28,8 @@ from __future__ import annotations
 import contextlib
 import os
 
-import numpy as np
-
 import gstools as gs
-
+import numpy as np
 
 BACKENDS = ("cython_fallback", "rust_core")
 

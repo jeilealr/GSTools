@@ -41,14 +41,13 @@ deciding where optimization work should go:
     - [Profiling With cProfile](#profiling-with-cprofile)
 - [Optional Parallelisation with OpenMP](#optional-parallelisation-with-openmp)
   - [Shared OpenMP Rule](#shared-openmp-rule)
-  - [macOS Example](#macos-example)
-    - [What The macOS OpenMP Config Does](#what-the-macos-openmp-config-does)
-    - [Run On macOS](#run-on-macos)
-    - [Interpreting The macOS OpenMP Run](#interpreting-the-macos-openmp-run)
-  - [Windows Example](#windows-example)
-  - [Linux Example](#linux-example)
-  - [HPC Example](#hpc-example)
+  - [OpenMP ASV Configuration](#openmp-asv-configuration)
+  - [Verify Cython OpenMP](#verify-cython-openmp)
+  - [Run On macOS And Linux](#run-on-macos-and-linux)
+  - [Run On Windows](#run-on-windows)
+  - [HPC Notes](#hpc-notes)
   - [Profiling With cProfile for Multiple Threads](#profiling-with-cprofile-for-multiple-threads)
+- [GitHub Action Benchmark Availability Checks](#github-action-benchmark-availability-checks)
 - [More ASV Commands](#more-asv-commands)
 - [External Reference](#external-reference)
 
@@ -81,7 +80,7 @@ cd /path/to/GSTools
 2. Create and activate a conda environment for local benchmark work:
 
 ```bash
-conda create -n gstools-benchmark -c conda-forge python=3.12 asv packaging
+conda create -n gstools-benchmark -c conda-forge python=3.12 asv
 conda activate gstools-benchmark
 ```
 
@@ -107,8 +106,8 @@ The benchmarking setup currently consists of:
 
 - `asv.conf.json`: tells ASV how to build GSTools, where benchmarks live, where
   to store results, and which Python/environment matrix to use.
-- `asv.macos-openmp.conf.json`: optional macOS-specific ASV configuration that
-  builds `gstools-cython` from source with OpenMP inside ASV's own environment.
+- `asv.openmp.conf.json`: optional cross-platform ASV configuration that builds
+  `gstools-cython` from source with OpenMP inside ASV's own environment.
 - `benchmarks/benchmark_backends.py`: contains the ASV benchmark classes.
 - `benchmarks/README.md`: this practical guide.
 - `benchmarks/tools/asv_speedup_summary.py`: reads `.asv/results/` and prints
@@ -119,10 +118,14 @@ The benchmarking setup currently consists of:
 - `benchmarks/tools/check_cython_openmp.py`: optional helper for checking
   whether the active Python environment's GSTools-Cython extensions detect
   OpenMP parallel support.
-- `benchmarks/tools/install_macos_openmp_cython.py`: helper used only by
-  `asv.macos-openmp.conf.json` to compile `gstools-cython` with `llvm-openmp`
-  on macOS.
-
+- `benchmarks/tools/check_backend_parallel_ready.py`: CI helper that verifies
+  Cython OpenMP detection and Rust backend execution with more than one GSTools
+  thread.
+- `benchmarks/tools/write_asv_ci_config.py`: CI helper that writes a temporary
+  per-job ASV config for one Python/NumPy/SciPy combination.
+- `benchmarks/tools/install_openmp_cython.py`: helper used by
+  `asv.openmp.conf.json` to compile `gstools-cython` with OpenMP on macOS,
+  Linux, and native Windows.
 
 ### ASV Configuration
 
@@ -190,6 +193,22 @@ ASV creates these generated directories:
 Those directories are machine-specific generated artifacts. They should
 normally stay out of git.
 
+The optional `asv.openmp.conf.json` uses the same benchmark suite, but stores
+its generated files separately:
+
+```text
+.asv-openmp/env/      OpenMP benchmark environments
+.asv-openmp/results/  OpenMP result JSON files
+.asv-openmp/html/     OpenMP benchmark website
+```
+
+It also installs build tools needed to compile `gstools-cython` from source
+with `GSTOOLS_BUILD_PARALLEL=1`. The platform-specific OpenMP setup is handled
+by `benchmarks/tools/install_openmp_cython.py`: macOS uses conda's
+`llvm-openmp` with an Apple-clang wrapper, Linux uses the compiler toolchain
+from the ASV conda environment when available, and native Windows uses the
+installed MSVC Build Tools.
+
 If needed, users can list more than one branch, Python version, benchmark
 directory, and so on. For example:
 
@@ -201,7 +220,7 @@ Users can also benchmark any explicit branch, commit, tag, or range without
 changing `asv.conf.json`:
 
 ```bash
-asv run my-feature-branch^! --bench benchmark_backends
+asv run 'my-feature-branch^!' --bench benchmark_backends
 asv run main..my-feature-branch --bench benchmark_backends
 ```
 
@@ -375,7 +394,7 @@ measured with `threads_1` for both `cython_fallback` and `rust_core`.
 - Save a baseline for the current commit:
 
 ```bash
-asv run HEAD^! --bench benchmark_backends
+asv run 'HEAD^!' --bench benchmark_backends
 ```
 
 #### Several Commits Baseline
@@ -429,13 +448,12 @@ http://127.0.0.1:8082/#/
 ```
 (or any other `http://127.0.0.1:<port>/#/` URL shown by the running preview).
 
-The browser report shows ASV plots and trends. ASV plot views do not draw a line/graph when there is only one x-axis point, therefore running `asv run HEAD^! --bench benchmark_backends` will most likely not load any graphs.
+The browser report shows ASV plots and trends. ASV plot views do not draw a line/graph when there is only one x-axis point, therefore running `asv run 'HEAD^!' --bench benchmark_backends` will most likely not load any graphs.
 
 For the default benchmark run, the `threads` column should show `threads_1`.
 If you later run the
 [optional OpenMP scaling experiment](#optional-parallelisation-with-openmp),
 the same column can be used to compare several threads.
-
 
 ### Profiling With cProfile
 
@@ -460,6 +478,15 @@ ASV_ENV="$(ls -td .asv/env/* | head -n 1)"
 ASV_PYTHON="$ASV_ENV/bin/python"
 ```
 
+On Windows PowerShell, use:
+
+```powershell
+$asvEnv = Get-ChildItem .asv\env -Directory |
+  Sort-Object LastWriteTime -Descending |
+  Select-Object -First 1
+$asvPython = Join-Path $asvEnv.FullName 'python.exe'
+```
+
 The helper still profiles the current checkout because
 `profile_benchmark_workflows.py` adds the repository `src/` directory to
 `sys.path`. The ASV environment provides the installed dependencies, including
@@ -470,6 +497,8 @@ List available cases:
 ```bash
 "$ASV_PYTHON" benchmarks/tools/profile_benchmark_workflows.py --list
 ```
+
+On Windows PowerShell, replace `"$ASV_PYTHON"` with `& $asvPython`.
 
 Possible profile selected cases:
 
@@ -485,7 +514,7 @@ Possible profile selected cases:
 
 This section collects optional workflows for testing Cython and Rust with
 several thread counts. OpenMP setup is platform-dependent, so each operating
-system should have its own tested instructions.
+system must be verified on the machine that produces the results.
 
 The default setup above remains the recommended baseline: one thread, normal
 ASV environment, and no extra OpenMP build steps. Use this section only when
@@ -510,20 +539,15 @@ ASV_ENV="$(ls -td .asv-openmp/env/* | head -n 1)"
 If the check fails, the benchmark may still run, but the Cython backend should
 not be interpreted as an OpenMP-enabled Cython run.
 
-### macOS Example
+### OpenMP ASV Configuration
 
-This is the currently tested OpenMP workflow. It is separate from the
-default setup above.
-
-The default ASV configuration, `asv.conf.json`, stays conservative: it is the
-one-thread baseline and uses the normal conda-forge `gstools-cython` package.
-The default `.asv/env/` environment does not provide Cython OpenMP support. That is why this section uses a second ASV configuration:
+Use one OpenMP ASV config on all supported desktop platforms:
 
 ```text
-asv.macos-openmp.conf.json
+asv.openmp.conf.json
 ```
 
-This OpenMP config creates separate generated directories:
+This config keeps the OpenMP experiment separate from the default baseline:
 
 ```text
 .asv-openmp/env/
@@ -531,100 +555,85 @@ This OpenMP config creates separate generated directories:
 .asv-openmp/html/
 ```
 
-That keeps the OpenMP experiment separate from the default `.asv/` baseline.
-
-#### What The macOS OpenMP Config Does
-
-`asv.macos-openmp.conf.json` asks conda to install the build/runtime pieces
-needed for the macOS OpenMP experiment:
-
-```text
-llvm-openmp
-cython
-extension-helpers
-setuptools
-wheel
-```
-
 During ASV installation, it runs:
 
 ```bash
-benchmarks/tools/install_macos_openmp_cython.py
+benchmarks/tools/install_openmp_cython.py
 ```
 
-That helper compiles `gstools-cython` from source inside ASV's own environment,
-not inside your active conda environment. This matters because ASV benchmarks
-the packages installed under `.asv-openmp/env/`.
+That helper compiles `gstools-cython` from source inside ASV's own
+environment, not inside your active `gstools-benchmark` driver environment.
+The helper sets `GSTOOLS_BUILD_PARALLEL=1` and then uses platform-specific
+compiler handling:
 
-Internally, the helper sets:
+- macOS: uses Apple clang through wrapper scripts and conda's `llvm-openmp`.
+- Linux: uses the ASV conda compiler toolchain when available.
+- Windows: uses native MSVC Build Tools.
 
-```text
-GSTOOLS_BUILD_PARALLEL=1
-CC=<ASV OpenMP env>/bin/gstools-asv-clang-openmp
-CXX=<ASV OpenMP env>/bin/gstools-asv-clang-openmp++
-```
+### Verify Cython OpenMP
 
-The wrapper translates the plain `-fopenmp` flag used by the Cython build into
-Apple-clang-compatible compiler and linker arguments that use conda's
-`llvm-openmp`.
+Only interpret the Cython rows as OpenMP-enabled after this check passes inside
+the `.asv-openmp/env/...` environment. The active `gstools-benchmark` conda
+environment is only the ASV driver environment; it is normal for
+`python benchmarks/tools/check_backend_parallel_ready.py --verbose` to fail
+there with `gstools: not installed`, `gstools_cython: not installed`, or
+`gstools_core: not installed`.
 
-#### Run On macOS
-
-In the previous section, the default config gives a quick overview for both
-backends with `threads_1`. In this section, the OpenMP config runs several
-thread labels: `threads_1`, `threads_2`, `threads_4`, `threads_8`, and
-`threads_16`.
-
-Start from the GSTools repository root:
-
-```bash
-cd /path/to/GSTools
-```
-
-Create a clean driver environment. This environment only runs ASV; ASV will
-create the real benchmark environment under `.asv-openmp/env/`.
-
-```bash
-conda create -n gstools-benchmark -c conda-forge python=3.12 asv
-conda activate gstools-benchmark
-```
-
-Create the ASV machine profile once:
-
-```bash
-asv --config asv.macos-openmp.conf.json machine --yes
-```
-
-Run a quick current-commit OpenMP check. This builds the OpenMP-enabled
-`gstools-cython` package inside `.asv-openmp/env/` and runs the benchmark suite:
-
-```bash
-GSTOOLS_BENCHMARK_THREADS=1,2,4,8,16 \
-asv --config asv.macos-openmp.conf.json run HEAD^! --quick --bench benchmark_backends --show-stderr
-```
-
-Verify that the ASV OpenMP environment really uses Cython OpenMP:
+On macOS and Linux:
 
 ```bash
 ASV_OPENMP_ENV="$(ls -td .asv-openmp/env/* | head -n 1)"
 "$ASV_OPENMP_ENV/bin/python" benchmarks/tools/check_cython_openmp.py --verbose
 "$ASV_OPENMP_ENV/bin/python" benchmarks/tools/check_cython_openmp.py --fail-if-no-openmp
+"$ASV_OPENMP_ENV/bin/python" benchmarks/tools/check_backend_parallel_ready.py --verbose
 ```
 
-Expected result on the tested Mac M2 setup:
+On Windows PowerShell:
+
+```powershell
+$asvOpenmpEnv = Get-ChildItem .asv-openmp\env -Directory |
+  Sort-Object LastWriteTime -Descending |
+  Select-Object -First 1
+$asvOpenmpPython = Join-Path $asvOpenmpEnv.FullName 'python.exe'
+& $asvOpenmpPython benchmarks\tools\check_cython_openmp.py --verbose
+& $asvOpenmpPython benchmarks\tools\check_cython_openmp.py --fail-if-no-openmp
+& $asvOpenmpPython benchmarks\tools\check_backend_parallel_ready.py --verbose
+```
+
+Expected passing output contains:
 
 ```text
-variogram default None -> 10
-field default None -> 10
-krige default None -> 10
 OpenMP check: PASS
+Cython OpenMP readiness: PASS
+Rust backend readiness: PASS with NUM_THREADS=2
 ```
 
-If that check passes, run the last-five-commits OpenMP benchmark:
+### Run On macOS And Linux
+
+Use these commands from a POSIX shell on macOS or Linux. On macOS, install
+Xcode command-line tools first. On Linux, make sure the conda compiler packages
+from `asv.openmp.conf.json` solve for your platform.
+
+Create the ASV machine profile once:
+
+```bash
+asv --config asv.openmp.conf.json machine --yes
+```
+
+Run a quick current-commit OpenMP smoke run:
 
 ```bash
 GSTOOLS_BENCHMARK_THREADS=1,2,4,8,16 \
-asv --config asv.macos-openmp.conf.json run HEAD~5..HEAD --bench benchmark_backends --show-stderr
+asv --config asv.openmp.conf.json run 'HEAD^!' --quick --bench benchmark_backends --show-stderr
+```
+
+Verify Cython OpenMP with the commands in
+[Verify Cython OpenMP](#verify-cython-openmp). If it passes, run the last-five
+commits:
+
+```bash
+GSTOOLS_BENCHMARK_THREADS=1,2,4,8,16 \
+asv --config asv.openmp.conf.json run 'HEAD~5..HEAD' --bench benchmark_backends --show-stderr
 ```
 
 Print Rust-vs-Cython ratios from the OpenMP result folder:
@@ -636,39 +645,67 @@ python benchmarks/tools/asv_speedup_summary.py --results-dir .asv-openmp/results
 Build and preview the OpenMP browser report:
 
 ```bash
-asv --config asv.macos-openmp.conf.json publish
-asv --config asv.macos-openmp.conf.json preview
+asv --config asv.openmp.conf.json publish
+asv --config asv.openmp.conf.json preview
 ```
 
-#### Interpreting The macOS OpenMP Run
+### Run On Windows
 
-- Use default `asv.conf.json` for the reproducible one-thread baseline.
-- Use `asv.macos-openmp.conf.json` for the macOS OpenMP experiment.
-- Only claim Cython OpenMP scaling if `check_cython_openmp.py` passes inside
-  `.asv-openmp/env/...`.
-- The active `gstools-benchmark` conda environment does not need `gstools`
-  installed. It only needs ASV. The benchmarked GSTools packages live inside
-  `.asv-openmp/env/...`.
+Use native Windows, not WSL, when you want Windows benchmark results. Install
+Microsoft C++ Build Tools first, including the C++ build tools workload and a
+Windows SDK. Run the commands from PowerShell or Anaconda Prompt after
+activating the `gstools-benchmark` conda environment.
 
-This workflow is intended for macOS systems that use Apple clang with conda's
-`llvm-openmp`. It should be portable across many macOS machines, including
-Apple Silicon and Intel Macs, but it is not guaranteed for every macOS setup.
+Create the ASV machine profile once:
 
-It is not guaranteed to run without local changes on:
+```powershell
+asv --config asv.openmp.conf.json machine --yes
+```
 
-- older macOS versions
-- systems missing Xcode command-line tools
-- systems with a nonstandard compiler setup
-- HPC or managed macOS environments
-- unusual conda installations
+Run a quick current-commit OpenMP smoke run:
 
-Do not assume this exact OpenMP setup applies to Linux, Windows, or HPC systems.
+```powershell
+$env:GSTOOLS_BENCHMARK_THREADS = '1,2,4,8,16'
+asv --config asv.openmp.conf.json run 'HEAD^!' --quick --bench benchmark_backends --show-stderr
+```
 
-### Windows Example
+Verify Cython OpenMP with the PowerShell commands in
+[Verify Cython OpenMP](#verify-cython-openmp). If it passes, run the last-five
+commits:
 
-### Linux Example
+```powershell
+$env:GSTOOLS_BENCHMARK_THREADS = '1,2,4,8,16'
+asv --config asv.openmp.conf.json run 'HEAD~5..HEAD' --bench benchmark_backends --show-stderr
+```
 
-### HPC Example
+Print Rust-vs-Cython ratios from the OpenMP result folder:
+
+```powershell
+python benchmarks\tools\asv_speedup_summary.py --results-dir .asv-openmp\results
+```
+
+Build and preview the OpenMP browser report:
+
+```powershell
+asv --config asv.openmp.conf.json publish
+asv --config asv.openmp.conf.json preview
+```
+
+When finished, clear the thread-count override if the PowerShell session will
+be reused:
+
+```powershell
+Remove-Item Env:\GSTOOLS_BENCHMARK_THREADS
+```
+
+### HPC Notes
+
+The `asv.openmp.conf.json` workflow is intended for local macOS, Linux, and
+native Windows machines. Managed HPC systems often use custom compiler modules,
+MPI/OpenMP runtimes, scheduler pinning, and CPU affinity rules. Use the same
+validation rule there: only interpret Cython as OpenMP-enabled if
+`check_cython_openmp.py --fail-if-no-openmp` passes inside the exact ASV
+environment used for the benchmark run.
 
 ### Profiling With cProfile for Multiple Threads
 
@@ -684,6 +721,19 @@ for threads in threads_1 threads_2 threads_4 threads_8 threads_16; do
 done
 ```
 
+On Windows PowerShell:
+
+```powershell
+$asvOpenmpEnv = Get-ChildItem .asv-openmp\env -Directory |
+  Sort-Object LastWriteTime -Descending |
+  Select-Object -First 1
+$asvOpenmpPython = Join-Path $asvOpenmpEnv.FullName 'python.exe'
+
+foreach ($threads in 'threads_1', 'threads_2', 'threads_4', 'threads_8', 'threads_16') {
+  & $asvOpenmpPython benchmarks\tools\profile_benchmark_workflows.py --case krige-extra-large --backend rust_core --threads $threads --limit 10
+}
+```
+
 Useful options:
 
 - `--case`: choose one workflow, or use `all`
@@ -697,27 +747,78 @@ Useful options:
 
 For example, `--limit 10` means "print the top 10 function rows after sorting".
 
+## GitHub Action Benchmark Availability Checks
+
+The repository includes `.github/workflows/asv-benchmarks.yml` to check that
+the benchmark tooling can be installed and started on GitHub-hosted Linux,
+Windows, macOS Apple Silicon, and macOS Intel runners. This workflow is an
+availability check, not a performance benchmark run.
+
+The workflow has two dependent stages:
+
+- `benchmark_1_thread_availability`: runs `asv.conf.json` with
+  `GSTOOLS_BENCHMARK_THREADS=1` on a representative Python/NumPy/SciPy matrix.
+- `benchmark_parallel_backend_availability`: waits for the 1-thread stage, then
+  verifies Cython OpenMP and Rust backend readiness on the latest dependency
+  combo for each OS runner.
+
+The 1-thread stage runs a quick ASV command:
+
+```bash
+asv run "HEAD^!" --quick --bench benchmark_backends --show-stderr
+```
+
+The parallel-readiness stage intentionally does not run a full ASV OpenMP
+benchmark. Instead, it builds `gstools-cython` with OpenMP, installs
+`gstools_core`, installs the local GSTools checkout, and runs:
+
+```bash
+conda run -n gstools-benchmark-openmp python \
+  benchmarks/tools/check_backend_parallel_ready.py --verbose
+```
+
+Locally, run the same helper with the Python executable from the ASV OpenMP
+environment:
+
+```bash
+ASV_OPENMP_ENV="$(ls -td .asv-openmp/env/* | head -n 1)"
+"$ASV_OPENMP_ENV/bin/python" benchmarks/tools/check_backend_parallel_ready.py --verbose
+```
+
+That fast check proves that Cython reports OpenMP support and that the Rust
+backend can run a small workflow with `gstools.config.NUM_THREADS=2`. For real
+OpenMP scaling measurements, use `asv.openmp.conf.json` locally with
+`GSTOOLS_BENCHMARK_THREADS=1,2,4,8,16`.
+
+The workflow runs automatically on pull requests and pushes that change ASV
+configs, benchmark files, package metadata, or the workflow itself. It can also
+be started from the GitHub Actions tab with `workflow_dispatch`.
+
+For a short explanation of GitHub Actions contexts, matrix jobs, `needs`,
+runner labels, secrets, variables, and why this workflow is path-filtered, see
+[`benchmarks/github_actions_guide.md`](github_actions_guide.md).
+
 ## More ASV Commands
 
 Save results for only the current commit:
 
 ```bash
-asv run HEAD^! --bench benchmark_backends
+asv run 'HEAD^!' --bench benchmark_backends
 ```
 
 Compare current commit with previous commit:
 
 ```bash
-asv run HEAD~1^! --bench benchmark_backends
-asv run HEAD^! --bench benchmark_backends
+asv run 'HEAD~1^!' --bench benchmark_backends
+asv run 'HEAD^!' --bench benchmark_backends
 asv compare HEAD~1 HEAD
 ```
 
 Compare local `main` with the current branch tip:
 
 ```bash
-asv run main^! --bench benchmark_backends
-asv run HEAD^! --bench benchmark_backends
+asv run 'main^!' --bench benchmark_backends
+asv run 'HEAD^!' --bench benchmark_backends
 asv compare main HEAD
 ```
 
@@ -725,8 +826,8 @@ Compare remote `main` with the current branch tip:
 
 ```bash
 git fetch origin main
-asv run origin/main^! --bench benchmark_backends
-asv run HEAD^! --bench benchmark_backends
+asv run 'origin/main^!' --bench benchmark_backends
+asv run 'HEAD^!' --bench benchmark_backends
 asv compare origin/main HEAD
 ```
 

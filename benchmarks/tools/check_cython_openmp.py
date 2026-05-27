@@ -17,7 +17,6 @@ import argparse
 import importlib
 import sys
 
-
 MODULES = {
     "variogram": "gstools_cython.variogram",
     "field": "gstools_cython.field",

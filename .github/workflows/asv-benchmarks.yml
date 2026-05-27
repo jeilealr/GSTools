@@ -1,11 +1,212 @@
-name: ASV Benchmarks
+name: Benchmark Availability Checks
 
 on:
+  # This workflow checks benchmark installability, not package correctness.
+  # It is intentionally path-filtered because ASV creates conda environments
+  # and the OpenMP job compiles extensions. Normal source/test validation is
+  # handled by main.yml; this workflow runs when benchmark-related files or
+  # package dependency metadata change.
+  pull_request:
+    branches:
+      - "main"
+    paths:
+      - ".github/workflows/asv-benchmarks.yml"
+      - "asv*.json"
+      - "benchmarks/**"
+      - "pyproject.toml"
+  push:
+    branches:
+      - "main"
+    paths:
+      - ".github/workflows/asv-benchmarks.yml"
+      - "asv*.json"
+      - "benchmarks/**"
+      - "pyproject.toml"
   workflow_dispatch:
 
+# The jobs only need to read the repository. Keep the default token minimal.
+permissions:
+  contents: read
+
+defaults:
+  run:
+    # setup-miniconda initializes conda for bash login shells on all runners.
+    shell: bash -el {0}
+
 jobs:
-  benchmark:
-    runs-on: ubuntu-latest
+  benchmark_1_thread_availability:
+    # First stage: prove the normal one-thread ASV benchmark can be installed
+    # and started across the supported runner/dependency combinations.
+    name: 1-thread ASV on ${{ matrix.os }} py${{ matrix.python-version }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 75
+    strategy:
+      # Keep the rest of the OS/dependency matrix running after one failure.
+      # That gives a full compatibility picture from a single workflow run.
+      fail-fast: false
+      matrix:
+        # This list is hand-picked, not imported from main.yml or GSTools-Core.
+        # Each entry below becomes one independent GitHub Actions job. The goal
+        # is representative coverage: each OS runner gets older/current/latest
+        # Python/NumPy/SciPy stacks without running every possible cross-product.
+        include:
+          - case-id: ubuntu-py38-oldest
+            os: ubuntu-latest
+            python-version: "3.8"
+            numpy: "==1.20.0"
+            scipy: "==1.5.4"
+          - case-id: ubuntu-py312-current
+            os: ubuntu-latest
+            python-version: "3.12"
+            numpy: "==1.26.2"
+            scipy: "==1.11.2"
+          - case-id: ubuntu-py313-latest
+            os: ubuntu-latest
+            python-version: "3.13"
+            numpy: ">=2.1.0"
+            scipy: ">=1.14.1"
+          - case-id: windows-py38-oldest
+            os: windows-latest
+            python-version: "3.8"
+            numpy: "==1.20.0"
+            scipy: "==1.5.4"
+          - case-id: windows-py312-current
+            os: windows-latest
+            python-version: "3.12"
+            numpy: "==1.26.2"
+            scipy: "==1.11.2"
+          - case-id: windows-py313-latest
+            os: windows-latest
+            python-version: "3.13"
+            numpy: ">=2.1.0"
+            scipy: ">=1.14.1"
+          - case-id: macos15-py311-older
+            os: macos-15
+            python-version: "3.11"
+            numpy: "==1.23.2"
+            scipy: "==1.9.2"
+          - case-id: macos15-py312-current
+            os: macos-15
+            python-version: "3.12"
+            numpy: "==1.26.2"
+            scipy: "==1.11.2"
+          - case-id: macos15-py313-latest
+            os: macos-15
+            python-version: "3.13"
+            numpy: ">=2.1.0"
+            scipy: ">=1.14.1"
+          - case-id: macos15-intel-py38-oldest
+            os: macos-15-intel
+            python-version: "3.8"
+            numpy: "==1.20.0"
+            scipy: "==1.5.4"
+          - case-id: macos15-intel-py312-current
+            os: macos-15-intel
+            python-version: "3.12"
+            numpy: "==1.26.2"
+            scipy: "==1.11.2"
+          - case-id: macos15-intel-py313-latest
+            os: macos-15-intel
+            python-version: "3.13"
+            numpy: ">=2.1.0"
+            scipy: ">=1.14.1"
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # ASV needs git history for revision expressions such as HEAD^!.
+          fetch-depth: 0
+
+      - uses: conda-incubator/setup-miniconda@v3
+        with:
+          # Driver environment: only runs ASV and helper scripts. The packages
+          # being benchmarked are installed inside ASV-created environments.
+          activate-environment: gstools-benchmark-driver
+          python-version: "3.12"
+          channels: conda-forge
+          auto-activate-base: false
+
+      - name: Install ASV driver
+        run: |
+          conda install -n gstools-benchmark-driver -y -c conda-forge asv
+
+      - name: Write per-job ASV config
+        run: |
+          # The committed asv.conf.json stays simple for local users. CI writes
+          # a temporary config so each matrix child can pin one dependency set.
+          conda run -n gstools-benchmark-driver python benchmarks/tools/write_asv_ci_config.py \
+            --base-config asv.conf.json \
+            --output ".asv-ci/config/${{ matrix.case-id }}.json" \
+            --python-version "${{ matrix.python-version }}" \
+            --numpy "${{ matrix.numpy }}" \
+            --scipy "${{ matrix.scipy }}" \
+            --env-dir ".asv-ci/env/${{ matrix.case-id }}" \
+            --results-dir ".asv-ci/results/${{ matrix.case-id }}" \
+            --html-dir ".asv-ci/html/${{ matrix.case-id }}"
+
+      - name: Configure ASV machine
+        run: |
+          conda run -n gstools-benchmark-driver asv \
+            --config ".asv-ci/config/${{ matrix.case-id }}.json" \
+            machine --yes
+
+      - name: Run 1-thread ASV availability check
+        env:
+          # Public benchmark-thread interface. Baseline CI intentionally checks
+          # the non-parallel path first.
+          GSTOOLS_BENCHMARK_THREADS: "1"
+        run: |
+          conda run -n gstools-benchmark-driver asv \
+            --config ".asv-ci/config/${{ matrix.case-id }}.json" \
+            run 'HEAD^!' --quick --bench benchmark_backends --show-stderr
+
+      - name: Upload ASV availability results
+        # Upload even on failure so environment/config details are available
+        # when debugging resolver, compiler, or benchmark discovery problems.
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: asv-1-thread-${{ matrix.case-id }}
+          path: |
+            .asv-ci/config/${{ matrix.case-id }}.json
+            .asv-ci/results/${{ matrix.case-id }}
+            .asv-ci/html/${{ matrix.case-id }}
+          if-no-files-found: ignore
+
+  benchmark_parallel_backend_availability:
+    # Second stage: after every 1-thread ASV matrix child succeeds, prove that
+    # the parallel backends can be installed and used on each OS runner.
+    name: Parallel backend readiness on ${{ matrix.os }} py${{ matrix.python-version }}
+    runs-on: ${{ matrix.os }}
+    # For a matrix job, this waits for all children of the upstream matrix.
+    needs: benchmark_1_thread_availability
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        # OpenMP builds are compiler-heavy. Check them on every OS, but only
+        # with the latest dependency stack to avoid multiplying CI cost.
+        include:
+          - case-id: ubuntu-py313-latest
+            os: ubuntu-latest
+            python-version: "3.13"
+            numpy: ">=2.1.0"
+            scipy: ">=1.14.1"
+          - case-id: windows-py313-latest
+            os: windows-latest
+            python-version: "3.13"
+            numpy: ">=2.1.0"
+            scipy: ">=1.14.1"
+          - case-id: macos15-py313-latest
+            os: macos-15
+            python-version: "3.13"
+            numpy: ">=2.1.0"
+            scipy: ">=1.14.1"
+          - case-id: macos15-intel-py313-latest
+            os: macos-15-intel
+            python-version: "3.13"
+            numpy: ">=2.1.0"
+            scipy: ">=1.14.1"
 
     steps:
       - uses: actions/checkout@v4
@@ -14,35 +215,56 @@ jobs:
 
       - uses: conda-incubator/setup-miniconda@v3
         with:
-          activate-environment: asv
-          python-version: "3.12"
+          # OpenMP environment: unlike gstools-benchmark-driver, this env gets
+          # GSTools, gstools-cython, gstools_core, compilers, and runtime deps.
+          activate-environment: gstools-benchmark-openmp
+          python-version: ${{ matrix.python-version }}
           channels: conda-forge
           auto-activate-base: false
 
-      - name: Install ASV
-        shell: bash -l {0}
+      - name: Install benchmark and build requirements
         run: |
-          conda install -y -c conda-forge asv
+          # Install runtime deps plus compilers/build tools before compiling
+          # gstools-cython from source with GSTOOLS_BUILD_PARALLEL=1.
+          conda install -n gstools-benchmark-openmp -y -c conda-forge \
+            "numpy${{ matrix.numpy }}" \
+            "scipy${{ matrix.scipy }}" \
+            c-compiler \
+            cxx-compiler \
+            cython \
+            emcee \
+            extension-helpers \
+            hankel \
+            meshio \
+            pip \
+            pyevtk \
+            "setuptools>=77" \
+            wheel
 
-      - name: Configure ASV machine
-        shell: bash -l {0}
+      - name: Install Rust backend package
         run: |
-          asv machine --yes
+          # gstools_core is installed with pip because conda availability is not
+          # uniform across every runner/platform combination.
+          conda run -n gstools-benchmark-openmp python -m pip install \
+            "gstools_core>=1.0.0"
 
-      - name: Run ASV benchmarks
-        shell: bash -l {0}
+      - name: Build GSTools-Cython with OpenMP
         run: |
-          asv run
+          # The helper dispatches by platform: llvm-openmp wrapper on macOS,
+          # conda compiler toolchain on Linux, and native MSVC on Windows.
+          conda run -n gstools-benchmark-openmp python \
+            benchmarks/tools/install_openmp_cython.py
 
-      - name: Publish ASV report
-        shell: bash -l {0}
+      - name: Install local GSTools checkout
         run: |
-          asv publish
+          # Dependencies are already pinned by the matrix. Install the checkout
+          # without letting pip resolve or replace them.
+          conda run -n gstools-benchmark-openmp python -m pip install \
+            --no-deps --editable .
 
-      - name: Upload ASV results
-        uses: actions/upload-artifact@v4
-        with:
-          name: asv-results
-          path: |
-            .asv/results/
-            .asv/html/
+      - name: Check Cython OpenMP and Rust backend readiness
+        run: |
+          # Fast readiness check, not a performance benchmark. It fails if
+          # Cython does not report OpenMP or Rust cannot run with NUM_THREADS=2.
+          conda run -n gstools-benchmark-openmp python \
+            benchmarks/tools/check_backend_parallel_ready.py --verbose

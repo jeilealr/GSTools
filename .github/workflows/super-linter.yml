@@ -1,0 +1,44 @@
+name: Super-Linter
+
+on:
+  # This workflow is cheap compared with ASV/compiler checks, so run it on
+  # every PR and push to main to catch metadata/documentation issues early.
+  pull_request:
+  push:
+    branches:
+      - "main"
+  workflow_dispatch:
+
+# Super-Linter needs read access and a status check permission so it can report
+# results back to the commit/PR. It does not need write access to repository
+# contents.
+permissions:
+  contents: read
+  packages: read
+  statuses: write
+
+jobs:
+  lint_repository_metadata:
+    name: Lint GitHub Actions, YAML, JSON, and Markdown
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run Super-Linter
+        uses: super-linter/super-linter@v8.6.0
+        env:
+          DEFAULT_BRANCH: main
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Lint changed files only. This avoids introducing unrelated failures
+          # from old Markdown/YAML while still checking new PR changes.
+          VALIDATE_ALL_CODEBASE: false
+          # Opt-in mode: these true values make Super-Linter skip Python. Ruff
+          # already owns Python linting in main.yml.
+          VALIDATE_GITHUB_ACTIONS: true
+          VALIDATE_JSON: true
+          VALIDATE_MARKDOWN: true
+          VALIDATE_YAML: true
