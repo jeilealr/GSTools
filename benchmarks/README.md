@@ -754,21 +754,31 @@ the benchmark tooling can be installed and started on GitHub-hosted Linux,
 Windows, macOS Apple Silicon, and macOS Intel runners. This workflow is an
 availability check, not a performance benchmark run.
 
-The workflow has two dependent stages:
+Each matrix job is its own small chain:
 
-- `benchmark_1_thread_availability`: runs `asv.conf.json` with
-  `GSTOOLS_BENCHMARK_THREADS=1` on a representative Python/NumPy/SciPy matrix.
-- `benchmark_parallel_backend_availability`: waits for the 1-thread stage, then
-  verifies Cython OpenMP and Rust backend readiness on the latest dependency
-  combo for each OS runner.
+- first, it runs `asv.conf.json` with `GSTOOLS_BENCHMARK_THREADS=1` on one
+  representative Python/NumPy/SciPy combination.
+- then, for entries marked as the latest dependency combo for an OS runner, it
+  builds the OpenMP environment and verifies Cython OpenMP plus Rust backend
+  readiness.
+
+This layout keeps the required order within each runner: the parallel check for
+one OS/dependency setup starts only after that setup's 1-thread ASV check has
+passed. It does not wait for unrelated matrix entries on other operating
+systems.
 
 The 1-thread stage runs a quick ASV command:
 
 ```bash
-asv run "HEAD^!" --quick --bench benchmark_backends --show-stderr
+asv run "HEAD^!" --quick \
+  --bench benchmark_backends.VariogramWorkflowBenchmarks.time_variogram_estimate \
+  --show-stderr
 ```
 
-The parallel-readiness stage intentionally does not run a full ASV OpenMP
+That benchmark method still exercises both configured backend values through
+ASV parameters, but avoids running the full performance suite in CI.
+
+The parallel-readiness steps intentionally do not run a full ASV OpenMP
 benchmark. Instead, it builds `gstools-cython` with OpenMP, installs
 `gstools_core`, installs the local GSTools checkout, and runs:
 

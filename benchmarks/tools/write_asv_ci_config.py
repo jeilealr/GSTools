@@ -13,6 +13,15 @@ import json
 from pathlib import Path
 
 
+def validate_asv_req_spec(package, spec):
+    if spec.startswith((">", "<", "~", "!=")) or "," in spec:
+        raise ValueError(
+            f"{package} uses open-ended CI spec {spec!r}. ASV's conda "
+            "backend expects exact matrix pins here, for example '==2.1.3'."
+        )
+    return spec
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base-config", required=True, type=Path)
@@ -37,8 +46,11 @@ def main():
     config["html_dir"] = args.html_dir
 
     req = config.setdefault("matrix", {}).setdefault("req", {})
-    req["numpy"] = [args.numpy]
-    req["scipy"] = [args.scipy]
+    try:
+        req["numpy"] = [validate_asv_req_spec("numpy", args.numpy)]
+        req["scipy"] = [validate_asv_req_spec("scipy", args.scipy)]
+    except ValueError as err:
+        raise SystemExit(str(err)) from err
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with args.output.open("w", encoding="utf8") as config_file:
