@@ -118,10 +118,6 @@ The benchmarking setup currently consists of:
 - `benchmarks/tools/check_backend_parallel_ready.py`: CI helper that verifies
   Cython OpenMP detection and Rust backend execution with more than one
   GSTools thread.
-- `benchmarks/tools/write_asv_ci_config.py`: CI helper that writes a temporary
-  per-job ASV config for one Python/NumPy/SciPy combination.
-- `benchmarks/tools/write_asv_ci_machine.py`: CI helper that writes ASV machine
-  metadata non-interactively for GitHub-hosted runners.
 - `benchmarks/tools/install_openmp_cython.py`: helper used by
   `asv.openmp.conf.json` to compile `gstools-cython` with OpenMP on macOS,
   Linux, and native Windows.
@@ -749,23 +745,18 @@ the benchmark tooling can be installed and started on GitHub-hosted Linux,
 Windows, `macos-latest`, and `macos-15-intel` runners. This workflow is an
 availability check, not a performance benchmark run.
 
-Each matrix job is its own small chain:
+The workflow has two independent matrix jobs:
 
-- first, it runs `asv.conf.json` with `GSTOOLS_BENCHMARK_THREADS=1` on one
-  representative Python/NumPy/SciPy combination.
-- then, for entries marked as the newest Rust-compatible dependency combo for
-  an OS runner, it builds the OpenMP environment and verifies Cython OpenMP
-  plus Rust backend readiness.
+- `benchmark_asv_existing_env` installs GSTools and the benchmark
+  dependencies with pip, then runs one ASV benchmark method with
+  `-E existing`.
+- `benchmark_parallel_readiness` creates a small conda-forge environment and
+  runs `check_backend_parallel_ready.py --verbose`.
 
-This layout keeps the required order within each runner: the parallel check for
-one OS/dependency setup starts only after that setup's 1-thread ASV check has
-passed. It does not wait for unrelated matrix entries on other operating
-systems.
-
-The 1-thread stage runs a quick ASV command:
+The ASV smoke stage runs a quick command in the existing Python environment:
 
 ```bash
-asv run "HEAD^!" --quick \
+asv run -E existing "HEAD^!" --quick \
   --bench benchmark_backends.VariogramWorkflowBenchmarks.time_variogram_estimate \
   --show-stderr
 ```
@@ -777,16 +768,18 @@ because `gstools_core` 1.2.0 can fail during the Rust variogram smoke case on
 that interpreter.
 
 The parallel-readiness steps intentionally do not run a full ASV OpenMP
-benchmark. Instead, it builds `gstools-cython` with OpenMP, installs
-`gstools_core`, installs the local GSTools checkout, and runs:
+benchmark. They install `gstools-cython` from conda-forge, install
+`gstools_core`, install the local GSTools checkout, and run:
 
 ```bash
-conda run -n gstools-benchmark-openmp python \
+conda run -n gstools-benchmark-readiness python \
   benchmarks/tools/check_backend_parallel_ready.py --verbose
 ```
 
-Locally, run the same helper with the Python executable from the ASV OpenMP
-environment:
+CI does not call `benchmarks/tools/install_openmp_cython.py`; that helper is
+kept for local/manual OpenMP ASV builds through `asv.openmp.conf.json`.
+Locally, run the readiness helper with the Python executable from the ASV
+OpenMP environment:
 
 ```bash
 ASV_OPENMP_ENV="$(ls -td .asv-openmp/env/* | head -n 1)"

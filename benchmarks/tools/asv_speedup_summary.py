@@ -24,7 +24,6 @@ import json
 import math
 from pathlib import Path
 
-
 BACKENDS = ("cython_fallback", "rust_core")
 THREAD_PREFIX = "threads_"
 LEGACY_BENCHMARKS = {

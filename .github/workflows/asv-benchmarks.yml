@@ -1,11 +1,9 @@
 name: Benchmark Availability Checks
 
 on:
-  # This workflow checks benchmark installability, not package correctness.
-  # It is intentionally path-filtered because ASV creates conda environments
-  # and the OpenMP job compiles extensions. Normal source/test validation is
-  # handled by main.yml; this workflow runs when benchmark-related files or
-  # package dependency metadata change.
+  # This workflow checks whether the benchmark code can be installed and
+  # started on the supported GitHub-hosted runners. It is a smoke check, not a
+  # performance benchmark suite.
   pull_request:
     branches:
       - "main"
@@ -24,248 +22,172 @@ on:
       - "pyproject.toml"
   workflow_dispatch:
 
-# The jobs only need to read the repository. Keep the default token minimal.
 permissions:
   contents: read
 
-defaults:
-  run:
-    # setup-miniconda initializes conda for bash login shells on all runners.
-    shell: bash -el {0}
-
 jobs:
-  benchmark_availability:
-    # Each matrix child is its own small chain: first run the normal one-thread
-    # ASV smoke check, then run parallel readiness immediately for entries
-    # marked with parallel_check. GitHub Actions cannot make one matrix child
-    # depend only on the matching child of another matrix job, so keeping both
-    # phases in one job avoids waiting for unrelated OS/Python combinations.
-    name: Benchmark availability on ${{ matrix.os }} py${{ matrix.ver.py }}
+  benchmark_asv_existing_env:
+    # Use the same dependency combinations as main.yml, but run only one
+    # lightweight benchmark method in the already-created Python environment.
+    # That avoids ASV's conda environment management in CI while still proving
+    # that users can start the benchmark suite on each runner family.
+    name: ASV smoke on ${{ matrix.os }} py${{ matrix.ver.py }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 75
+    timeout-minutes: 30
     strategy:
-      # Keep the rest of the OS/dependency matrix running after one failure.
-      # That gives a full compatibility picture from a single workflow run.
       fail-fast: false
       matrix:
-        # This list is hand-picked, not imported from main.yml or GSTools-Core.
-        # Each entry below becomes one independent GitHub Actions job. The goal
-        # is representative coverage: each OS runner gets older/current/latest
-        # conda-solvable Python/NumPy/SciPy stacks without running every
-        # possible cross-product. Use bare exact package versions here; the
-        # helper writes conda-style pins into ASV's generated config.
         include:
-          - case-id: ubuntu-py311-older
+          - case-id: ubuntu-py311
             os: ubuntu-latest
-            ver: { py: "3.11", np: "1.23.5", sp: "1.9.3" }
-            parallel_check: "false"
-          - case-id: ubuntu-py312-current
+            ver: { py: "3.11", np: "==1.23.2", sp: "==1.9.2" }
+          - case-id: ubuntu-py312
             os: ubuntu-latest
-            ver: { py: "3.12", np: "1.26.4", sp: "1.11.4" }
-            parallel_check: "false"
-          - case-id: ubuntu-py313-latest
+            ver: { py: "3.12", np: "==1.26.2", sp: "==1.11.2" }
+          - case-id: ubuntu-py313
             os: ubuntu-latest
-            ver: { py: "3.13", np: "2.1.3", sp: "1.14.1" }
-            parallel_check: "true"
-          - case-id: ubuntu-py314-latest
+            ver: { py: "3.13", np: "==2.1.0", sp: "==1.14.1" }
+          - case-id: ubuntu-py314
             os: ubuntu-latest
-            ver: { py: "3.14", np: "2.3.2", sp: "1.16.1" }
+            ver: { py: "3.14", np: "==2.3.2", sp: "==1.16.1" }
             asv_backends: "cython_fallback"
-            parallel_check: "false"
-          - case-id: windows-py311-older
+          - case-id: windows-py311
             os: windows-latest
-            ver: { py: "3.11", np: "1.23.5", sp: "1.9.3" }
-            parallel_check: "false"
-          - case-id: windows-py312-current
+            ver: { py: "3.11", np: "==1.23.2", sp: "==1.9.2" }
+          - case-id: windows-py312
             os: windows-latest
-            ver: { py: "3.12", np: "1.26.4", sp: "1.11.4" }
-            parallel_check: "false"
-          - case-id: windows-py313-latest
+            ver: { py: "3.12", np: "==1.26.2", sp: "==1.11.2" }
+          - case-id: windows-py313
             os: windows-latest
-            ver: { py: "3.13", np: "2.1.3", sp: "1.14.1" }
-            parallel_check: "true"
-          - case-id: windows-py314-latest
+            ver: { py: "3.13", np: "==2.1.0", sp: "==1.14.1" }
+          - case-id: windows-py314
             os: windows-latest
-            ver: { py: "3.14", np: "2.3.2", sp: "1.16.1" }
+            ver: { py: "3.14", np: "==2.3.2", sp: "==1.16.1" }
             asv_backends: "cython_fallback"
-            parallel_check: "false"
-          - case-id: macos-latest-py311-older
+          - case-id: macos-latest-py311
             os: macos-latest
-            ver: { py: "3.11", np: "1.23.5", sp: "1.9.3" }
-            parallel_check: "false"
-          - case-id: macos-latest-py312-current
+            ver: { py: "3.11", np: "==1.23.2", sp: "==1.9.2" }
+          - case-id: macos-latest-py312
             os: macos-latest
-            ver: { py: "3.12", np: "1.26.4", sp: "1.11.4" }
-            parallel_check: "false"
-          - case-id: macos-latest-py313-latest
+            ver: { py: "3.12", np: "==1.26.2", sp: "==1.11.2" }
+          - case-id: macos-latest-py313
             os: macos-latest
-            ver: { py: "3.13", np: "2.1.3", sp: "1.14.1" }
-            parallel_check: "true"
-          - case-id: macos-latest-py314-latest
+            ver: { py: "3.13", np: "==2.1.0", sp: "==1.14.1" }
+          - case-id: macos-latest-py314
             os: macos-latest
-            ver: { py: "3.14", np: "2.3.2", sp: "1.16.1" }
+            ver: { py: "3.14", np: "==2.3.2", sp: "==1.16.1" }
             asv_backends: "cython_fallback"
-            parallel_check: "false"
-          - case-id: macos15-intel-py311-older
+          - case-id: macos15-intel-py311
             os: macos-15-intel
-            ver: { py: "3.11", np: "1.23.5", sp: "1.9.3" }
-            parallel_check: "false"
-          - case-id: macos15-intel-py312-current
+            ver: { py: "3.11", np: "==1.23.2", sp: "==1.9.2" }
+          - case-id: macos15-intel-py312
             os: macos-15-intel
-            ver: { py: "3.12", np: "1.26.4", sp: "1.11.4" }
-            parallel_check: "false"
-          - case-id: macos15-intel-py313-latest
+            ver: { py: "3.12", np: "==1.26.2", sp: "==1.11.2" }
+          - case-id: macos15-intel-py313
             os: macos-15-intel
-            ver: { py: "3.13", np: "2.1.3", sp: "1.14.1" }
-            parallel_check: "true"
-          - case-id: macos15-intel-py314-latest
+            ver: { py: "3.13", np: "==2.1.0", sp: "==1.14.1" }
+          - case-id: macos15-intel-py314
             os: macos-15-intel
-            ver: { py: "3.14", np: "2.3.2", sp: "1.16.1" }
+            ver: { py: "3.14", np: "==2.3.2", sp: "==1.16.1" }
             asv_backends: "cython_fallback"
-            parallel_check: "false"
+
+    defaults:
+      run:
+        # Use one shell syntax for Linux, Windows, and macOS smoke commands.
+        shell: bash
 
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
-          # ASV needs git history for revision expressions such as HEAD^!.
           fetch-depth: 0
 
-      - uses: conda-incubator/setup-miniconda@fc2d68f6413eb2d87b895e92f8584b5b94a10167 # v3
+      - uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6.0.0
         with:
-          # Driver environment: only runs ASV and helper scripts. The packages
-          # being benchmarked are installed inside ASV-created environments.
-          activate-environment: gstools-benchmark-driver
-          python-version: "3.12"
-          channels: conda-forge
-          conda-remove-defaults: true
+          python-version: ${{ matrix.ver.py }}
 
-      - name: Install ASV driver
+      - name: Install benchmark smoke dependencies
         run: |
-          # ASV loads environment backends as optional plugins. Installing
-          # packaging/virtualenv explicitly prevents CI from falling back to
-          # the "existing" backend only, which would make environment_type:
-          # conda unavailable.
-          conda install -n gstools-benchmark-driver -y -c conda-forge \
+          python -m pip install --upgrade pip
+          python -m pip install \
             asv \
-            packaging \
-            virtualenv
-
-      - name: Write per-job ASV config
-        run: |
-          # The committed asv.conf.json stays simple for local users. CI writes
-          # a temporary config so each matrix child can pin one dependency set.
-          conda run -n gstools-benchmark-driver python benchmarks/tools/write_asv_ci_config.py \
-            --base-config asv.conf.json \
-            --output "${GITHUB_WORKSPACE}/asv.ci.${{ matrix.case-id }}.json" \
-            --python-version "${{ matrix.ver.py }}" \
-            --numpy "${{ matrix.ver.np }}" \
-            --scipy "${{ matrix.ver.sp }}" \
-            --env-dir ".asv-ci/env/${{ matrix.case-id }}" \
-            --results-dir ".asv-ci/results/${{ matrix.case-id }}" \
-            --html-dir ".asv-ci/html/${{ matrix.case-id }}"
+            emcee \
+            "gstools-cython>=1,<2" \
+            "gstools_core>=1.0.0" \
+            hankel \
+            meshio \
+            "numpy${{ matrix.ver.np }}" \
+            pyevtk \
+            "scipy${{ matrix.ver.sp }}"
+          python -m pip install --no-deps --editable .
 
       - name: Configure ASV machine
         run: |
-          # Supply explicit machine metadata for CI. Writing the ASV machine
-          # file directly avoids platform-specific issues with `asv machine`
-          # under the Windows conda/bash wrapper.
-          conda run -n gstools-benchmark-driver python \
-            benchmarks/tools/write_asv_ci_machine.py \
-            --machine "${{ matrix.case-id }}" \
-            --os "${{ runner.os }}" \
-            --arch "${{ runner.arch }}" \
-            --cpu "GitHub Actions ${{ matrix.os }}" \
-            --num-cpu "2" \
-            --ram "unknown"
+          # existing environments still need a machine profile for ASV result
+          # metadata. --yes keeps the command non-interactive in CI.
+          asv machine --yes
 
-      - name: Run 1-thread ASV availability check
+      - name: Run ASV smoke check in existing environment
         env:
-          # Public benchmark-thread interface. Baseline CI intentionally checks
-          # the non-parallel path first.
           GSTOOLS_BENCHMARK_THREADS: "1"
-          # Keep the default benchmark behavior unless a matrix entry narrows
-          # the smoke run. Python 3.14 currently runs Cython-only here because
-          # gstools_core 1.2.0 can segfault during the variogram smoke case.
           GSTOOLS_BENCHMARK_BACKENDS: ${{ matrix.asv_backends || '' }}
         run: |
-          # Run one lightweight ASV benchmark method. Most matrix entries
-          # exercise both backend values; Python 3.14 is limited to Cython
-          # until gstools_core is stable there. CI avoids the full benchmark
-          # suite because this workflow checks availability, not performance
-          # quality.
-          conda run -n gstools-benchmark-driver asv \
-            --config "${GITHUB_WORKSPACE}/asv.ci.${{ matrix.case-id }}.json" \
-            run \
-            --machine "${{ matrix.case-id }}" \
+          # -E existing uses the Python environment prepared above. Python 3.14
+          # is currently Cython-only because gstools_core 1.2.0 can fail during
+          # the Rust variogram smoke case.
+          asv run \
+            -E existing \
             --quick \
             --bench benchmark_backends.VariogramWorkflowBenchmarks.time_variogram_estimate \
             --show-stderr \
             'HEAD^!'
 
-      - name: Upload ASV availability results
-        # Upload even on failure so environment/config details are available
-        # when debugging resolver, compiler, or benchmark discovery problems.
-        if: always()
-        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
-        with:
-          name: asv-1-thread-${{ matrix.case-id }}
-          path: |
-            asv.ci.${{ matrix.case-id }}.json
-            .asv-ci/results/${{ matrix.case-id }}
-            .asv-ci/html/${{ matrix.case-id }}
-          if-no-files-found: ignore
+  benchmark_parallel_readiness:
+    # Keep this separate from the ASV smoke job. It checks the smallest useful
+    # runtime proof for parallel backends without running a full ASV benchmark
+    # and without building gstools-cython from the PyPI source distribution.
+    name: Parallel readiness on ${{ matrix.os }} py3.13
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - windows-latest
+          - macos-latest
+          - macos-15-intel
 
-      - name: Create OpenMP readiness environment
-        if: matrix.parallel_check == 'true'
+    defaults:
+      run:
+        shell: bash -el {0}
+
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - uses: conda-incubator/setup-miniconda@fc2d68f6413eb2d87b895e92f8584b5b94a10167 # v3
+        with:
+          activate-environment: gstools-benchmark-readiness
+          python-version: "3.13"
+          channels: conda-forge
+          conda-remove-defaults: true
+
+      - name: Install parallel readiness dependencies
         run: |
-          # OpenMP builds are compiler-heavy. Check them on every OS, but only
-          # with the newest Rust-compatible dependency stack to avoid
-          # multiplying CI cost. This step runs only after this exact matrix
-          # child's 1-thread ASV check has passed.
-          conda create -n gstools-benchmark-openmp -y -c conda-forge \
-            "python=${{ matrix.ver.py }}" \
-            "numpy=${{ matrix.ver.np }}" \
-            "scipy=${{ matrix.ver.sp }}" \
-            c-compiler \
-            cxx-compiler \
-            cython \
+          conda install -n gstools-benchmark-readiness -y -c conda-forge \
             emcee \
-            extension-helpers \
+            gstools-cython \
             hankel \
             meshio \
+            "numpy=2.1.0" \
             pip \
             pyevtk \
-            "setuptools>=77" \
-            wheel
-
-      - name: Install Rust backend package
-        if: matrix.parallel_check == 'true'
-        run: |
-          # gstools_core is installed with pip because conda availability is not
-          # uniform across every runner/platform combination.
-          conda run -n gstools-benchmark-openmp python -m pip install \
+            "scipy=1.14.1"
+          conda run -n gstools-benchmark-readiness python -m pip install \
             "gstools_core>=1.0.0"
-
-      - name: Build GSTools-Cython with OpenMP
-        if: matrix.parallel_check == 'true'
-        run: |
-          # The helper dispatches by platform: llvm-openmp wrapper on macOS,
-          # conda compiler toolchain on Linux, and native MSVC on Windows.
-          conda run -n gstools-benchmark-openmp python \
-            benchmarks/tools/install_openmp_cython.py
-
-      - name: Install local GSTools checkout
-        if: matrix.parallel_check == 'true'
-        run: |
-          # Dependencies are already pinned by the matrix. Install the checkout
-          # without letting pip resolve or replace them.
-          conda run -n gstools-benchmark-openmp python -m pip install \
+          conda run -n gstools-benchmark-readiness python -m pip install \
             --no-deps --editable .
 
       - name: Check Cython OpenMP and Rust backend readiness
-        if: matrix.parallel_check == 'true'
         run: |
-          # Fast readiness check, not a performance benchmark. It fails if
-          # Cython does not report OpenMP or Rust cannot run with NUM_THREADS=2.
-          conda run -n gstools-benchmark-openmp python \
+          conda run -n gstools-benchmark-readiness python \
             benchmarks/tools/check_backend_parallel_ready.py --verbose
