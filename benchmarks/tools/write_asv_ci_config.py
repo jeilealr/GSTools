@@ -13,13 +13,21 @@ import json
 from pathlib import Path
 
 
-def validate_asv_req_spec(package, spec):
-    if spec.startswith((">", "<", "~", "!=")) or "," in spec:
+def conda_exact_pin(package, spec):
+    """Return an ASV/conda exact package pin from a CI matrix value."""
+    spec = spec.strip()
+    if spec.startswith((">", "<", "~", "!")) or "," in spec:
         raise ValueError(
             f"{package} uses open-ended CI spec {spec!r}. ASV's conda "
-            "backend expects exact matrix pins here, for example '==2.1.3'."
+            "backend expects exact matrix pins here, for example '2.1.3'."
         )
-    return spec
+    if spec.startswith("=="):
+        spec = spec[2:]
+    elif spec.startswith("="):
+        spec = spec[1:]
+    if not spec:
+        raise ValueError(f"{package} has an empty CI version pin.")
+    return f"={spec}"
 
 
 def parse_args():
@@ -47,8 +55,8 @@ def main():
 
     req = config.setdefault("matrix", {}).setdefault("req", {})
     try:
-        req["numpy"] = [validate_asv_req_spec("numpy", args.numpy)]
-        req["scipy"] = [validate_asv_req_spec("scipy", args.scipy)]
+        req["numpy"] = [conda_exact_pin("numpy", args.numpy)]
+        req["scipy"] = [conda_exact_pin("scipy", args.scipy)]
     except ValueError as err:
         raise SystemExit(str(err)) from err
 

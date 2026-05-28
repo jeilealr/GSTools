@@ -20,10 +20,9 @@ from __future__ import annotations
 
 import argparse
 import cProfile
-from pathlib import Path
 import pstats
 import sys
-
+from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
@@ -88,7 +87,6 @@ THREAD_COUNTS = (
     "threads_2",
     "threads_4",
     "threads_8",
-    "threads_16",
 )
 
 

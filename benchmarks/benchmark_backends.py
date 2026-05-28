@@ -19,7 +19,7 @@ for the same benchmark, commit, and thread label.
 
 By default the suite uses one GSTools thread. For local OpenMP scaling
 experiments, set GSTOOLS_BENCHMARK_THREADS, for example:
-    GSTOOLS_BENCHMARK_THREADS=1,2,4,8,16 \
+    GSTOOLS_BENCHMARK_THREADS=2,4,8 \
         asv --config asv.openmp.conf.json run 'HEAD^!'
 """
 
@@ -31,7 +31,26 @@ import os
 import gstools as gs
 import numpy as np
 
-BACKENDS = ("cython_fallback", "rust_core")
+AVAILABLE_BACKENDS = ("cython_fallback", "rust_core")
+
+
+def _configured_backends():
+    raw = os.environ.get("GSTOOLS_BENCHMARK_BACKENDS", "")
+    if not raw.strip():
+        return AVAILABLE_BACKENDS
+    backends = tuple(item.strip() for item in raw.split(",") if item.strip())
+    unknown = sorted(set(backends) - set(AVAILABLE_BACKENDS))
+    if unknown:
+        raise ValueError(
+            "GSTOOLS_BENCHMARK_BACKENDS contains unknown backends: "
+            + ", ".join(unknown)
+        )
+    if not backends:
+        raise ValueError("GSTOOLS_BENCHMARK_BACKENDS did not define backends")
+    return backends
+
+
+BACKENDS = _configured_backends()
 
 
 def _configured_thread_counts():

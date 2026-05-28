@@ -13,7 +13,13 @@ import importlib
 import sys
 
 import numpy as np
-from check_cython_openmp import MODULES, check_module, package_version
+
+MODULES = {
+    "variogram": "gstools_cython.variogram",
+    "field": "gstools_cython.field",
+    "krige": "gstools_cython.krige",
+}
+EXPLICIT_THREAD_COUNTS = (2, 4, 8)
 
 
 def parse_args():
@@ -29,10 +35,33 @@ def parse_args():
         action="store_true",
         help="Print per-module Cython OpenMP thread details.",
     )
+    parser.add_argument(
+        "--cython-only",
+        action="store_true",
+        help="Only check GSTools-Cython OpenMP readiness.",
+    )
     return parser.parse_args()
 
 
-def check_cython_openmp(verbose=False):
+def package_version(package_name):
+    try:
+        package = importlib.import_module(package_name)
+    except ModuleNotFoundError:
+        return "not installed"
+    return getattr(package, "__version__", "unknown")
+
+
+def check_module(label, module_name):
+    module = importlib.import_module(module_name)
+    default_threads = module.set_num_threads(None)
+    explicit = {
+        count: module.set_num_threads(count)
+        for count in EXPLICIT_THREAD_COUNTS
+    }
+    return label, default_threads, explicit
+
+
+def check_cython_parallel(verbose=False):
     default_values = []
     for label, module_name in MODULES.items():
         try:
@@ -47,10 +76,20 @@ def check_cython_openmp(verbose=False):
             )
             print(f"{label} default None -> {default_threads}")
             print(f"{label} explicit -> {explicit_text}")
-        if explicit.get(2) != 2:
+        mismatches = {
+            request: actual
+            for request, actual in explicit.items()
+            if actual != request
+        }
+        if mismatches:
+            mismatch_text = ", ".join(
+                f"{request}->{actual}"
+                for request, actual in mismatches.items()
+            )
             print(
                 "Cython OpenMP readiness: FAIL. "
-                f"{label} did not accept an explicit 2-thread request."
+                f"{label} did not accept requested thread counts: "
+                f"{mismatch_text}."
             )
             return False
 
@@ -123,8 +162,8 @@ def main():
     print(f"gstools_cython: {package_version('gstools_cython')}")
     print(f"gstools_core: {package_version('gstools_core')}")
 
-    cython_ready = check_cython_openmp(verbose=args.verbose)
-    rust_ready = check_rust_backend(args.threads)
+    cython_ready = check_cython_parallel(verbose=args.verbose)
+    rust_ready = True if args.cython_only else check_rust_backend(args.threads)
     return 0 if cython_ready and rust_ready else 1
 
 

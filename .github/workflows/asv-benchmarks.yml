@@ -52,73 +52,77 @@ jobs:
         # Each entry below becomes one independent GitHub Actions job. The goal
         # is representative coverage: each OS runner gets older/current/latest
         # conda-solvable Python/NumPy/SciPy stacks without running every
-        # possible cross-product. Use exact package pins here because ASV's
-        # conda backend does not handle open-ended version ranges reliably.
+        # possible cross-product. Use bare exact package versions here; the
+        # helper writes conda-style pins into ASV's generated config.
         include:
           - case-id: ubuntu-py311-older
             os: ubuntu-latest
-            ver: { py: "3.11", np: "==1.23.5", sp: "==1.9.3" }
+            ver: { py: "3.11", np: "1.23.5", sp: "1.9.3" }
             parallel_check: "false"
           - case-id: ubuntu-py312-current
             os: ubuntu-latest
-            ver: { py: "3.12", np: "==1.26.4", sp: "==1.11.4" }
+            ver: { py: "3.12", np: "1.26.4", sp: "1.11.4" }
             parallel_check: "false"
           - case-id: ubuntu-py313-latest
             os: ubuntu-latest
-            ver: { py: "3.13", np: "==2.1.3", sp: "==1.14.1" }
-            parallel_check: "false"
+            ver: { py: "3.13", np: "2.1.3", sp: "1.14.1" }
+            parallel_check: "true"
           - case-id: ubuntu-py314-latest
             os: ubuntu-latest
-            ver: { py: "3.14", np: "==2.3.3", sp: "==1.16.1" }
-            parallel_check: "true"
+            ver: { py: "3.14", np: "2.3.2", sp: "1.16.1" }
+            asv_backends: "cython_fallback"
+            parallel_check: "false"
           - case-id: windows-py311-older
             os: windows-latest
-            ver: { py: "3.11", np: "==1.23.5", sp: "==1.9.3" }
+            ver: { py: "3.11", np: "1.23.5", sp: "1.9.3" }
             parallel_check: "false"
           - case-id: windows-py312-current
             os: windows-latest
-            ver: { py: "3.12", np: "==1.26.4", sp: "==1.11.4" }
+            ver: { py: "3.12", np: "1.26.4", sp: "1.11.4" }
             parallel_check: "false"
           - case-id: windows-py313-latest
             os: windows-latest
-            ver: { py: "3.13", np: "==2.1.3", sp: "==1.14.1" }
-            parallel_check: "false"
+            ver: { py: "3.13", np: "2.1.3", sp: "1.14.1" }
+            parallel_check: "true"
           - case-id: windows-py314-latest
             os: windows-latest
-            ver: { py: "3.14", np: "==2.3.3", sp: "==1.16.1" }
-            parallel_check: "true"
+            ver: { py: "3.14", np: "2.3.2", sp: "1.16.1" }
+            asv_backends: "cython_fallback"
+            parallel_check: "false"
           - case-id: macos-latest-py311-older
             os: macos-latest
-            ver: { py: "3.11", np: "==1.23.5", sp: "==1.9.3" }
+            ver: { py: "3.11", np: "1.23.5", sp: "1.9.3" }
             parallel_check: "false"
           - case-id: macos-latest-py312-current
             os: macos-latest
-            ver: { py: "3.12", np: "==1.26.4", sp: "==1.11.4" }
+            ver: { py: "3.12", np: "1.26.4", sp: "1.11.4" }
             parallel_check: "false"
           - case-id: macos-latest-py313-latest
             os: macos-latest
-            ver: { py: "3.13", np: "==2.1.3", sp: "==1.14.1" }
-            parallel_check: "false"
+            ver: { py: "3.13", np: "2.1.3", sp: "1.14.1" }
+            parallel_check: "true"
           - case-id: macos-latest-py314-latest
             os: macos-latest
-            ver: { py: "3.14", np: "==2.3.3", sp: "==1.16.1" }
-            parallel_check: "true"
+            ver: { py: "3.14", np: "2.3.2", sp: "1.16.1" }
+            asv_backends: "cython_fallback"
+            parallel_check: "false"
           - case-id: macos15-intel-py311-older
             os: macos-15-intel
-            ver: { py: "3.11", np: "==1.23.5", sp: "==1.9.3" }
+            ver: { py: "3.11", np: "1.23.5", sp: "1.9.3" }
             parallel_check: "false"
           - case-id: macos15-intel-py312-current
             os: macos-15-intel
-            ver: { py: "3.12", np: "==1.26.4", sp: "==1.11.4" }
+            ver: { py: "3.12", np: "1.26.4", sp: "1.11.4" }
             parallel_check: "false"
           - case-id: macos15-intel-py313-latest
             os: macos-15-intel
-            ver: { py: "3.13", np: "==2.1.3", sp: "==1.14.1" }
-            parallel_check: "false"
+            ver: { py: "3.13", np: "2.1.3", sp: "1.14.1" }
+            parallel_check: "true"
           - case-id: macos15-intel-py314-latest
             os: macos-15-intel
-            ver: { py: "3.14", np: "==2.3.3", sp: "==1.16.1" }
-            parallel_check: "true"
+            ver: { py: "3.14", np: "2.3.2", sp: "1.16.1" }
+            asv_backends: "cython_fallback"
+            parallel_check: "false"
 
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
@@ -162,31 +166,33 @@ jobs:
 
       - name: Configure ASV machine
         run: |
-          # Supply explicit machine metadata for CI. ASV can infer this on
-          # Linux/macOS ARM, but Windows runner detection is less reliable.
-          # The case-id is also passed to asv run below so both commands use
-          # the same machine entry.
-          conda run -n gstools-benchmark-driver asv \
-            --config "${GITHUB_WORKSPACE}/asv.ci.${{ matrix.case-id }}.json" \
-            machine \
+          # Supply explicit machine metadata for CI. Writing the ASV machine
+          # file directly avoids platform-specific issues with `asv machine`
+          # under the Windows conda/bash wrapper.
+          conda run -n gstools-benchmark-driver python \
+            benchmarks/tools/write_asv_ci_machine.py \
             --machine "${{ matrix.case-id }}" \
             --os "${{ runner.os }}" \
             --arch "${{ runner.arch }}" \
             --cpu "GitHub Actions ${{ matrix.os }}" \
-            --num_cpu "2" \
-            --ram "unknown" \
-            --yes
+            --num-cpu "2" \
+            --ram "unknown"
 
       - name: Run 1-thread ASV availability check
         env:
           # Public benchmark-thread interface. Baseline CI intentionally checks
           # the non-parallel path first.
           GSTOOLS_BENCHMARK_THREADS: "1"
+          # Keep the default benchmark behavior unless a matrix entry narrows
+          # the smoke run. Python 3.14 currently runs Cython-only here because
+          # gstools_core 1.2.0 can segfault during the variogram smoke case.
+          GSTOOLS_BENCHMARK_BACKENDS: ${{ matrix.asv_backends || '' }}
         run: |
-          # Run one lightweight ASV benchmark method. Its parameters still
-          # exercise both backend values, but CI avoids running the full
-          # benchmark suite because this workflow checks availability, not
-          # performance quality.
+          # Run one lightweight ASV benchmark method. Most matrix entries
+          # exercise both backend values; Python 3.14 is limited to Cython
+          # until gstools_core is stable there. CI avoids the full benchmark
+          # suite because this workflow checks availability, not performance
+          # quality.
           conda run -n gstools-benchmark-driver asv \
             --config "${GITHUB_WORKSPACE}/asv.ci.${{ matrix.case-id }}.json" \
             run \
@@ -213,13 +219,13 @@ jobs:
         if: matrix.parallel_check == 'true'
         run: |
           # OpenMP builds are compiler-heavy. Check them on every OS, but only
-          # with the latest dependency stack to avoid multiplying CI cost. This
-          # step runs only after this exact matrix child's 1-thread ASV check
-          # has passed.
+          # with the newest Rust-compatible dependency stack to avoid
+          # multiplying CI cost. This step runs only after this exact matrix
+          # child's 1-thread ASV check has passed.
           conda create -n gstools-benchmark-openmp -y -c conda-forge \
             "python=${{ matrix.ver.py }}" \
-            "numpy${{ matrix.ver.np }}" \
-            "scipy${{ matrix.ver.sp }}" \
+            "numpy=${{ matrix.ver.np }}" \
+            "scipy=${{ matrix.ver.sp }}" \
             c-compiler \
             cxx-compiler \
             cython \

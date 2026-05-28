@@ -42,7 +42,7 @@ deciding where optimization work should go:
 - [Optional Parallelisation with OpenMP](#optional-parallelisation-with-openmp)
   - [Shared OpenMP Rule](#shared-openmp-rule)
   - [OpenMP ASV Configuration](#openmp-asv-configuration)
-  - [Verify Cython OpenMP](#verify-cython-openmp)
+  - [Verify Parallel Backends](#verify-parallel-backends)
   - [Run On macOS And Linux](#run-on-macos-and-linux)
   - [Run On Windows](#run-on-windows)
   - [HPC Notes](#hpc-notes)
@@ -115,14 +115,13 @@ The benchmarking setup currently consists of:
 - `benchmarks/tools/profile_benchmark_workflows.py`: runs one representative
   workflow from `benchmark_backends.py` under Python's built-in `cProfile`, so
   you can see which functions take time in the current checkout.
-- `benchmarks/tools/check_cython_openmp.py`: optional helper for checking
-  whether the active Python environment's GSTools-Cython extensions detect
-  OpenMP parallel support.
 - `benchmarks/tools/check_backend_parallel_ready.py`: CI helper that verifies
-  Cython OpenMP detection and Rust backend execution with more than one GSTools
-  thread.
+  Cython OpenMP detection and Rust backend execution with more than one
+  GSTools thread.
 - `benchmarks/tools/write_asv_ci_config.py`: CI helper that writes a temporary
   per-job ASV config for one Python/NumPy/SciPy combination.
+- `benchmarks/tools/write_asv_ci_machine.py`: CI helper that writes ASV machine
+  metadata non-interactively for GitHub-hosted runners.
 - `benchmarks/tools/install_openmp_cython.py`: helper used by
   `asv.openmp.conf.json` to compile `gstools-cython` with OpenMP on macOS,
   Linux, and native Windows.
@@ -522,8 +521,8 @@ you explicitly want to measure backend scaling with multiple thread counts.
 
 ### Shared OpenMP Rule
 
-The benchmark code can be run with several thread labels by setting for example 
-`GSTOOLS_BENCHMARK_THREADS=1,2,4,8,16`. That only passes different
+The benchmark code can be run with several thread labels by setting, for
+example, `GSTOOLS_BENCHMARK_THREADS=2,4,8`. That only passes different
 `gstools.config.NUM_THREADS` values to GSTools. It does not, by itself, make
 the Cython backend parallel.
 
@@ -533,7 +532,7 @@ that environment before interpreting Cython scaling results:
 
 ```bash
 ASV_ENV="$(ls -td .asv-openmp/env/* | head -n 1)"
-"$ASV_ENV/bin/python" benchmarks/tools/check_cython_openmp.py --fail-if-no-openmp
+"$ASV_ENV/bin/python" benchmarks/tools/check_backend_parallel_ready.py --verbose
 ```
 
 If the check fails, the benchmark may still run, but the Cython backend should
@@ -570,11 +569,12 @@ compiler handling:
 - Linux: uses the ASV conda compiler toolchain when available.
 - Windows: uses native MSVC Build Tools.
 
-### Verify Cython OpenMP
+### Verify Parallel Backends
 
-Only interpret the Cython rows as OpenMP-enabled after this check passes inside
-the `.asv-openmp/env/...` environment. The active `gstools-benchmark` conda
-environment is only the ASV driver environment; it is normal for
+Only interpret the Cython rows as OpenMP-enabled, and the Rust rows as
+parallel-ready, after this check passes inside the `.asv-openmp/env/...`
+environment. The active `gstools-benchmark` conda environment is only the ASV
+driver environment; it is normal for
 `python benchmarks/tools/check_backend_parallel_ready.py --verbose` to fail
 there with `gstools: not installed`, `gstools_cython: not installed`, or
 `gstools_core: not installed`.
@@ -583,8 +583,6 @@ On macOS and Linux:
 
 ```bash
 ASV_OPENMP_ENV="$(ls -td .asv-openmp/env/* | head -n 1)"
-"$ASV_OPENMP_ENV/bin/python" benchmarks/tools/check_cython_openmp.py --verbose
-"$ASV_OPENMP_ENV/bin/python" benchmarks/tools/check_cython_openmp.py --fail-if-no-openmp
 "$ASV_OPENMP_ENV/bin/python" benchmarks/tools/check_backend_parallel_ready.py --verbose
 ```
 
@@ -595,15 +593,12 @@ $asvOpenmpEnv = Get-ChildItem .asv-openmp\env -Directory |
   Sort-Object LastWriteTime -Descending |
   Select-Object -First 1
 $asvOpenmpPython = Join-Path $asvOpenmpEnv.FullName 'python.exe'
-& $asvOpenmpPython benchmarks\tools\check_cython_openmp.py --verbose
-& $asvOpenmpPython benchmarks\tools\check_cython_openmp.py --fail-if-no-openmp
 & $asvOpenmpPython benchmarks\tools\check_backend_parallel_ready.py --verbose
 ```
 
 Expected passing output contains:
 
 ```text
-OpenMP check: PASS
 Cython OpenMP readiness: PASS
 Rust backend readiness: PASS with NUM_THREADS=2
 ```
@@ -623,16 +618,16 @@ asv --config asv.openmp.conf.json machine --yes
 Run a quick current-commit OpenMP smoke run:
 
 ```bash
-GSTOOLS_BENCHMARK_THREADS=1,2,4,8,16 \
+GSTOOLS_BENCHMARK_THREADS=2,4,8 \
 asv --config asv.openmp.conf.json run 'HEAD^!' --quick --bench benchmark_backends --show-stderr
 ```
 
-Verify Cython OpenMP with the commands in
-[Verify Cython OpenMP](#verify-cython-openmp). If it passes, run the last-five
+Verify the parallel backends with the commands in
+[Verify Parallel Backends](#verify-parallel-backends). If it passes, run the last-five
 commits:
 
 ```bash
-GSTOOLS_BENCHMARK_THREADS=1,2,4,8,16 \
+GSTOOLS_BENCHMARK_THREADS=2,4,8 \
 asv --config asv.openmp.conf.json run 'HEAD~5..HEAD' --bench benchmark_backends --show-stderr
 ```
 
@@ -665,16 +660,16 @@ asv --config asv.openmp.conf.json machine --yes
 Run a quick current-commit OpenMP smoke run:
 
 ```powershell
-$env:GSTOOLS_BENCHMARK_THREADS = '1,2,4,8,16'
+$env:GSTOOLS_BENCHMARK_THREADS = '2,4,8'
 asv --config asv.openmp.conf.json run 'HEAD^!' --quick --bench benchmark_backends --show-stderr
 ```
 
-Verify Cython OpenMP with the PowerShell commands in
-[Verify Cython OpenMP](#verify-cython-openmp). If it passes, run the last-five
+Verify the parallel backends with the PowerShell commands in
+[Verify Parallel Backends](#verify-parallel-backends). If it passes, run the last-five
 commits:
 
 ```powershell
-$env:GSTOOLS_BENCHMARK_THREADS = '1,2,4,8,16'
+$env:GSTOOLS_BENCHMARK_THREADS = '2,4,8'
 asv --config asv.openmp.conf.json run 'HEAD~5..HEAD' --bench benchmark_backends --show-stderr
 ```
 
@@ -704,7 +699,7 @@ The `asv.openmp.conf.json` workflow is intended for local macOS, Linux, and
 native Windows machines. Managed HPC systems often use custom compiler modules,
 MPI/OpenMP runtimes, scheduler pinning, and CPU affinity rules. Use the same
 validation rule there: only interpret Cython as OpenMP-enabled if
-`check_cython_openmp.py --fail-if-no-openmp` passes inside the exact ASV
+`check_backend_parallel_ready.py --verbose` passes inside the exact ASV
 environment used for the benchmark run.
 
 ### Profiling With cProfile for Multiple Threads
@@ -716,7 +711,7 @@ same cProfile case several times with the OpenMP ASV environment:
 ASV_OPENMP_ENV="$(ls -td .asv-openmp/env/* | head -n 1)"
 ASV_OPENMP_PYTHON="$ASV_OPENMP_ENV/bin/python"
 
-for threads in threads_1 threads_2 threads_4 threads_8 threads_16; do
+for threads in threads_2 threads_4 threads_8; do
   "$ASV_OPENMP_PYTHON" benchmarks/tools/profile_benchmark_workflows.py --case krige-extra-large --backend rust_core --threads "$threads" --limit 10
 done
 ```
@@ -729,7 +724,7 @@ $asvOpenmpEnv = Get-ChildItem .asv-openmp\env -Directory |
   Select-Object -First 1
 $asvOpenmpPython = Join-Path $asvOpenmpEnv.FullName 'python.exe'
 
-foreach ($threads in 'threads_1', 'threads_2', 'threads_4', 'threads_8', 'threads_16') {
+foreach ($threads in 'threads_2', 'threads_4', 'threads_8') {
   & $asvOpenmpPython benchmarks\tools\profile_benchmark_workflows.py --case krige-extra-large --backend rust_core --threads $threads --limit 10
 }
 ```
@@ -738,8 +733,8 @@ Useful options:
 
 - `--case`: choose one workflow, or use `all`
 - `--backend`: choose `cython_fallback` or `rust_core`
-- `--threads`: choose `threads_1`, `threads_2`, `threads_4`, `threads_8`,
-  or `threads_16`
+- `--threads`: choose `threads_1` for a baseline profile, or `threads_2`,
+  `threads_4`, or `threads_8` for parallel profiles
 - `--limit`: number of function rows to print from the cProfile table
 - `--sort cumtime`: sort by cumulative time, usually the best first view
 - `--sort tottime`: sort by time spent directly in each function
@@ -758,9 +753,9 @@ Each matrix job is its own small chain:
 
 - first, it runs `asv.conf.json` with `GSTOOLS_BENCHMARK_THREADS=1` on one
   representative Python/NumPy/SciPy combination.
-- then, for entries marked as the latest dependency combo for an OS runner, it
-  builds the OpenMP environment and verifies Cython OpenMP plus Rust backend
-  readiness.
+- then, for entries marked as the newest Rust-compatible dependency combo for
+  an OS runner, it builds the OpenMP environment and verifies Cython OpenMP
+  plus Rust backend readiness.
 
 This layout keeps the required order within each runner: the parallel check for
 one OS/dependency setup starts only after that setup's 1-thread ASV check has
@@ -775,8 +770,11 @@ asv run "HEAD^!" --quick \
   --show-stderr
 ```
 
-That benchmark method still exercises both configured backend values through
-ASV parameters, but avoids running the full performance suite in CI.
+That benchmark method exercises both configured backend values through ASV
+parameters, but avoids running the full performance suite in CI. Python 3.14
+currently runs this ASV smoke check with the Cython fallback backend only,
+because `gstools_core` 1.2.0 can fail during the Rust variogram smoke case on
+that interpreter.
 
 The parallel-readiness steps intentionally do not run a full ASV OpenMP
 benchmark. Instead, it builds `gstools-cython` with OpenMP, installs
@@ -798,7 +796,7 @@ ASV_OPENMP_ENV="$(ls -td .asv-openmp/env/* | head -n 1)"
 That fast check proves that Cython reports OpenMP support and that the Rust
 backend can run a small workflow with `gstools.config.NUM_THREADS=2`. For real
 OpenMP scaling measurements, use `asv.openmp.conf.json` locally with
-`GSTOOLS_BENCHMARK_THREADS=1,2,4,8,16`.
+`GSTOOLS_BENCHMARK_THREADS=2,4,8`.
 
 The workflow runs automatically on pull requests and pushes that change ASV
 configs, benchmark files, package metadata, or the workflow itself. It can also
@@ -835,6 +833,19 @@ git fetch origin main
 asv run 'origin/main^!' --bench benchmark_backends
 asv run 'HEAD^!' --bench benchmark_backends
 asv compare origin/main HEAD
+```
+
+Run the last three commits on local `main`:
+
+```bash
+asv run 'main~3..main' --bench benchmark_backends --show-stderr
+```
+
+Run the last three commits on the latest remote `main`:
+
+```bash
+git fetch origin main
+asv run 'origin/main~3..origin/main' --bench benchmark_backends --show-stderr
 ```
 
 On a linear branch, `HEAD~5..HEAD` benchmarks:
