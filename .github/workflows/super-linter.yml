@@ -37,8 +37,8 @@ jobs:
           # from old Markdown/YAML while still checking new PR changes.
           VALIDATE_ALL_CODEBASE: false
           # Opt-in mode: these true values make Super-Linter skip Python and
-          # Markdown. Ruff owns Python linting in main.yml. Prose/style checks
-          # should use a dedicated tool such as Vale or textlint if added later.
+          # Markdown. Ruff owns Python linting in main.yml, and vale.yml owns
+          # Markdown prose/terminology checks.
           VALIDATE_GITHUB_ACTIONS: true
           VALIDATE_JSON: true
           VALIDATE_YAML: true

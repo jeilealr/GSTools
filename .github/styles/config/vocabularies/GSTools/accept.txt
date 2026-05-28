@@ -1,0 +1,11 @@
+ASV
+Cython
+GeoStat
+GSTools
+OpenMP
+PowerShell
+NumPy
+SciPy
+conda-forge
+gstools-cython
+gstools_core
