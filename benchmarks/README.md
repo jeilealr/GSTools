@@ -751,7 +751,7 @@ For example, `--limit 10` means "print the top 10 function rows after sorting".
 
 The repository includes `.github/workflows/asv-benchmarks.yml` to check that
 the benchmark tooling can be installed and started on GitHub-hosted Linux,
-Windows, macOS Apple Silicon, and macOS Intel runners. This workflow is an
+Windows, `macos-latest`, and `macos-15-intel` runners. This workflow is an
 availability check, not a performance benchmark run.
 
 Each matrix job is its own small chain:
@@ -803,10 +803,6 @@ OpenMP scaling measurements, use `asv.openmp.conf.json` locally with
 The workflow runs automatically on pull requests and pushes that change ASV
 configs, benchmark files, package metadata, or the workflow itself. It can also
 be started from the GitHub Actions tab with `workflow_dispatch`.
-
-For a short explanation of GitHub Actions contexts, matrix jobs, `needs`,
-runner labels, secrets, variables, and why this workflow is path-filtered, see
-[`benchmarks/github_actions_guide.md`](github_actions_guide.md).
 
 ## More ASV Commands
 

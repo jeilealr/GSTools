@@ -18,12 +18,12 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - uses: actions/checkout@v4
         with:
           fetch-depth: "0"
 
       - name: Set up Python 3.11
-        uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6.0.0
+        uses: actions/setup-python@v5
         with:
           python-version: 3.11
 
@@ -55,13 +55,7 @@ jobs:
       fail-fast: false
       matrix:
         os:
-          [
-            ubuntu-latest,
-            ubuntu-24.04-arm,
-            windows-latest,
-            macos-15,
-            macos-15-intel,
-          ]
+          [ubuntu-latest, ubuntu-24.04-arm, windows-latest, macos-15-intel, macos-latest]
         # https://github.com/scipy/oldest-supported-numpy/blob/main/setup.cfg
         ver:
           - { py: "3.8", np: "==1.20.0", sp: "==1.5.4" }
@@ -70,27 +64,24 @@ jobs:
           - { py: "3.11", np: "==1.23.2", sp: "==1.9.2" }
           - { py: "3.12", np: "==1.26.2", sp: "==1.11.2" }
           - { py: "3.13", np: "==2.1.0", sp: "==1.14.1" }
-          - { py: "3.13", np: ">=2.1.0", sp: ">=1.14.1" }
-          - { py: "3.14", np: ">=2.3.3", sp: ">=1.16.1" }
+          - { py: "3.14", np: "==2.3.2", sp: "==1.16.1" }
+          - { py: "3.14", np: ">=2.3.2", sp: ">=1.16.1" }
         exclude:
           - os: ubuntu-24.04-arm
             ver: { py: "3.8", np: "==1.20.0", sp: "==1.5.4" }
-          # macos-15 is the Apple Silicon runner. Old Python/NumPy/SciPy
-          # combinations do not have reliable arm64 wheels there, so keep
-          # legacy dependency coverage on Linux, Windows, and macOS Intel.
-          - os: macos-15
+          - os: macos-latest
             ver: { py: "3.8", np: "==1.20.0", sp: "==1.5.4" }
-          - os: macos-15
+          - os: macos-latest
             ver: { py: "3.9", np: "==1.20.0", sp: "==1.5.4" }
-          - os: macos-15
+          - os: macos-latest
             ver: { py: "3.10", np: "==1.21.6", sp: "==1.7.2" }
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - uses: actions/checkout@v4
         with:
           fetch-depth: "0"
 
       - name: Set up Python ${{ matrix.ver.py }}
-        uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6.0.0
+        uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.ver.py }}
 
@@ -101,14 +92,11 @@ jobs:
 
       - name: Install GSTools
         run: |
-          pip install -v --editable '.[test]'
+          pip install -v --editable .[test]
 
       - name: Run tests
-        env:
-          NUMPY_SPEC: ${{ matrix.ver.np }}
-          SCIPY_SPEC: ${{ matrix.ver.sp }}
         run: |
-          pip install "numpy${NUMPY_SPEC}" "scipy${SCIPY_SPEC}"
+          pip install "numpy${{ matrix.ver.np }}" "scipy${{ matrix.ver.sp }}"
           python -m pytest -v tests/
 
       - name: Build dist
@@ -116,7 +104,7 @@ jobs:
           # PEP 517 package builder from pypa
           python -m build .
 
-      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+      - uses: actions/upload-artifact@v4
         if: matrix.os == 'ubuntu-latest' && matrix.ver.py == '3.11'
         with:
           name: dist
@@ -127,7 +115,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+      - uses: actions/download-artifact@v4
         with:
           name: dist
           path: dist
@@ -135,7 +123,7 @@ jobs:
       - name: Publish to Test PyPI
         # only if working on main
         if: github.ref == 'refs/heads/main'
-        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # release/v1
+        uses: pypa/gh-action-pypi-publish@release/v1
         with:
           user: __token__
           password: ${{ secrets.test_pypi_password }}
@@ -145,7 +133,7 @@ jobs:
       - name: Publish to PyPI
         # only if tagged
         if: startsWith(github.ref, 'refs/tags')
-        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # release/v1
+        uses: pypa/gh-action-pypi-publish@release/v1
         with:
           user: __token__
           password: ${{ secrets.pypi_password }}
