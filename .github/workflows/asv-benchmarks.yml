@@ -48,26 +48,27 @@ jobs:
         # This list is hand-picked, not imported from main.yml or GSTools-Core.
         # Each entry below becomes one independent GitHub Actions job. The goal
         # is representative coverage: each OS runner gets older/current/latest
-        # Python/NumPy/SciPy stacks without running every possible cross-product.
+        # conda-solvable Python/NumPy/SciPy stacks without running every
+        # possible cross-product.
         include:
-          - case-id: ubuntu-py38-oldest
+          - case-id: ubuntu-py311-older
             os: ubuntu-latest
-            ver: { py: "3.8", np: "==1.20.0", sp: "==1.5.4" }
+            ver: { py: "3.11", np: "==1.23.5", sp: "==1.9.3" }
           - case-id: ubuntu-py312-current
             os: ubuntu-latest
-            ver: { py: "3.12", np: "==1.26.2", sp: "==1.11.2" }
+            ver: { py: "3.12", np: "==1.26.4", sp: "==1.11.4" }
           - case-id: ubuntu-py313-latest
             os: ubuntu-latest
             ver: { py: "3.13", np: ">=2.1.0", sp: ">=1.14.1" }
           - case-id: ubuntu-py314-latest
             os: ubuntu-latest
             ver: { py: "3.14", np: ">=2.3.3", sp: ">=1.16.1" }
-          - case-id: windows-py38-oldest
+          - case-id: windows-py311-older
             os: windows-latest
-            ver: { py: "3.8", np: "==1.20.0", sp: "==1.5.4" }
+            ver: { py: "3.11", np: "==1.23.5", sp: "==1.9.3" }
           - case-id: windows-py312-current
             os: windows-latest
-            ver: { py: "3.12", np: "==1.26.2", sp: "==1.11.2" }
+            ver: { py: "3.12", np: "==1.26.4", sp: "==1.11.4" }
           - case-id: windows-py313-latest
             os: windows-latest
             ver: { py: "3.13", np: ">=2.1.0", sp: ">=1.14.1" }
@@ -76,22 +77,22 @@ jobs:
             ver: { py: "3.14", np: ">=2.3.3", sp: ">=1.16.1" }
           - case-id: macos15-py311-older
             os: macos-15
-            ver: { py: "3.11", np: "==1.23.2", sp: "==1.9.2" }
+            ver: { py: "3.11", np: "==1.23.5", sp: "==1.9.3" }
           - case-id: macos15-py312-current
             os: macos-15
-            ver: { py: "3.12", np: "==1.26.2", sp: "==1.11.2" }
+            ver: { py: "3.12", np: "==1.26.4", sp: "==1.11.4" }
           - case-id: macos15-py313-latest
             os: macos-15
             ver: { py: "3.13", np: ">=2.1.0", sp: ">=1.14.1" }
           - case-id: macos15-py314-latest
             os: macos-15
             ver: { py: "3.14", np: ">=2.3.3", sp: ">=1.16.1" }
-          - case-id: macos15-intel-py38-oldest
+          - case-id: macos15-intel-py311-older
             os: macos-15-intel
-            ver: { py: "3.8", np: "==1.20.0", sp: "==1.5.4" }
+            ver: { py: "3.11", np: "==1.23.5", sp: "==1.9.3" }
           - case-id: macos15-intel-py312-current
             os: macos-15-intel
-            ver: { py: "3.12", np: "==1.26.2", sp: "==1.11.2" }
+            ver: { py: "3.12", np: "==1.26.4", sp: "==1.11.4" }
           - case-id: macos15-intel-py313-latest
             os: macos-15-intel
             ver: { py: "3.13", np: ">=2.1.0", sp: ">=1.14.1" }

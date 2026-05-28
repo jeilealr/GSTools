@@ -101,11 +101,14 @@ jobs:
 
       - name: Install GSTools
         run: |
-          pip install -v --editable .[test]
+          pip install -v --editable '.[test]'
 
       - name: Run tests
+        env:
+          NUMPY_SPEC: ${{ matrix.ver.np }}
+          SCIPY_SPEC: ${{ matrix.ver.sp }}
         run: |
-          pip install "numpy${{ matrix.ver.np }}" "scipy${{ matrix.ver.sp }}"
+          pip install "numpy${NUMPY_SPEC}" "scipy${SCIPY_SPEC}"
           python -m pytest -v tests/
 
       - name: Build dist
