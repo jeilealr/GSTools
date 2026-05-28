@@ -63,16 +63,18 @@ def _build_dag(
     informed = informed_init.copy()
     indegree = np.zeros(N, dtype=np.int32)
     out_edges = [[] for _ in range(N)]
+    offset_norms = (
+        np.linalg.norm(offset_arr.astype(float), axis=1)
+        if max_radius is not None
+        else None
+    )
 
     for i, x_i in enumerate(path):
         found = 0
-        for offset in offset_arr:
+        for k, offset in enumerate(offset_arr):
             if found >= n_neighbors:
                 break
-            if (
-                max_radius is not None
-                and np.linalg.norm(offset.astype(float)) > max_radius
-            ):
+            if offset_norms is not None and offset_norms[k] > max_radius:
                 break  # offset_arr is distance-sorted; all remaining also exceed max_radius
             nb = x_i + offset
             if np.any(nb < 0) or np.any(nb >= sim_shape_arr):
@@ -156,8 +158,6 @@ def ds_simulate(
     executor = (
         ThreadPoolExecutor(max_workers=n_threads) if n_threads > 1 else None
     )
-    use_parallel_outer = executor is not None
-
     max_off_int = int(np.ceil(max_radius)) if max_radius is not None else None
     offset_arr = _precompute_offsets(sim_shape, max_off_int)
 
@@ -188,6 +188,23 @@ def ds_simulate(
             valid = valid[dists <= max_radius]
         return valid[:n_neighbors]
 
+    def _scan_ti(lo, win_shape, lags, de_sim, cm, ln, node_rng):
+        # Precondition: win_size >= 1 (callers guarantee win_lo <= win_hi on all axes).
+        # Also captures scan_fraction, ti_data, threshold, cond_weight from outer scope.
+        win_size = int(np.prod(win_shape))
+        max_scan = max(1, int(scan_fraction * win_size))
+        start = int(node_rng.integers(0, win_size))
+        best_d, best_v, best_de_ti = np.inf, None, None
+        for k in range(max_scan):
+            y = lo + np.array(np.unravel_index((start + k) % win_size, win_shape))
+            data_event_ti = ti_data[tuple(np.round(y + lags).astype(int).T)]
+            dist_val = training_image.distance(de_sim, data_event_ti, cm, cond_weight, ln)
+            if dist_val < best_d:
+                best_d, best_v, best_de_ti = dist_val, ti_data[tuple(y)], data_event_ti
+            if dist_val <= threshold:
+                break
+        return best_v, best_de_ti
+
     def _simulate_node(x_i, node_rng, sg_in, informed_in):
         nbrs = _get_neighbors(x_i, informed_in)
         if len(nbrs) == 0:
@@ -198,8 +215,6 @@ def ds_simulate(
         cond_mask = is_cond[tuple(nbrs.T)]  # (k,)
         lag_norms = np.linalg.norm(lags, axis=1)  # (k,)
 
-        best_d, best_v = np.inf, None
-
         if boundary == "strict":
             # Search window Y(L_i) — Juda2022 Eq. 5, Mariethoz2010 §3 ¶19
             win_lo = np.maximum(0, np.ceil(-lags.min(axis=0))).astype(int)
@@ -207,89 +222,54 @@ def ds_simulate(
                 ti_shape - 1, np.floor(ti_shape - 1 - lags.max(axis=0))
             ).astype(int)
             if np.any(win_lo > win_hi):
-                return _rand_ti(node_rng)
-
-            win_shape = tuple(win_hi - win_lo + 1)
-            win_size = int(np.prod(win_shape))
-            max_scan = max(1, int(scan_fraction * win_size))
-            start = int(node_rng.integers(0, win_size))
-
-            best_data_event_ti = None
-            for k in range(max_scan):
-                y = win_lo + np.array(
-                    np.unravel_index((start + k) % win_size, win_shape)
+                raise ValueError(
+                    f"Strict search window collapsed at {x_i}: lag extent exceeds "
+                    f"TI dimensions {ti_shape.tolist()}. Fix: (1) ensure TI is at "
+                    "least as large as the simulation grid, (2) set max_radius < "
+                    "min(ti_shape) to bound lag extent, or (3) use boundary='partial'."
                 )
-                ti_coords = np.round(y + lags).astype(int)
-                data_event_ti = ti_data[tuple(ti_coords.T)]
-                dist_val = training_image.distance(
-                    data_event_sim,
-                    data_event_ti,
-                    cond_mask,
-                    cond_weight,
-                    lag_norms,
-                )
-                if dist_val < best_d:
-                    best_d, best_v, best_data_event_ti = (
-                        dist_val,
-                        ti_data[tuple(y)],
-                        data_event_ti,
-                    )
-                if dist_val <= threshold:
-                    break
-
-            return training_image.adjust_value(
-                best_v, data_event_sim, best_data_event_ti
+            best_v, best_de_ti = _scan_ti(
+                win_lo, tuple(win_hi - win_lo + 1),
+                lags, data_event_sim, cond_mask, lag_norms, node_rng,
             )
+            return training_image.adjust_value(best_v, data_event_sim, best_de_ti)
 
         else:  # "partial" — Mariethoz2010 §6.2: global template reduction
-            # Drop lags permanently outside TI (|h[d]| >= ti_shape[d] for any d).
-            # These can never be satisfied for any anchor y; dropping them restores
-            # a valid strict window when rotation/affinity stretches the template.
-            placeable = np.all(np.abs(lags) < ti_shape, axis=1)
-            if not np.any(placeable):
-                return _rand_ti(node_rng)
-            lags_p = lags[placeable]
-            de_sg_p = data_event_sim[placeable]
-            cm_p = cond_mask[placeable]
-            ln_p = lag_norms[placeable]
-
-            sw_lo = np.maximum(0, np.ceil(-lags_p.min(axis=0))).astype(int)
-            sw_hi = np.minimum(
-                ti_shape - 1, np.floor(ti_shape - 1 - lags_p.max(axis=0))
-            ).astype(int)
-            if np.any(sw_lo > sw_hi):
-                return _rand_ti(node_rng)
-
-            sw_shape = tuple(sw_hi - sw_lo + 1)
-            sw_size = int(np.prod(sw_shape))
-            max_scan = max(1, int(scan_fraction * sw_size))
-            start = int(node_rng.integers(0, sw_size))
-
-            best_data_event_ti_p = None
-            for k in range(max_scan):
-                y = sw_lo + np.array(
-                    np.unravel_index((start + k) % sw_size, sw_shape)
-                )
-                ti_coords = np.round(y + lags_p).astype(int)
-                data_event_ti_p = ti_data[tuple(ti_coords.T)]
-                dist_val = training_image.distance(
-                    de_sg_p, data_event_ti_p, cm_p, cond_weight, ln_p
-                )
-                if dist_val < best_d:
-                    best_d, best_v, best_data_event_ti_p = (
-                        dist_val,
-                        ti_data[tuple(y)],
-                        data_event_ti_p,
-                    )
-                if dist_val <= threshold:
+            # Lags are distance-sorted (closest first) because offset_arr is.
+            # Drop farthest neighbours one at a time until the bounding box of
+            # the remaining data event fits inside the TI, per the paper's
+            # "ignore until it becomes possible to scan" directive (§6.2).
+            valid_count = len(lags)
+            while valid_count > 0:
+                lags_p = lags[:valid_count]
+                sw_lo = np.maximum(0, np.ceil(-lags_p.min(axis=0))).astype(int)
+                sw_hi = np.minimum(
+                    ti_shape - 1, np.floor(ti_shape - 1 - lags_p.max(axis=0))
+                ).astype(int)
+                if np.all(sw_lo <= sw_hi):
                     break
-
+                valid_count -= 1
+            else:
+                raise ValueError(
+                    f"Partial search window collapsed at {x_i}: no subset of the "
+                    f"data event fits inside TI dimensions {ti_shape.tolist()}. "
+                    "The TI is smaller than the minimum lag in some dimension."
+                )
+            best_v, best_de_ti = _scan_ti(
+                sw_lo, tuple(sw_hi - sw_lo + 1),
+                lags_p, data_event_sim[:valid_count],
+                cond_mask[:valid_count], lag_norms[:valid_count], node_rng,
+            )
+            # For variation distance, adjust_value uses the mean of the
+            # truncated data event (valid_count neighbours), not the full
+            # neighbourhood mean.  This is intentional — the mean-shift
+            # must be consistent with the lags actually used in the scan.
             return training_image.adjust_value(
-                best_v, de_sg_p, best_data_event_ti_p
+                best_v, data_event_sim[:valid_count], best_de_ti
             )
 
     try:
-        if use_parallel_outer:
+        if executor is not None:
             indegree, out_edges = _build_dag(
                 path,
                 n_neighbors,
@@ -304,7 +284,7 @@ def ds_simulate(
             while ready:
                 batch = ready
                 ready = []
-                sg_snap = sg.copy()
+                sg_snap = sg.copy()  # freeze state so all batch workers see the same pre-batch grid
                 informed_snap = informed.copy()
 
                 futures = [
@@ -375,6 +355,10 @@ class DirectSampling(Field):
     max_radius : float, optional
         Exclude SG neighbours beyond this Euclidean distance from the
         data event. Default: ``None`` (no limit).
+        The minimum effective value is 1.0 (the grid-cell Euclidean
+        distance to the nearest neighbour). Values in ``(0, 1)`` accept
+        no neighbours at all, making every node fall back to a random TI
+        sample.
     seed : int or nan, optional
         Master RNG seed. Default: nan.
     """
@@ -397,6 +381,19 @@ class DirectSampling(Field):
             raise ValueError(
                 f"DirectSampling: boundary must be one of {_VALID_BOUNDARY!r}, "
                 f"got {boundary!r}"
+            )
+        if int(n_neighbors) < 1:
+            raise ValueError(
+                f"DirectSampling: n_neighbors must be >= 1, got {n_neighbors!r}"
+            )
+        if not (0 < float(scan_fraction) <= 1):
+            raise ValueError(
+                f"DirectSampling: scan_fraction must be in (0, 1], "
+                f"got {scan_fraction!r}"
+            )
+        if float(threshold) < 0:
+            raise ValueError(
+                f"DirectSampling: threshold must be >= 0, got {threshold!r}"
             )
         if max_radius is not None and float(max_radius) <= 0:
             raise ValueError(
@@ -530,6 +527,10 @@ class DirectSampling(Field):
 
     @n_neighbors.setter
     def n_neighbors(self, value):
+        if int(value) < 1:
+            raise ValueError(
+                f"DirectSampling: n_neighbors must be >= 1, got {value!r}"
+            )
         self._n_neighbors = int(value)
 
     @property
@@ -539,6 +540,10 @@ class DirectSampling(Field):
 
     @scan_fraction.setter
     def scan_fraction(self, value):
+        if not (0 < float(value) <= 1):
+            raise ValueError(
+                f"DirectSampling: scan_fraction must be in (0, 1], got {value!r}"
+            )
         self._scan_fraction = float(value)
 
     @property
@@ -548,6 +553,10 @@ class DirectSampling(Field):
 
     @threshold.setter
     def threshold(self, value):
+        if float(value) < 0:
+            raise ValueError(
+                f"DirectSampling: threshold must be >= 0, got {value!r}"
+            )
         self._threshold = float(value)
 
     @property
@@ -575,7 +584,12 @@ class DirectSampling(Field):
 
     @property
     def max_radius(self):
-        """:class:`float` or :any:`None`: Euclidean cap on SG neighbour selection."""
+        """:class:`float` or :any:`None`: Euclidean cap on SG neighbour selection.
+
+        Values in ``(0, 1)`` disable all neighbours (nearest grid cell is
+        at distance 1.0), causing every node to fall back to a random TI
+        sample.
+        """
         return self._max_radius
 
     @max_radius.setter
