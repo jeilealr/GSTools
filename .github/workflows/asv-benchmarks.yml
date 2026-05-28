@@ -37,7 +37,7 @@ jobs:
   benchmark_1_thread_availability:
     # First stage: prove the normal one-thread ASV benchmark can be installed
     # and started across the supported runner/dependency combinations.
-    name: 1-thread ASV on ${{ matrix.os }} py${{ matrix.python-version }}
+    name: 1-thread ASV on ${{ matrix.os }} py${{ matrix.ver.py }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 75
     strategy:
@@ -52,72 +52,60 @@ jobs:
         include:
           - case-id: ubuntu-py38-oldest
             os: ubuntu-latest
-            python-version: "3.8"
-            numpy: "==1.20.0"
-            scipy: "==1.5.4"
+            ver: { py: "3.8", np: "==1.20.0", sp: "==1.5.4" }
           - case-id: ubuntu-py312-current
             os: ubuntu-latest
-            python-version: "3.12"
-            numpy: "==1.26.2"
-            scipy: "==1.11.2"
+            ver: { py: "3.12", np: "==1.26.2", sp: "==1.11.2" }
           - case-id: ubuntu-py313-latest
             os: ubuntu-latest
-            python-version: "3.13"
-            numpy: ">=2.1.0"
-            scipy: ">=1.14.1"
+            ver: { py: "3.13", np: ">=2.1.0", sp: ">=1.14.1" }
+          - case-id: ubuntu-py314-latest
+            os: ubuntu-latest
+            ver: { py: "3.14", np: ">=2.3.3", sp: ">=1.16.1" }
           - case-id: windows-py38-oldest
             os: windows-latest
-            python-version: "3.8"
-            numpy: "==1.20.0"
-            scipy: "==1.5.4"
+            ver: { py: "3.8", np: "==1.20.0", sp: "==1.5.4" }
           - case-id: windows-py312-current
             os: windows-latest
-            python-version: "3.12"
-            numpy: "==1.26.2"
-            scipy: "==1.11.2"
+            ver: { py: "3.12", np: "==1.26.2", sp: "==1.11.2" }
           - case-id: windows-py313-latest
             os: windows-latest
-            python-version: "3.13"
-            numpy: ">=2.1.0"
-            scipy: ">=1.14.1"
+            ver: { py: "3.13", np: ">=2.1.0", sp: ">=1.14.1" }
+          - case-id: windows-py314-latest
+            os: windows-latest
+            ver: { py: "3.14", np: ">=2.3.3", sp: ">=1.16.1" }
           - case-id: macos15-py311-older
             os: macos-15
-            python-version: "3.11"
-            numpy: "==1.23.2"
-            scipy: "==1.9.2"
+            ver: { py: "3.11", np: "==1.23.2", sp: "==1.9.2" }
           - case-id: macos15-py312-current
             os: macos-15
-            python-version: "3.12"
-            numpy: "==1.26.2"
-            scipy: "==1.11.2"
+            ver: { py: "3.12", np: "==1.26.2", sp: "==1.11.2" }
           - case-id: macos15-py313-latest
             os: macos-15
-            python-version: "3.13"
-            numpy: ">=2.1.0"
-            scipy: ">=1.14.1"
+            ver: { py: "3.13", np: ">=2.1.0", sp: ">=1.14.1" }
+          - case-id: macos15-py314-latest
+            os: macos-15
+            ver: { py: "3.14", np: ">=2.3.3", sp: ">=1.16.1" }
           - case-id: macos15-intel-py38-oldest
             os: macos-15-intel
-            python-version: "3.8"
-            numpy: "==1.20.0"
-            scipy: "==1.5.4"
+            ver: { py: "3.8", np: "==1.20.0", sp: "==1.5.4" }
           - case-id: macos15-intel-py312-current
             os: macos-15-intel
-            python-version: "3.12"
-            numpy: "==1.26.2"
-            scipy: "==1.11.2"
+            ver: { py: "3.12", np: "==1.26.2", sp: "==1.11.2" }
           - case-id: macos15-intel-py313-latest
             os: macos-15-intel
-            python-version: "3.13"
-            numpy: ">=2.1.0"
-            scipy: ">=1.14.1"
+            ver: { py: "3.13", np: ">=2.1.0", sp: ">=1.14.1" }
+          - case-id: macos15-intel-py314-latest
+            os: macos-15-intel
+            ver: { py: "3.14", np: ">=2.3.3", sp: ">=1.16.1" }
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           # ASV needs git history for revision expressions such as HEAD^!.
           fetch-depth: 0
 
-      - uses: conda-incubator/setup-miniconda@v3
+      - uses: conda-incubator/setup-miniconda@fc2d68f6413eb2d87b895e92f8584b5b94a10167 # v3
         with:
           # Driver environment: only runs ASV and helper scripts. The packages
           # being benchmarked are installed inside ASV-created environments.
@@ -128,7 +116,14 @@ jobs:
 
       - name: Install ASV driver
         run: |
-          conda install -n gstools-benchmark-driver -y -c conda-forge asv
+          # ASV loads environment backends as optional plugins. Installing
+          # packaging/virtualenv explicitly prevents CI from falling back to
+          # the "existing" backend only, which would make environment_type:
+          # conda unavailable.
+          conda install -n gstools-benchmark-driver -y -c conda-forge \
+            asv \
+            packaging \
+            virtualenv
 
       - name: Write per-job ASV config
         run: |
@@ -137,9 +132,9 @@ jobs:
           conda run -n gstools-benchmark-driver python benchmarks/tools/write_asv_ci_config.py \
             --base-config asv.conf.json \
             --output "${GITHUB_WORKSPACE}/asv.ci.${{ matrix.case-id }}.json" \
-            --python-version "${{ matrix.python-version }}" \
-            --numpy "${{ matrix.numpy }}" \
-            --scipy "${{ matrix.scipy }}" \
+            --python-version "${{ matrix.ver.py }}" \
+            --numpy "${{ matrix.ver.np }}" \
+            --scipy "${{ matrix.ver.sp }}" \
             --env-dir ".asv-ci/env/${{ matrix.case-id }}" \
             --results-dir ".asv-ci/results/${{ matrix.case-id }}" \
             --html-dir ".asv-ci/html/${{ matrix.case-id }}"
@@ -164,7 +159,7 @@ jobs:
         # Upload even on failure so environment/config details are available
         # when debugging resolver, compiler, or benchmark discovery problems.
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
           name: asv-1-thread-${{ matrix.case-id }}
           path: |
@@ -176,7 +171,7 @@ jobs:
   benchmark_parallel_backend_availability:
     # Second stage: after every 1-thread ASV matrix child succeeds, prove that
     # the parallel backends can be installed and used on each OS runner.
-    name: Parallel backend readiness on ${{ matrix.os }} py${{ matrix.python-version }}
+    name: Parallel backend readiness on ${{ matrix.os }} py${{ matrix.ver.py }}
     runs-on: ${{ matrix.os }}
     # For a matrix job, this waits for all children of the upstream matrix.
     needs: benchmark_1_thread_availability
@@ -187,38 +182,30 @@ jobs:
         # OpenMP builds are compiler-heavy. Check them on every OS, but only
         # with the latest dependency stack to avoid multiplying CI cost.
         include:
-          - case-id: ubuntu-py313-latest
+          - case-id: ubuntu-py314-latest
             os: ubuntu-latest
-            python-version: "3.13"
-            numpy: ">=2.1.0"
-            scipy: ">=1.14.1"
-          - case-id: windows-py313-latest
+            ver: { py: "3.14", np: ">=2.3.3", sp: ">=1.16.1" }
+          - case-id: windows-py314-latest
             os: windows-latest
-            python-version: "3.13"
-            numpy: ">=2.1.0"
-            scipy: ">=1.14.1"
-          - case-id: macos15-py313-latest
+            ver: { py: "3.14", np: ">=2.3.3", sp: ">=1.16.1" }
+          - case-id: macos15-py314-latest
             os: macos-15
-            python-version: "3.13"
-            numpy: ">=2.1.0"
-            scipy: ">=1.14.1"
-          - case-id: macos15-intel-py313-latest
+            ver: { py: "3.14", np: ">=2.3.3", sp: ">=1.16.1" }
+          - case-id: macos15-intel-py314-latest
             os: macos-15-intel
-            python-version: "3.13"
-            numpy: ">=2.1.0"
-            scipy: ">=1.14.1"
+            ver: { py: "3.14", np: ">=2.3.3", sp: ">=1.16.1" }
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           fetch-depth: 0
 
-      - uses: conda-incubator/setup-miniconda@v3
+      - uses: conda-incubator/setup-miniconda@fc2d68f6413eb2d87b895e92f8584b5b94a10167 # v3
         with:
           # OpenMP environment: unlike gstools-benchmark-driver, this env gets
           # GSTools, gstools-cython, gstools_core, compilers, and runtime deps.
           activate-environment: gstools-benchmark-openmp
-          python-version: ${{ matrix.python-version }}
+          python-version: ${{ matrix.ver.py }}
           channels: conda-forge
           conda-remove-defaults: true
 
@@ -227,8 +214,8 @@ jobs:
           # Install runtime deps plus compilers/build tools before compiling
           # gstools-cython from source with GSTOOLS_BUILD_PARALLEL=1.
           conda install -n gstools-benchmark-openmp -y -c conda-forge \
-            "numpy${{ matrix.numpy }}" \
-            "scipy${{ matrix.scipy }}" \
+            "numpy${{ matrix.ver.np }}" \
+            "scipy${{ matrix.ver.sp }}" \
             c-compiler \
             cxx-compiler \
             cython \

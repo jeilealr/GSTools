@@ -33,7 +33,9 @@ def prepend_path(build_env, *paths):
 
 def first_match(directory, patterns):
     for pattern in patterns:
-        matches = sorted(path for path in directory.glob(pattern) if path.is_file())
+        matches = sorted(
+            path for path in directory.glob(pattern) if path.is_file()
+        )
         if matches:
             return matches[0]
     return None
@@ -153,7 +155,9 @@ exec "$real" "${args[@]}"
 GSTOOLS_FORCE_CXX=1 exec "$(dirname "$0")/gstools-asv-clang-openmp" "$@"
 """
     path.write_text(text, encoding="utf8")
-    path.chmod(path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    path.chmod(
+        path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
+    )
 
 
 def macos_build_env(env_dir):
@@ -284,7 +288,10 @@ def main():
     elif system == "Windows":
         build_env = windows_build_env(env_dir)
     else:
-        print(f"Unsupported platform for OpenMP ASV build: {system}", file=sys.stderr)
+        print(
+            f"Unsupported platform for OpenMP ASV build: {system}",
+            file=sys.stderr,
+        )
         return 2
 
     if build_env is None:

@@ -79,7 +79,9 @@ def check_rust_backend(threads):
         return False
 
     if not gs.config._GSTOOLS_CORE_AVAIL:
-        print("Rust backend readiness: FAIL. GSTools did not detect gstools_core.")
+        print(
+            "Rust backend readiness: FAIL. GSTools did not detect gstools_core."
+        )
         return False
 
     previous = (

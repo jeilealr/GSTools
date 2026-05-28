@@ -34,10 +34,10 @@ jobs:
     timeout-minutes: 10
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
 
       - name: Run Vale
-        uses: vale-cli/vale-action@v2.1.2
+        uses: vale-cli/vale-action@d89dee975228ae261d22c15adcd03578634d429c # v2
         with:
           # Pin the Vale CLI separately from the GitHub Action wrapper so prose
           # checks do not change behavior unexpectedly between runs.
