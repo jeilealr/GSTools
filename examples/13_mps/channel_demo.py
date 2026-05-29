@@ -38,7 +38,7 @@ print(f"Conditioning: {N_COND} pts  sand={cond_val.mean():.3f}")
 
 # 3. Simulate (n=30, f=1.0, t=0.01)
 N_NEIGH = 30
-SCAN_F = 1.0
+SCAN_F = 0.1
 THRESH = 0.01
 
 ds = mps.DirectSampling(

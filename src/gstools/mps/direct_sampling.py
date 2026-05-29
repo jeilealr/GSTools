@@ -194,16 +194,31 @@ def ds_simulate(
         win_size = int(np.prod(win_shape))
         max_scan = max(1, int(scan_fraction * win_size))
         start = int(node_rng.integers(0, win_size))
-        best_d, best_v, best_de_ti = np.inf, None, None
-        for k in range(max_scan):
-            y = lo + np.array(np.unravel_index((start + k) % win_size, win_shape))
-            data_event_ti = ti_data[tuple(np.round(y + lags).astype(int).T)]
-            dist_val = training_image.distance(de_sim, data_event_ti, cm, cond_weight, ln)
-            if dist_val < best_d:
-                best_d, best_v, best_de_ti = dist_val, ti_data[tuple(y)], data_event_ti
-            if dist_val <= threshold:
-                break
-        return best_v, best_de_ti
+
+        # All scan positions in visit order — shape (max_scan,)
+        positions = (start + np.arange(max_scan)) % win_size
+        # Anchor coordinates for each position — shape (max_scan, dim)
+        y_all = lo + np.column_stack(np.unravel_index(positions, win_shape))
+
+        # lags are integer-valued float64; cast once, reuse for all candidates
+        int_lags = lags.astype(int)  # (k, dim)
+
+        # All TI data events — shape (max_scan, k)
+        coords = y_all[:, None, :] + int_lags[None, :, :]  # (max_scan, k, dim)
+        all_de_ti = ti_data[tuple(coords.transpose(2, 0, 1))]  # (max_scan, k)
+
+        # All distances in one vectorized call — shape (max_scan,)
+        all_dists = training_image.vec_distance(de_sim, all_de_ti, cm, cond_weight, ln)
+
+        # For DS (threshold > 0): first candidate in scan order with d ≤ threshold,
+        # matching the greedy loop result exactly.  For DSBC (threshold == 0): argmin.
+        if threshold > 0:
+            under = all_dists <= threshold
+            best_k = int(np.argmax(under)) if np.any(under) else int(np.argmin(all_dists))
+        else:
+            best_k = int(np.argmin(all_dists))
+
+        return ti_data[tuple(y_all[best_k])], all_de_ti[best_k]
 
     def _simulate_node(x_i, node_rng, sg_in, informed_in):
         nbrs = _get_neighbors(x_i, informed_in)
@@ -222,12 +237,7 @@ def ds_simulate(
                 ti_shape - 1, np.floor(ti_shape - 1 - lags.max(axis=0))
             ).astype(int)
             if np.any(win_lo > win_hi):
-                raise ValueError(
-                    f"Strict search window collapsed at {x_i}: lag extent exceeds "
-                    f"TI dimensions {ti_shape.tolist()}. Fix: (1) ensure TI is at "
-                    "least as large as the simulation grid, (2) set max_radius < "
-                    "min(ti_shape) to bound lag extent, or (3) use boundary='partial'."
-                )
+                return _rand_ti(node_rng)
             best_v, best_de_ti = _scan_ti(
                 win_lo, tuple(win_hi - win_lo + 1),
                 lags, data_event_sim, cond_mask, lag_norms, node_rng,

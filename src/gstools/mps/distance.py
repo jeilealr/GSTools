@@ -14,6 +14,11 @@ __all__ = [
     "l2_dist",
     "lp_dist",
     "variation_dist",
+    "vec_categorical_dist",
+    "vec_l1_dist",
+    "vec_l2_dist",
+    "vec_lp_dist",
+    "vec_variation_dist",
 ]
 
 
@@ -178,3 +183,107 @@ def variation_dist(data_event_sim, data_event_ti, node_weights, d_max):
     )
     # 2*d_max: |diffs_i| ≤ 2*d_max always → each squared term ≤ 1 → d ∈ [0, 1]
     return float(np.sqrt(np.dot(node_weights, (diffs / (2 * d_max)) ** 2)))
+
+
+# ---------------------------------------------------------------------------
+# Vectorized variants — same maths, operate on all TI candidates at once.
+# Each accepts all_de_ti of shape (max_scan, n) and returns (max_scan,).
+# np.dot(X, w) with X (max_scan, n) and w (n,) is a standard BLAS matvec.
+# ---------------------------------------------------------------------------
+
+
+def vec_categorical_dist(data_event_sim, all_de_ti, node_weights):
+    """Vectorized categorical distance over all TI scan candidates.
+
+    Parameters
+    ----------
+    data_event_sim : numpy.ndarray, shape (n,)
+    all_de_ti : numpy.ndarray, shape (max_scan, n)
+    node_weights : numpy.ndarray, shape (n,)
+
+    Returns
+    -------
+    numpy.ndarray, shape (max_scan,)
+        Distance in [0, 1] for each candidate.
+    """
+    return np.dot(
+        (data_event_sim != all_de_ti).astype(np.float64), node_weights
+    )
+
+
+def vec_l1_dist(data_event_sim, all_de_ti, node_weights, d_max):
+    """Vectorized L1 distance over all TI scan candidates.
+
+    Parameters
+    ----------
+    data_event_sim : numpy.ndarray, shape (n,)
+    all_de_ti : numpy.ndarray, shape (max_scan, n)
+    node_weights : numpy.ndarray, shape (n,)
+    d_max : float
+
+    Returns
+    -------
+    numpy.ndarray, shape (max_scan,)
+    """
+    return np.dot(np.abs(data_event_sim - all_de_ti) / d_max, node_weights)
+
+
+def vec_l2_dist(data_event_sim, all_de_ti, node_weights, d_max):
+    """Vectorized L2 distance over all TI scan candidates.
+
+    Parameters
+    ----------
+    data_event_sim : numpy.ndarray, shape (n,)
+    all_de_ti : numpy.ndarray, shape (max_scan, n)
+    node_weights : numpy.ndarray, shape (n,)
+    d_max : float
+
+    Returns
+    -------
+    numpy.ndarray, shape (max_scan,)
+    """
+    return np.sqrt(
+        np.dot(((data_event_sim - all_de_ti) / d_max) ** 2, node_weights)
+    )
+
+
+def vec_lp_dist(data_event_sim, all_de_ti, node_weights, d_max, p):
+    """Vectorized Lp distance over all TI scan candidates.
+
+    Parameters
+    ----------
+    data_event_sim : numpy.ndarray, shape (n,)
+    all_de_ti : numpy.ndarray, shape (max_scan, n)
+    node_weights : numpy.ndarray, shape (n,)
+    d_max : float
+    p : float
+
+    Returns
+    -------
+    numpy.ndarray, shape (max_scan,)
+    """
+    diffs = np.abs(data_event_sim - all_de_ti) / d_max
+    return np.dot(diffs**p, node_weights) ** (1.0 / p)
+
+
+def vec_variation_dist(data_event_sim, all_de_ti, node_weights, d_max):
+    """Vectorized variation distance over all TI scan candidates.
+
+    Parameters
+    ----------
+    data_event_sim : numpy.ndarray, shape (n,)
+    all_de_ti : numpy.ndarray, shape (max_scan, n)
+    node_weights : numpy.ndarray, shape (n,)
+    d_max : float
+
+    Returns
+    -------
+    numpy.ndarray, shape (max_scan,)
+        Distance clamped to [0, 1].
+    """
+    de_sim_c = data_event_sim - data_event_sim.mean()
+    all_de_ti_c = all_de_ti - all_de_ti.mean(axis=1, keepdims=True)
+    diffs = de_sim_c - all_de_ti_c
+    return np.minimum(
+        1.0, np.sqrt(np.dot((diffs / (2 * d_max)) ** 2, node_weights))
+    )

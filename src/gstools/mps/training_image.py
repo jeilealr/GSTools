@@ -18,6 +18,11 @@ from gstools.mps.distance import (
     l2_dist,
     lp_dist,
     variation_dist,
+    vec_categorical_dist,
+    vec_l1_dist,
+    vec_l2_dist,
+    vec_lp_dist,
+    vec_variation_dist,
 )
 
 __all__ = ["TrainingImage"]
@@ -177,6 +182,57 @@ class TrainingImage:
             return variation_dist(
                 data_event_sim, data_event_ti, w, self._d_max
             )
+
+    def vec_distance(
+        self,
+        data_event_sim,
+        all_de_ti,
+        cond_mask=None,
+        cond_weight=1.0,
+        lag_norms=None,
+    ):
+        """Vectorized distance between SG data event and all TI candidates.
+
+        Same maths as :meth:`distance` but operates on all TI scan candidates
+        at once, returning a distance per candidate instead of a scalar.
+
+        Parameters
+        ----------
+        data_event_sim : array-like, shape (n,)
+            Values at SG neighbourhood nodes.
+        all_de_ti : array-like, shape (max_scan, n)
+            TI data events for every scan candidate.
+        cond_mask : array-like of bool, optional
+            True where the neighbour is a conditioning datum.
+        cond_weight : float, optional
+            Weight multiplier δ for conditioning nodes. Default: ``1.0``.
+        lag_norms : array-like, shape (n,), optional
+            Euclidean norms of each lag vector.
+
+        Returns
+        -------
+        numpy.ndarray, shape (max_scan,)
+            Distance in [0, 1] for each candidate.
+        """
+        data_event_sim = np.asarray(data_event_sim, dtype=np.float64)
+        all_de_ti = np.asarray(all_de_ti, dtype=np.float64)
+        n = len(data_event_sim)
+        if n == 0:
+            return np.zeros(len(all_de_ti))
+        w = compute_node_weights(
+            n, lag_norms, self._distance_power, cond_mask, cond_weight
+        )
+        if self._categorical:
+            return vec_categorical_dist(data_event_sim, all_de_ti, w)
+        if self._p_norm == 1.0:
+            return vec_l1_dist(data_event_sim, all_de_ti, w, self._d_max)
+        if self._p_norm == 2.0:
+            return vec_l2_dist(data_event_sim, all_de_ti, w, self._d_max)
+        if self._p_norm is not None:
+            return vec_lp_dist(
+                data_event_sim, all_de_ti, w, self._d_max, self._p_norm
+            )
+        return vec_variation_dist(data_event_sim, all_de_ti, w, self._d_max)
 
     def adjust_value(self, ti_val, data_event_sim, data_event_ti):
         """Adjust matched TI value before assignment to SG.
