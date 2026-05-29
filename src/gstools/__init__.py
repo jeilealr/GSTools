@@ -29,7 +29,7 @@ Classes
 =======
 
 Multiple Point Statistics
-^^^^^^^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^^^^^
 Classes for Multiple Point Statistics (MPS) simulations
 
 .. currentmodule:: gstools.mps
