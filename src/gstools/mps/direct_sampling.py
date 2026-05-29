@@ -208,13 +208,19 @@ def ds_simulate(
         all_de_ti = ti_data[tuple(coords.transpose(2, 0, 1))]  # (max_scan, k)
 
         # All distances in one vectorized call — shape (max_scan,)
-        all_dists = training_image.vec_distance(de_sim, all_de_ti, cm, cond_weight, ln)
+        all_dists = training_image.vec_distance(
+            de_sim, all_de_ti, cm, cond_weight, ln
+        )
 
         # For DS (threshold > 0): first candidate in scan order with d ≤ threshold,
         # matching the greedy loop result exactly.  For DSBC (threshold == 0): argmin.
         if threshold > 0:
             under = all_dists <= threshold
-            best_k = int(np.argmax(under)) if np.any(under) else int(np.argmin(all_dists))
+            best_k = (
+                int(np.argmax(under))
+                if np.any(under)
+                else int(np.argmin(all_dists))
+            )
         else:
             best_k = int(np.argmin(all_dists))
 
@@ -239,10 +245,17 @@ def ds_simulate(
             if np.any(win_lo > win_hi):
                 return _rand_ti(node_rng)
             best_v, best_de_ti = _scan_ti(
-                win_lo, tuple(win_hi - win_lo + 1),
-                lags, data_event_sim, cond_mask, lag_norms, node_rng,
+                win_lo,
+                tuple(win_hi - win_lo + 1),
+                lags,
+                data_event_sim,
+                cond_mask,
+                lag_norms,
+                node_rng,
             )
-            return training_image.adjust_value(best_v, data_event_sim, best_de_ti)
+            return training_image.adjust_value(
+                best_v, data_event_sim, best_de_ti
+            )
 
         else:  # "partial" — Mariethoz2010 §6.2: global template reduction
             # Lags are distance-sorted (closest first) because offset_arr is.
@@ -266,9 +279,13 @@ def ds_simulate(
                     "The TI is smaller than the minimum lag in some dimension."
                 )
             best_v, best_de_ti = _scan_ti(
-                sw_lo, tuple(sw_hi - sw_lo + 1),
-                lags_p, data_event_sim[:valid_count],
-                cond_mask[:valid_count], lag_norms[:valid_count], node_rng,
+                sw_lo,
+                tuple(sw_hi - sw_lo + 1),
+                lags_p,
+                data_event_sim[:valid_count],
+                cond_mask[:valid_count],
+                lag_norms[:valid_count],
+                node_rng,
             )
             # For variation distance, adjust_value uses the mean of the
             # truncated data event (valid_count neighbours), not the full
