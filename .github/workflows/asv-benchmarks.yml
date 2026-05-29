@@ -126,6 +126,22 @@ jobs:
           # metadata. --yes keeps the command non-interactive in CI.
           asv machine --yes
 
+      - name: Write ASV smoke config for checked-out commit
+        run: |
+          # With -E existing, ASV cannot receive a range like HEAD^!. If no
+          # range is supplied, ASV resolves the configured branches. PR
+          # checkouts do not necessarily have a local "main" branch, so this
+          # temporary config points ASV at the exact checked-out commit.
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          config = json.loads(Path("asv.conf.json").read_text())
+          config["branches"] = [os.environ["GITHUB_SHA"]]
+          Path("asv.ci-existing.json").write_text(json.dumps(config, indent=2))
+          PY
+
       - name: Run ASV smoke check in existing environment
         env:
           GSTOOLS_BENCHMARK_THREADS: "1"
@@ -136,8 +152,10 @@ jobs:
           # the Rust variogram smoke case. Existing environments cannot accept
           # a commit range, so the checked-out commit is recorded explicitly.
           asv run \
+            --config asv.ci-existing.json \
             -E existing \
             --set-commit-hash "$GITHUB_SHA" \
+            --no-pull \
             --quick \
             --bench benchmark_backends.VariogramWorkflowBenchmarks.time_variogram_estimate \
             --show-stderr

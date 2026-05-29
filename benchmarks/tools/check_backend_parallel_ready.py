@@ -1,9 +1,9 @@
 #!/usr/bin/env python
 """Check that GSTools benchmark backends are ready for parallel runs.
 
-This is a fast CI probe. It verifies that GSTools-Cython reports OpenMP support
-and that the Rust backend can run a small workflow while GSTools is configured
-with more than one thread.
+This is a fast CI probe. It verifies that GSTools-Cython accepts explicit
+OpenMP thread counts and that the Rust backend can run a small workflow while
+GSTools is configured with more than one thread.
 """
 
 from __future__ import annotations
@@ -40,6 +40,15 @@ def parse_args():
         action="store_true",
         help="Only check GSTools-Cython OpenMP readiness.",
     )
+    parser.add_argument(
+        "--require-default-openmp",
+        action="store_true",
+        help=(
+            "Also fail when GSTools-Cython reports only one default thread. "
+            "CI does not use this because some runners default to one thread "
+            "while still accepting explicit OpenMP thread counts."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -61,7 +70,7 @@ def check_module(label, module_name):
     return label, default_threads, explicit
 
 
-def check_cython_parallel(verbose=False):
+def check_cython_parallel(verbose=False, require_default_openmp=False):
     default_values = []
     for label, module_name in MODULES.items():
         try:
@@ -93,7 +102,7 @@ def check_cython_parallel(verbose=False):
             )
             return False
 
-    if min(default_values) <= 1:
+    if require_default_openmp and min(default_values) <= 1:
         print(
             "Cython OpenMP readiness: FAIL. GSTools-Cython reports one "
             "default thread."
@@ -162,7 +171,10 @@ def main():
     print(f"gstools_cython: {package_version('gstools_cython')}")
     print(f"gstools_core: {package_version('gstools_core')}")
 
-    cython_ready = check_cython_parallel(verbose=args.verbose)
+    cython_ready = check_cython_parallel(
+        verbose=args.verbose,
+        require_default_openmp=args.require_default_openmp,
+    )
     rust_ready = True if args.cython_only else check_rust_backend(args.threads)
     return 0 if cython_ready and rust_ready else 1
 

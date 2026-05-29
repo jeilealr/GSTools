@@ -756,15 +756,29 @@ The workflow has two independent matrix jobs:
 The ASV smoke stage runs a quick command in the existing Python environment:
 
 ```bash
-asv run -E existing --set-commit-hash "$(git rev-parse HEAD)" --quick \
+python - <<'PY'
+import json
+from pathlib import Path
+
+config = json.loads(Path("asv.conf.json").read_text())
+config["branches"] = ["HEAD"]
+Path("asv.ci-existing.json").write_text(json.dumps(config, indent=2))
+PY
+
+asv run --config asv.ci-existing.json \
+  -E existing \
+  --set-commit-hash "$(git rev-parse HEAD)" \
+  --no-pull \
+  --quick \
   --bench benchmark_backends.VariogramWorkflowBenchmarks.time_variogram_estimate \
   --show-stderr
 ```
 
 Do not pass a range such as `HEAD^!` with `-E existing`: ASV cannot checkout
-revisions inside an existing environment. The workflow uses
-`--set-commit-hash "$GITHUB_SHA"` to label the result with the commit already
-checked out by GitHub Actions.
+revisions inside an existing environment. If no range is supplied, ASV resolves
+the branches from the config file. The workflow writes a temporary config that
+points `branches` at `$GITHUB_SHA`, then uses `--set-commit-hash "$GITHUB_SHA"`
+to label the result with the commit already checked out by GitHub Actions.
 
 That benchmark method exercises both configured backend values through ASV
 parameters, but avoids running the full performance suite in CI. Python 3.14
@@ -792,8 +806,10 @@ ASV_OPENMP_ENV="$(ls -td .asv-openmp/env/* | head -n 1)"
 ```
 
 That fast check proves that Cython reports OpenMP support and that the Rust
-backend can run a small workflow with `gstools.config.NUM_THREADS=2`. For real
-OpenMP scaling measurements, use `asv.openmp.conf.json` locally with
+backend can run a small workflow with `gstools.config.NUM_THREADS=2`. The CI
+probe requires Cython to accept explicit thread counts `2,4,8`; it prints the
+default thread count but does not fail when a runner defaults to one thread. For
+real OpenMP scaling measurements, use `asv.openmp.conf.json` locally with
 `GSTOOLS_BENCHMARK_THREADS=2,4,8`.
 
 The workflow runs automatically on pull requests and pushes that change ASV
