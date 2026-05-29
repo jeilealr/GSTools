@@ -133,13 +133,14 @@ jobs:
         run: |
           # -E existing uses the Python environment prepared above. Python 3.14
           # is currently Cython-only because gstools_core 1.2.0 can fail during
-          # the Rust variogram smoke case.
+          # the Rust variogram smoke case. Existing environments cannot accept
+          # a commit range, so the checked-out commit is recorded explicitly.
           asv run \
             -E existing \
+            --set-commit-hash "$GITHUB_SHA" \
             --quick \
             --bench benchmark_backends.VariogramWorkflowBenchmarks.time_variogram_estimate \
-            --show-stderr \
-            'HEAD^!'
+            --show-stderr
 
   benchmark_parallel_readiness:
     # Keep this separate from the ASV smoke job. It checks the smallest useful

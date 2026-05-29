@@ -756,10 +756,15 @@ The workflow has two independent matrix jobs:
 The ASV smoke stage runs a quick command in the existing Python environment:
 
 ```bash
-asv run -E existing "HEAD^!" --quick \
+asv run -E existing --set-commit-hash "$(git rev-parse HEAD)" --quick \
   --bench benchmark_backends.VariogramWorkflowBenchmarks.time_variogram_estimate \
   --show-stderr
 ```
+
+Do not pass a range such as `HEAD^!` with `-E existing`: ASV cannot checkout
+revisions inside an existing environment. The workflow uses
+`--set-commit-hash "$GITHUB_SHA"` to label the result with the commit already
+checked out by GitHub Actions.
 
 That benchmark method exercises both configured backend values through ASV
 parameters, but avoids running the full performance suite in CI. Python 3.14
