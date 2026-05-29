@@ -9,6 +9,7 @@ The following classes and functions are provided
    DirectSampling
 """
 
+import queue
 from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
@@ -20,6 +21,12 @@ from gstools.random.rng import RNG
 __all__ = ["DirectSampling"]
 
 _VALID_BOUNDARY = ("strict", "partial")
+
+# DS-mode scan block size.  Large enough that per-call NumPy overhead is
+# negligible (essentially full vectorization speed), small enough that the
+# greedy DS scan does not overcompute far past the first accepted match.
+# This is a call-overhead-amortization constant, not a cache-tuned one.
+_SCAN_BLOCK = 4096
 
 
 def _precompute_offsets(shape, max_offset=None):
@@ -48,45 +55,112 @@ def _precompute_offsets(shape, max_offset=None):
     return offsets[idx]
 
 
+def _select_neighbors(
+    x_i,
+    offset_arr,
+    sim_shape_arr,
+    sim_shape,
+    path_pos_map,
+    curr_idx,
+    informed,
+    max_radius,
+    n_neighbors,
+):
+    """Closest valid neighbours of ``x_i``, with their path indices.
+
+    A candidate is valid when it is in bounds, has path index ``< curr_idx``
+    (already-simulated in path order) or ``-1`` (conditioning data), and — if
+    ``informed`` is given — is marked informed.  ``offset_arr`` is
+    distance-sorted, so slicing the first ``n_neighbors`` survivors yields the
+    closest ones.
+
+    Passing ``informed=None`` treats every in-bounds lower-index/conditioning
+    cell as available; this is correct when building the dependency DAG, where
+    all earlier-path nodes are informed by definition.
+
+    Returns
+    -------
+    coords : numpy.ndarray, shape (m, dim)
+        Neighbour coordinates, ``m <= n_neighbors``.
+    path_idx : numpy.ndarray, shape (m,)
+        Path index of each neighbour (``-1`` for conditioning data).
+    """
+    # ``offset_arr`` is distance-sorted, so the closest ``n_neighbors`` valid
+    # candidates are the first ``n_neighbors`` survivors and we can stop the
+    # moment we have them.  Iterating with an early break avoids masking the
+    # whole offset array for every node (O(N**2) on large grids without a
+    # ``max_radius`` cap).  Tradeoff: when fewer than ``n_neighbors`` valid
+    # candidates exist (sparse early-path nodes), the scan still walks the full
+    # ``offset_arr`` in Python; this affects only the first few nodes and is
+    # bounded by the ``max_radius`` ball when one is set.
+    dim = offset_arr.shape[1]
+    r_sq = max_radius * max_radius if max_radius is not None else None
+    found_coords = []
+    found_vidx = []
+    for off in offset_arr:
+        # Distance-sorted: the first offset beyond the radius ends the scan.
+        if r_sq is not None and float(off @ off) > r_sq:
+            break
+        cand = x_i + off
+        if np.any(cand < 0) or np.any(cand >= sim_shape_arr):
+            continue
+        vi = path_pos_map[int(np.ravel_multi_index(tuple(cand), sim_shape))]
+        if not (vi < curr_idx or vi == -1):
+            continue
+        if informed is not None and not informed[tuple(cand)]:
+            continue
+        found_coords.append(cand)
+        found_vidx.append(vi)
+        if len(found_coords) >= n_neighbors:
+            break
+    if found_coords:
+        return (
+            np.array(found_coords, dtype=offset_arr.dtype),
+            np.array(found_vidx, dtype=path_pos_map.dtype),
+        )
+    return (
+        np.empty((0, dim), dtype=offset_arr.dtype),
+        np.empty(0, dtype=path_pos_map.dtype),
+    )
+
+
 def _build_dag(
     path,
     n_neighbors,
     sim_shape,
     offset_arr,
-    informed_init,
     path_pos_map,
     max_radius=None,
 ):
+    """Build the simulation dependency DAG.
+
+    Edge ``j -> i`` means path node ``j`` (j < i) is among the n-closest
+    neighbours used when simulating node ``i``.  Conditioning data carry no
+    edge.  Uses the same vectorized neighbour selection as the simulation
+    (:func:`_select_neighbors`), so the resulting dependencies match the set
+    each node would actually pick at simulation time.
+    """
     N = len(path)
     sim_shape_arr = np.array(sim_shape)
-
-    informed = informed_init.copy()
     indegree = np.zeros(N, dtype=np.int32)
     out_edges = [[] for _ in range(N)]
-    offset_norms = (
-        np.linalg.norm(offset_arr.astype(float), axis=1)
-        if max_radius is not None
-        else None
-    )
 
-    for i, x_i in enumerate(path):
-        found = 0
-        for k, offset in enumerate(offset_arr):
-            if found >= n_neighbors:
-                break
-            if offset_norms is not None and offset_norms[k] > max_radius:
-                break  # offset_arr is distance-sorted; all remaining also exceed max_radius
-            nb = x_i + offset
-            if np.any(nb < 0) or np.any(nb >= sim_shape_arr):
-                continue
-            if not informed[tuple(nb)]:
-                continue
-            found += 1
-            j = path_pos_map[int(np.ravel_multi_index(tuple(nb), sim_shape))]
-            if j >= 0:  # conditioning nodes have j == -1; skip them
-                indegree[i] += 1
-                out_edges[j].append(i)
-        informed[tuple(x_i)] = True  # mark after processing, not before
+    for i in range(N):
+        _, vidx = _select_neighbors(
+            path[i],
+            offset_arr,
+            sim_shape_arr,
+            sim_shape,
+            path_pos_map,
+            i,  # build-time: all path nodes with index < i are informed
+            None,
+            max_radius,
+            n_neighbors,
+        )
+        # path-node neighbours (conditioning data have index -1, no edge)
+        for j in vidx[vidx >= 0]:
+            indegree[i] += 1
+            out_edges[int(j)].append(i)
 
     return indegree, out_edges
 
@@ -97,7 +171,7 @@ def ds_simulate(
     n_neighbors,
     threshold,
     scan_fraction,
-    seed,
+    rng,
     conditions=None,
     cond_weight=1.0,
     boundary="strict",
@@ -122,8 +196,8 @@ def ds_simulate(
         Fraction of the per-node search window to scan (Mariethoz2010 §3 ¶24).
         Evaluates at most ``floor(f · |window|)`` candidates per node.
         ``1.0`` → full window scan.
-    seed : int
-        RNG seed.
+    rng : numpy.random.Generator
+        Random number generator.
     conditions : dict, optional
         ``{tuple_index: value}`` mapping of conditioning data.
     cond_weight : float, optional
@@ -133,12 +207,14 @@ def ds_simulate(
     max_radius : float, optional
         If set, SG neighbours beyond this Euclidean distance are excluded
         from the data event (Mariethoz2010 §3 ¶19).
+    num_threads : int or None, optional
+        Number of threads for outer DAG parallelism. ``None`` defaults to
+        ``config.NUM_THREADS``.
 
     Returns
     -------
     numpy.ndarray
     """
-    rng = np.random.default_rng(seed)
     ti_data = training_image.data
     ti_shape = np.array(ti_data.shape)
     sim_shape_arr = np.array(sim_shape)
@@ -163,37 +239,38 @@ def ds_simulate(
 
     path = np.argwhere(np.isnan(sg))
     path = path[rng.permutation(len(path))]
-    node_seeds = rng.integers(0, 2**63, size=len(path))
+    node_seeds = rng.integers(0, 2**32, size=len(path))
 
     path_flat = np.ravel_multi_index(path.T, sim_shape)
     path_pos_map = np.full(int(np.prod(sim_shape)), -1, dtype=np.intp)
     path_pos_map[path_flat] = np.arange(len(path_flat))
 
     def _rand_ti(node_rng):
-        return ti_data[tuple(node_rng.integers(0, s) for s in ti_shape)]
+        return ti_data[tuple(node_rng.randint(0, s) for s in ti_shape)]
 
     def _get_neighbors(x_i, informed_in):
-        cands = x_i + offset_arr
-        valid = cands[np.all((cands >= 0) & (cands < sim_shape_arr), axis=1)]
-        valid = valid[informed_in[tuple(valid.T)]]
-
         curr_idx = path_pos_map[
             int(np.ravel_multi_index(tuple(x_i), sim_shape))
         ]
-        valid_idx = path_pos_map[np.ravel_multi_index(valid.T, sim_shape)]
-        valid = valid[(valid_idx < curr_idx) | (valid_idx == -1)]
-
-        if max_radius is not None:
-            dists = np.linalg.norm((valid - x_i).astype(np.float64), axis=1)
-            valid = valid[dists <= max_radius]
-        return valid[:n_neighbors]
+        coords, _ = _select_neighbors(
+            x_i,
+            offset_arr,
+            sim_shape_arr,
+            sim_shape,
+            path_pos_map,
+            curr_idx,
+            informed_in,
+            max_radius,
+            n_neighbors,
+        )
+        return coords
 
     def _scan_ti(lo, win_shape, lags, de_sim, cm, ln, node_rng):
         # Precondition: win_size >= 1 (callers guarantee win_lo <= win_hi on all axes).
         # Also captures scan_fraction, ti_data, threshold, cond_weight from outer scope.
         win_size = int(np.prod(win_shape))
         max_scan = max(1, int(scan_fraction * win_size))
-        start = int(node_rng.integers(0, win_size))
+        start = int(node_rng.randint(0, win_size))
 
         # All scan positions in visit order — shape (max_scan,)
         positions = (start + np.arange(max_scan)) % win_size
@@ -203,28 +280,51 @@ def ds_simulate(
         # lags are integer-valued float64; cast once, reuse for all candidates
         int_lags = lags.astype(int)  # (k, dim)
 
-        # All TI data events — shape (max_scan, k)
-        coords = y_all[:, None, :] + int_lags[None, :, :]  # (max_scan, k, dim)
-        all_de_ti = ti_data[tuple(coords.transpose(2, 0, 1))]  # (max_scan, k)
+        def _de_ti(y_rows):
+            # TI data events for the given anchor rows — shape (len(y_rows), k)
+            coords = y_rows[:, None, :] + int_lags[None, :, :]
+            return ti_data[tuple(coords.transpose(2, 0, 1))]
 
-        # All distances in one vectorized call — shape (max_scan,)
-        all_dists = training_image.vec_distance(
-            de_sim, all_de_ti, cm, cond_weight, ln
-        )
-
-        # For DS (threshold > 0): first candidate in scan order with d ≤ threshold,
-        # matching the greedy loop result exactly.  For DSBC (threshold == 0): argmin.
-        if threshold > 0:
-            under = all_dists <= threshold
-            best_k = (
-                int(np.argmax(under))
-                if np.any(under)
-                else int(np.argmin(all_dists))
+        # DSBC (threshold == 0): no early exit is possible — the global minimum
+        # over the whole scan is required — so evaluate every candidate in a
+        # single vectorized call.  This is the fastest path and stays exact.
+        if threshold <= 0:
+            all_de_ti = _de_ti(y_all)
+            all_dists = training_image.vec_distance(
+                de_sim, all_de_ti, cm, cond_weight, ln
             )
-        else:
             best_k = int(np.argmin(all_dists))
+            return ti_data[tuple(y_all[best_k])], all_de_ti[best_k]
 
-        return ti_data[tuple(y_all[best_k])], all_de_ti[best_k]
+        # DS (threshold > 0): chunked vectorized scan with an early-exit
+        # checkpoint between blocks.  Each block is a full vectorized distance
+        # call (so the per-element cost matches the single-call version); only
+        # the threshold test runs per block.  Blocks advance in scan order, so
+        # the first under-threshold candidate found is the first one globally —
+        # identical to the unchunked argmax(under) result.
+        best_d = np.inf
+        best_y = None
+        best_de = None
+        for b0 in range(0, max_scan, _SCAN_BLOCK):
+            y_blk = y_all[b0 : b0 + _SCAN_BLOCK]
+            de_blk = _de_ti(y_blk)
+            d_blk = training_image.vec_distance(
+                de_sim, de_blk, cm, cond_weight, ln
+            )
+            under = d_blk <= threshold
+            if np.any(under):
+                k = int(np.argmax(under))
+                return ti_data[tuple(y_blk[k])], de_blk[k]
+            # No acceptable match in this block.  Track the running best with a
+            # strict ``<`` test so that, if no candidate ever falls below the
+            # threshold, the returned fallback equals the global argmin with the
+            # same first-occurrence tie-break as the unchunked version.
+            k = int(np.argmin(d_blk))
+            if d_blk[k] < best_d:
+                best_d = float(d_blk[k])
+                best_y = y_blk[k]
+                best_de = de_blk[k]
+        return ti_data[tuple(best_y)], best_de
 
     def _simulate_node(x_i, node_rng, sg_in, informed_in):
         nbrs = _get_neighbors(x_i, informed_in)
@@ -273,11 +373,11 @@ def ds_simulate(
                     break
                 valid_count -= 1
             else:
-                raise ValueError(
-                    f"Partial search window collapsed at {x_i}: no subset of the "
-                    f"data event fits inside TI dimensions {ti_shape.tolist()}. "
-                    "The TI is smaller than the minimum lag in some dimension."
-                )
+                # No subset of the data event fits inside the TI (the closest
+                # neighbour's lag already exceeds the TI in some dimension).
+                # Recover like the empty-window case in strict mode rather than
+                # aborting the whole simulation.
+                return _rand_ti(node_rng)
             best_v, best_de_ti = _scan_ti(
                 sw_lo,
                 tuple(sw_hi - sw_lo + 1),
@@ -302,47 +402,59 @@ def ds_simulate(
                 n_neighbors,
                 sim_shape,
                 offset_arr,
-                informed,
                 path_pos_map,
                 max_radius,
             )
-            ready = [i for i in range(len(path)) if indegree[i] == 0]
+            # Running ready-queue: a node is dispatched the instant its last
+            # dependency completes (no per-wave barrier).  Workers read the
+            # live sg / informed arrays; this is safe because (1) a node is
+            # only submitted once all its dependencies are written, so the
+            # values it reads are final, and (2) all shared-state mutation
+            # (sg, informed, in-degree, submission) happens on this main
+            # thread — workers only read.  Each numpy access holds the GIL for
+            # its duration, so element reads never tear against the writes.
+            # The result of every node depends only on its seed and its
+            # (final) neighbour values, so the output is independent of
+            # completion order and stays identical to the serial run.
+            done_q = queue.Queue()
+            counts = {"submitted": 0, "done": 0}
 
-            while ready:
-                batch = ready
-                ready = []
-                sg_snap = sg.copy()  # freeze state so all batch workers see the same pre-batch grid
-                informed_snap = informed.copy()
+            def _run(i):
+                return i, _simulate_node(
+                    path[i],
+                    RNG(int(node_seeds[i])).random,
+                    sg,
+                    informed,
+                )
 
-                futures = [
-                    executor.submit(
-                        _simulate_node,
-                        path[i],
-                        np.random.default_rng(int(node_seeds[i])),
-                        sg_snap,
-                        informed_snap,
+            def _submit(i):
+                executor.submit(_run, i).add_done_callback(done_q.put)
+                counts["submitted"] += 1
+
+            for i in range(len(path)):
+                if indegree[i] == 0:
+                    _submit(i)
+
+            while counts["done"] < counts["submitted"]:
+                i, val = done_q.get().result()
+                counts["done"] += 1
+                x_i_t = tuple(path[i])
+                if np.isnan(val):
+                    raise ValueError(
+                        f"Simulation produced NaN at {path[i]}. Check TI data."
                     )
-                    for i in batch
-                ]
-                for i, fut in zip(batch, futures):
-                    val = fut.result()
-                    x_i_t = tuple(path[i])
-                    if np.isnan(val):
-                        raise ValueError(
-                            f"Simulation produced NaN at {path[i]}. Check TI data."
-                        )
-                    sg[x_i_t] = val
-                    informed[x_i_t] = True
-                    for j in out_edges[i]:
-                        indegree[j] -= 1
-                        if indegree[j] == 0:
-                            ready.append(j)
+                sg[x_i_t] = val
+                informed[x_i_t] = True
+                for j in out_edges[i]:
+                    indegree[j] -= 1
+                    if indegree[j] == 0:
+                        _submit(j)
         else:
             for i, x_i in enumerate(path):
                 x_i_t = tuple(x_i)
                 val = _simulate_node(
                     x_i,
-                    np.random.default_rng(int(node_seeds[i])),
+                    RNG(int(node_seeds[i])).random,
                     sg,
                     informed,
                 )
@@ -422,6 +534,13 @@ class DirectSampling(Field):
             raise ValueError(
                 f"DirectSampling: threshold must be >= 0, got {threshold!r}"
             )
+        if float(threshold) > 1.0:
+            import warnings
+
+            warnings.warn(
+                "threshold > 1.0 guarantees the first candidate is always accepted.",
+                stacklevel=2,
+            )
         if max_radius is not None and float(max_radius) <= 0:
             raise ValueError(
                 f"DirectSampling: max_radius must be a positive float, "
@@ -487,14 +606,14 @@ class DirectSampling(Field):
         conditions = self._conditions_to_grid(self.pos)
         if not np.isnan(seed):
             self.rng.seed = int(seed)
-        iseed = int(self.rng.random.randint(0, 2**31))
+        rng = np.random.default_rng(int(self.rng.random.randint(0, 2**32)))
         field = ds_simulate(
             training_image=self._ti,
             sim_shape=shape,
             n_neighbors=self._n_neighbors,
             threshold=self._threshold,
             scan_fraction=self._scan_fraction,
-            seed=iseed,
+            rng=rng,
             conditions=conditions,
             cond_weight=self._cond_weight,
             boundary=self._boundary,
@@ -583,6 +702,13 @@ class DirectSampling(Field):
         if float(value) < 0:
             raise ValueError(
                 f"DirectSampling: threshold must be >= 0, got {value!r}"
+            )
+        if float(value) > 1.0:
+            import warnings
+
+            warnings.warn(
+                "threshold > 1.0 guarantees the first candidate is always accepted.",
+                stacklevel=2,
             )
         self._threshold = float(value)
 

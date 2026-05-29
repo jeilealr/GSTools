@@ -60,7 +60,12 @@ def compute_node_weights(
         raw_w = raw_w.copy()
         raw_w[np.asarray(cond_mask, dtype=bool)] *= cond_weight
 
-    return raw_w / raw_w.sum()
+    total = raw_w.sum()
+    if not np.isfinite(total) or total == 0.0:
+        # e.g. all neighbours are conditioning data with cond_weight == 0:
+        # fall back to uniform weights rather than emit NaNs.
+        return np.full(n, 1.0 / n, dtype=np.float64)
+    return raw_w / total
 
 
 def categorical_dist(data_event_sim, data_event_ti, node_weights):
@@ -181,8 +186,11 @@ def variation_dist(data_event_sim, data_event_ti, node_weights, d_max):
     diffs = (data_event_sim - data_event_sim.mean()) - (
         data_event_ti - data_event_ti.mean()
     )
-    # 2*d_max: |diffs_i| ≤ 2*d_max always → each squared term ≤ 1 → d ∈ [0, 1]
-    return float(np.sqrt(np.dot(node_weights, (diffs / (2 * d_max)) ** 2)))
+    # 2*d_max normalises the common case to [0, 1]; SG values are not bounded
+    # by the TI range (conditioning data / accumulated mean-shifts), so clamp.
+    return float(
+        min(1.0, np.sqrt(np.dot(node_weights, (diffs / (2 * d_max)) ** 2)))
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -279,11 +287,13 @@ def vec_variation_dist(data_event_sim, all_de_ti, node_weights, d_max):
     Returns
     -------
     numpy.ndarray, shape (max_scan,)
-        Distance clamped to [0, 1].
+        Distance in [0, 1].
     """
     de_sim_c = data_event_sim - data_event_sim.mean()
     all_de_ti_c = all_de_ti - all_de_ti.mean(axis=1, keepdims=True)
     diffs = de_sim_c - all_de_ti_c
+    # 2*d_max normalises the common case to [0, 1]; SG values are not bounded
+    # by the TI range (conditioning data / accumulated mean-shifts), so clamp.
     return np.minimum(
         1.0, np.sqrt(np.dot((diffs / (2 * d_max)) ** 2, node_weights))
     )
