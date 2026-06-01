@@ -1,9 +1,9 @@
 #!/usr/bin/env python
-"""Profile the representative GSTools benchmark workflows with cProfile.
+"""Profile representative GSTools benchmark workflows with cProfile.
 
 This is a quick measurement helper. ASV remains the source of truth for saved
-benchmark results, while this script helps identify the top cumulative Python
-call sites before making algorithmic changes.
+benchmark results, while this script identifies the top cumulative Python call
+sites for the current checkout before making algorithmic changes.
 
 Usage:
     cd /path/to/MPS-Tools/GSTools
@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import cProfile
+import os
 import pstats
 import sys
 from pathlib import Path
@@ -31,54 +32,54 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 
 CASES = {
     "variogram-full": (
-        "VariogramWorkflowBenchmarks",
+        "VariogramBenchmarks",
         "time_variogram_estimate",
-        ("full_900",),
+        "full_900",
     ),
     "variogram-sampled": (
-        "VariogramWorkflowBenchmarks",
+        "VariogramBenchmarks",
         "time_variogram_estimate",
-        ("sampled_5000_to_1500",),
+        "sampled_5000_to_1500",
     ),
     "variogram-extra-large": (
-        "VariogramWorkflowBenchmarks",
+        "VariogramBenchmarks",
         "time_variogram_estimate",
-        ("sampled_15000_to_4500",),
+        "sampled_15000_to_4500",
     ),
     "krige-small": (
-        "KrigingWorkflowBenchmarks",
+        "KrigingBenchmarks",
         "time_global_krige",
-        ("small_30x500",),
+        "small_30x500",
     ),
     "krige-large": (
-        "KrigingWorkflowBenchmarks",
+        "KrigingBenchmarks",
         "time_global_krige",
-        ("large_120x2000",),
+        "large_120x2000",
     ),
     "krige-extra-large": (
-        "KrigingWorkflowBenchmarks",
+        "KrigingBenchmarks",
         "time_global_krige",
-        ("extra_large_360x6000",),
+        "extra_large_360x6000",
     ),
     "srf-unstructured": (
-        "RandomFieldWorkflowBenchmarks",
+        "RandomFieldBenchmarks",
         "time_field_generation",
-        ("srf_unstructured_randmeth",),
+        "srf_unstructured_randmeth",
     ),
     "srf-structured": (
-        "RandomFieldWorkflowBenchmarks",
+        "RandomFieldBenchmarks",
         "time_field_generation",
-        ("srf_structured_randmeth",),
+        "srf_structured_randmeth",
     ),
     "srf-fourier": (
-        "RandomFieldWorkflowBenchmarks",
+        "RandomFieldBenchmarks",
         "time_field_generation",
-        ("srf_structured_fourier",),
+        "srf_structured_fourier",
     ),
     "condsrf": (
-        "RandomFieldWorkflowBenchmarks",
+        "RandomFieldBenchmarks",
         "time_field_generation",
-        ("condsrf_unstructured",),
+        "condsrf_unstructured",
     ),
 }
 
@@ -91,7 +92,11 @@ THREAD_COUNTS = (
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description=__doc__)
+    """Parse command-line options."""
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     parser.add_argument(
         "--case",
         default="all",
@@ -137,15 +142,18 @@ def parse_args():
 
 
 def iter_selected(case):
+    """Yield the requested workflow case definitions."""
     if case == "all":
         yield from CASES.items()
         return
     yield case, CASES[case]
 
 
-def load_suite_class(class_name):
+def load_suite_class(class_name, threads):
+    """Import a benchmark class after selecting generated thread labels."""
+    os.environ["GSTOOLS_BENCHMARK_THREADS"] = threads.removeprefix("threads_")
     try:
-        from benchmarks import benchmark_backends
+        from benchmarks import benchmark_two_point_statistics
     except ModuleNotFoundError as err:
         print(
             "Could not import GSTools benchmark dependencies. Activate the "
@@ -155,29 +163,31 @@ def load_suite_class(class_name):
             file=sys.stderr,
         )
         raise SystemExit(1) from err
-    return getattr(benchmark_backends, class_name)
+    return getattr(benchmark_two_point_statistics, class_name)
 
 
 def run_case(
     name,
     class_name,
-    method_name,
-    params,
+    method_base_name,
+    case,
     repeat,
     limit,
     sort,
     backend,
     threads,
 ):
-    suite_cls = load_suite_class(class_name)
+    """Profile one benchmark workflow case."""
+    suite_cls = load_suite_class(class_name, threads)
     suite = suite_cls()
     data = suite.setup_cache()
+    method_name = f"{method_base_name}_{case}_{threads}"
     method = getattr(suite, method_name)
 
     profiler = cProfile.Profile()
     profiler.enable()
     for _ in range(repeat):
-        method(data, *params, backend, threads)
+        method(data, backend)
     profiler.disable()
 
     print(f"\n== {name} [{backend}, {threads}] ==")
@@ -186,6 +196,7 @@ def run_case(
 
 
 def main():
+    """Run the cProfile helper."""
     args = parse_args()
     if args.list:
         for name in CASES:

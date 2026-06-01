@@ -26,5 +26,7 @@
   "install_command": [
     "in-dir={env_dir} python -m pip install gstools_core>=1.0.0",
     "in-dir={env_dir} python -m pip install --no-deps {build_dir}"
-  ]
+  ],
+  "number": 1,
+  "repeat": 20
 }

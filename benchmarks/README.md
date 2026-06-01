@@ -29,25 +29,24 @@ deciding where optimization work should go:
   - [Shared Constants](#shared-constants)
   - [Shared Helpers](#shared-helpers)
   - [Benchmark Classes](#benchmark-classes)
-    - [VariogramWorkflowBenchmarks](#variogramworkflowbenchmarks)
-    - [KrigingWorkflowBenchmarks](#krigingworkflowbenchmarks)
-    - [RandomFieldWorkflowBenchmarks](#randomfieldworkflowbenchmarks)
+    - [VariogramBenchmarks](#variogrambenchmarks)
+    - [KrigingBenchmarks](#krigingbenchmarks)
+    - [RandomFieldBenchmarks](#randomfieldbenchmarks)
 - [Running The Benchmarks](#running-the-benchmarks)
   - [Baseline Benchmark](#baseline-benchmark)
-    - [Current Commit Baseline](#current-commit-baseline)
+    - [Main Branch Baseline](#main-branch-baseline)
     - [Several Commits Baseline](#several-commits-baseline)
     - [Summary of Results](#summary-of-results)
     - [Visualization of Results](#visualization-of-results)
     - [Profiling With cProfile](#profiling-with-cprofile)
-- [Optional Parallelisation with OpenMP](#optional-parallelisation-with-openmp)
-  - [Shared OpenMP Rule](#shared-openmp-rule)
+- [Optional Parallelization with OpenMP](#optional-parallelization-with-openmp)
   - [OpenMP ASV Configuration](#openmp-asv-configuration)
+  - [Run on macOS and Linux](#run-on-macos-and-linux)
   - [Verify Parallel Backends](#verify-parallel-backends)
-  - [Run On macOS And Linux](#run-on-macos-and-linux)
-  - [Run On Windows](#run-on-windows)
+  - [Run on Windows](#run-on-windows)
+  - [OpenMP Thread Rule](#openmp-thread-rule)
   - [HPC Notes](#hpc-notes)
   - [Profiling With cProfile for Multiple Threads](#profiling-with-cprofile-for-multiple-threads)
-- [GitHub Action Benchmark Availability Checks](#github-action-benchmark-availability-checks)
 - [More ASV Commands](#more-asv-commands)
 - [External Reference](#external-reference)
 
@@ -69,7 +68,7 @@ parallelism as a confounding factor. Parallel/OpenMP scaling is treated as a
 separate optional experiment because the correct Cython OpenMP build depends on
 the user's operating system, compiler, and runtime environment.
 
-To run the benchmark and the optional cProfile helper, follow these steps:
+To run the benchmark and the optional cProfile helper, follow these steps (this guide will use python version 3.12. However, users can decide which version to use):
 
 1. Move to the GSTools repository root:
 
@@ -98,7 +97,8 @@ conda install -c conda-forge asv
 asv machine --yes
 ```
 
-The machine profile records local hardware information so ASV can label results correctly. Do not compare absolute times across different machines.
+The machine profile records local hardware information so ASV can label
+results correctly. Do not compare absolute times across different machines.
 
 ## Benchmarking Scripts
 
@@ -108,13 +108,19 @@ The benchmarking setup currently consists of:
   to store results, and which Python/environment matrix to use.
 - `asv.openmp.conf.json`: optional cross-platform ASV configuration that builds
   `gstools-cython` from source with OpenMP inside ASV's own environment.
-- `benchmarks/benchmark_backends.py`: contains the ASV benchmark classes.
+- `benchmarks/benchmark_two_point_statistics.py`: contains the ASV benchmark
+  classes.
 - `benchmarks/README.md`: this practical guide.
-- `benchmarks/tools/asv_speedup_summary.py`: reads `.asv/results/` and prints
-  Rust-vs-Cython speedup ratios.
+- `benchmarks/tools/asv_speedup_summary.py`: reads ASV result JSON files and
+  prints Rust-vs-Cython speedup ratios or writes a curated Markdown/HTML
+  report.
+- `benchmarks/tools/plot_case_backend_comparison.py`: reads ASV result JSON
+  files and writes a self-contained HTML report with grouped backend bars and
+  commit trends for selected cases, thread counts, and metrics.
 - `benchmarks/tools/profile_benchmark_workflows.py`: runs one representative
-  workflow from `benchmark_backends.py` under Python's built-in `cProfile`, so
-  you can see which functions take time in the current checkout.
+  workflow from `benchmark_two_point_statistics.py` under Python's built-in
+  `cProfile`, so you can see which functions take time in the current
+  checkout.
 - `benchmarks/tools/check_backend_parallel_ready.py`: CI helper that verifies
   Cython OpenMP detection and Rust backend execution with more than one
   GSTools thread.
@@ -150,7 +156,9 @@ The repo root `asv.conf.json` is tailored to this GSTools checkout:
   "install_command": [
     "in-dir={env_dir} python -m pip install gstools_core>=1.0.0",
     "in-dir={env_dir} python -m pip install --no-deps {build_dir}"
-  ]
+  ],
+  "number": 1,
+  "repeat": 20
 }
 ```
 
@@ -160,8 +168,12 @@ Important details:
   this guide. ASV creates isolated conda environments for the commits it
   benchmarks.
 - `pythons: ["3.12"]` means ASV creates Python 3.12 benchmark environments.
-  Keep this pinned unless you intentionally validate a newer Python/GSTools
-  backend stack.
+  Both ASV configs use Python 3.12 by default; change `pythons` in
+  `asv.conf.json` and `asv.openmp.conf.json` only when intentionally
+  validating another Python/GSTools backend stack.
+- `number: 1` means ASV runs the benchmark code once per iteration.
+- `repeat: 20` means the default baseline records 20 independent measurements
+  per benchmark case.
 - `matrix.req` asks ASV to install GSTools runtime dependencies before
   installing the checked-out GSTools source. It includes `gstools-cython`
   explicitly because the GSTools commit is installed with `--no-deps`.
@@ -188,22 +200,6 @@ ASV creates these generated directories:
 Those directories are machine-specific generated artifacts. They should
 normally stay out of git.
 
-The optional `asv.openmp.conf.json` uses the same benchmark suite, but stores
-its generated files separately:
-
-```text
-.asv-openmp/env/      OpenMP benchmark environments
-.asv-openmp/results/  OpenMP result JSON files
-.asv-openmp/html/     OpenMP benchmark website
-```
-
-It also installs build tools needed to compile `gstools-cython` from source
-with `GSTOOLS_BUILD_PARALLEL=1`. The platform-specific OpenMP setup is handled
-by `benchmarks/tools/install_openmp_cython.py`: macOS uses conda's
-`llvm-openmp` with an Apple-clang wrapper, Linux uses the compiler toolchain
-from the ASV conda environment when available, and native Windows uses the
-installed MSVC Build Tools.
-
 If needed, users can list more than one branch, Python version, benchmark
 directory, and so on. For example:
 
@@ -215,8 +211,8 @@ Users can also benchmark any explicit branch, commit, tag, or range without
 changing `asv.conf.json`:
 
 ```bash
-asv run 'my-feature-branch^!' --bench benchmark_backends
-asv run main..my-feature-branch --bench benchmark_backends
+asv run 'my-feature-branch^!' --bench benchmark_two_point_statistics
+asv run main..my-feature-branch --bench benchmark_two_point_statistics
 ```
 
 ASV checks out package code at each git commit being benchmarked. Commit source
@@ -263,7 +259,8 @@ FIELD_CASES = (
 )
 ```
 
-These constants define parameter labels shown in ASV results.
+These constants define backend parameter values and the case/thread labels used
+in generated benchmark method names.
 
 `BACKENDS` compares:
 
@@ -274,8 +271,8 @@ These constants define parameter labels shown in ASV results.
 
 - `threads_1`: force `gstools.config.NUM_THREADS = 1`
 
-That is the default because the first benchmark target is a clean Cython-vs-Rust
-backend comparison without parallelism.
+That is the default because the first benchmark target is a clean
+Cython-vs-Rust backend comparison without parallelism.
 
 ### Shared Helpers
 
@@ -309,15 +306,15 @@ runtime and peak-memory methods.
 
 The suite currently measures:
 
-- `VariogramWorkflowBenchmarks`: full pairwise work vs sampled large work
-- `KrigingWorkflowBenchmarks`: small vs larger global kriging systems
-- `RandomFieldWorkflowBenchmarks`: unstructured SRF, structured SRF, Fourier
+- `VariogramBenchmarks`: full pairwise work vs sampled large work
+- `KrigingBenchmarks`: small vs larger global kriging systems
+- `RandomFieldBenchmarks`: unstructured SRF, structured SRF, Fourier
   SRF, and conditioned SRF
 
 This keeps the ASV suite focused on representative workflows rather than
 separate duplicate backend checks.
 
-#### VariogramWorkflowBenchmarks
+#### VariogramBenchmarks
 
 This class measures variogram estimation cases:
 
@@ -340,7 +337,7 @@ The sampled cases still represent larger input datasets, but the variogram
 calculation is done on the randomly selected subset so the pairwise work stays
 practical.
 
-#### KrigingWorkflowBenchmarks
+#### KrigingBenchmarks
 
 This class measures global kriging at three scales:
 
@@ -356,7 +353,7 @@ The labels mean:
 - `large_120x2000`: 120 conditioning points, 2,000 target points
 - `extra_large_360x6000`: 360 conditioning points, 6,000 target points
 
-#### RandomFieldWorkflowBenchmarks
+#### RandomFieldBenchmarks
 
 This class measures SRF and CondSRF generation workflows:
 
@@ -384,22 +381,24 @@ The baseline benchmark is the first result set to create before doing any
 optimization work. It uses the default ASV configuration, so each workflow is
 measured with `threads_1` for both `cython_fallback` and `rust_core`.
 
-#### Current Commit Baseline
+#### Main Branch Baseline
 
-- Save a baseline for the current commit:
+- Save a baseline for the latest local `main` commit:
 
 ```bash
-asv run 'HEAD^!' --bench benchmark_backends
+asv run 'main^!' --bench benchmark_two_point_statistics
 ```
 
 #### Several Commits Baseline
 
-As mentioned previously, ASV can also compare several commits, here we will run the last five commits:
+ASV can also compare several commits. This example runs the last three commits
+on local `main`; choose a different range when that better matches your
+branch.
 
-- Run the last five commits on main branch:
+- Run the last three commits on the local `main` branch:
 
 ```bash
-asv run HEAD~5..HEAD --bench benchmark_backends
+asv run 'main~3..main' --bench benchmark_two_point_statistics
 ```
 
 #### Summary of Results
@@ -426,6 +425,18 @@ The speedup helper prints the backend ratio explicitly in the terminal. By
 default, the helper skips removed legacy duplicate rows from older saved
 results.
 
+For a report that is easier to paste into a PR or issue:
+
+```bash
+python benchmarks/tools/asv_speedup_summary.py --format markdown
+```
+
+For a small standalone HTML report:
+
+```bash
+python benchmarks/tools/asv_speedup_summary.py --format html --output .asv/backend-report-overview.html
+```
+
 #### Visualization of Results
 
 You can inspect the results in the ASV browser report by building and opening
@@ -436,19 +447,17 @@ asv publish
 asv preview
 ```
 
-Then open the printed local URL,  for example:
+Then open the printed local URL, for example:
 
 ```text
-http://127.0.0.1:8082/#/
+http://127.0.0.1:8080/#/
 ```
 (or any other `http://127.0.0.1:<port>/#/` URL shown by the running preview).
 
-The browser report shows ASV plots and trends. ASV plot views do not draw a line/graph when there is only one x-axis point, therefore running `asv run 'HEAD^!' --bench benchmark_backends` will most likely not load any graphs.
-
-For the default benchmark run, the `threads` column should show `threads_1`.
-If you later run the
-[optional OpenMP scaling experiment](#optional-parallelisation-with-openmp),
-the same column can be used to compare several threads.
+The browser report shows raw ASV plots and trends. ASV plot views do not draw a
+line when there is only one x-axis point, so a single-commit run such as
+`asv run 'main^!' --bench benchmark_two_point_statistics` may show results
+without useful commit-trend graphs.
 
 ### Profiling With cProfile
 
@@ -462,8 +471,8 @@ The helper script is:
 benchmarks/tools/profile_benchmark_workflows.py
 ```
 
-It imports the ASV benchmark classes from `benchmark_backends.py`, selects one
-case, forces one backend, and runs that case under `cProfile`.
+It imports the ASV benchmark classes from `benchmark_two_point_statistics.py`,
+selects one case, forces one backend, and runs that case under `cProfile`.
 
 Since ASV has already created an isolated Python environment, select that
 environment to execute the profiling helper:
@@ -505,7 +514,7 @@ Possible profile selected cases:
 "$ASV_PYTHON" benchmarks/tools/profile_benchmark_workflows.py --case condsrf --backend rust_core --threads threads_1 --limit 10
 ```
 
-## Optional Parallelisation with OpenMP
+## Optional Parallelization with OpenMP
 
 This section collects optional workflows for testing Cython and Rust with
 several thread counts. OpenMP setup is platform-dependent, so each operating
@@ -514,25 +523,6 @@ system must be verified on the machine that produces the results.
 The default setup above remains the recommended baseline: one thread, normal
 ASV environment, and no extra OpenMP build steps. Use this section only when
 you explicitly want to measure backend scaling with multiple thread counts.
-
-### Shared OpenMP Rule
-
-The benchmark code can be run with several thread labels by setting, for
-example, `GSTOOLS_BENCHMARK_THREADS=2,4,8`. That only passes different
-`gstools.config.NUM_THREADS` values to GSTools. It does not, by itself, make
-the Cython backend parallel.
-
-For Cython OpenMP scaling, the Cython extension must be compiled with OpenMP
-support inside the same ASV environment that runs the benchmark. Always verify
-that environment before interpreting Cython scaling results:
-
-```bash
-ASV_ENV="$(ls -td .asv-openmp/env/* | head -n 1)"
-"$ASV_ENV/bin/python" benchmarks/tools/check_backend_parallel_ready.py --verbose
-```
-
-If the check fails, the benchmark may still run, but the Cython backend should
-not be interpreted as an OpenMP-enabled Cython run.
 
 ### OpenMP ASV Configuration
 
@@ -550,6 +540,16 @@ This config keeps the OpenMP experiment separate from the default baseline:
 .asv-openmp/html/
 ```
 
+It also uses fewer repeats than the baseline config:
+
+```json
+"number": 1,
+"repeat": 20
+```
+
+That means each OpenMP benchmark case records 10 independent measurements by
+default, while still running the benchmark code once per measurement.
+
 During ASV installation, it runs:
 
 ```bash
@@ -565,15 +565,23 @@ compiler handling:
 - Linux: uses the ASV conda compiler toolchain when available.
 - Windows: uses native MSVC Build Tools.
 
-### Verify Parallel Backends
+### Run on macOS and Linux
+
+Use these commands from a POSIX shell on macOS or Linux. On macOS, install
+Xcode command-line tools first. On Linux, make sure the conda compiler packages
+from `asv.openmp.conf.json` solve for your platform.
+
+Create the ASV machine profile once:
+
+```bash
+asv --config asv.openmp.conf.json machine --yes
+```
+
+#### Verify Parallel Backends
 
 Only interpret the Cython rows as OpenMP-enabled, and the Rust rows as
 parallel-ready, after this check passes inside the `.asv-openmp/env/...`
-environment. The active `gstools-benchmark` conda environment is only the ASV
-driver environment; it is normal for
-`python benchmarks/tools/check_backend_parallel_ready.py --verbose` to fail
-there with `gstools: not installed`, `gstools_cython: not installed`, or
-`gstools_core: not installed`.
+environment.
 
 On macOS and Linux:
 
@@ -599,32 +607,11 @@ Cython OpenMP readiness: PASS
 Rust backend readiness: PASS with NUM_THREADS=2
 ```
 
-### Run On macOS And Linux
-
-Use these commands from a POSIX shell on macOS or Linux. On macOS, install
-Xcode command-line tools first. On Linux, make sure the conda compiler packages
-from `asv.openmp.conf.json` solve for your platform.
-
-Create the ASV machine profile once:
+If the check passes, run the last five commits:
 
 ```bash
-asv --config asv.openmp.conf.json machine --yes
-```
-
-Run a quick current-commit OpenMP smoke run:
-
-```bash
-GSTOOLS_BENCHMARK_THREADS=2,4,8 \
-asv --config asv.openmp.conf.json run 'HEAD^!' --quick --bench benchmark_backends --show-stderr
-```
-
-Verify the parallel backends with the commands in
-[Verify Parallel Backends](#verify-parallel-backends). If it passes, run the last-five
-commits:
-
-```bash
-GSTOOLS_BENCHMARK_THREADS=2,4,8 \
-asv --config asv.openmp.conf.json run 'HEAD~5..HEAD' --bench benchmark_backends --show-stderr
+GSTOOLS_BENCHMARK_THREADS=1,2,4,8 \
+asv --config asv.openmp.conf.json run 'main~5..main' --bench benchmark_two_point_statistics --show-stderr
 ```
 
 Print Rust-vs-Cython ratios from the OpenMP result folder:
@@ -633,6 +620,26 @@ Print Rust-vs-Cython ratios from the OpenMP result folder:
 python benchmarks/tools/asv_speedup_summary.py --results-dir .asv-openmp/results
 ```
 
+Build a curated OpenMP HTML report:
+
+```bash
+python benchmarks/tools/asv_speedup_summary.py \
+  --results-dir .asv-openmp/results \
+  --format html \
+  --output .asv-openmp/backend-report-openmp-overview.html
+```
+
+Build the case/backend comparison report:
+
+```bash
+python benchmarks/tools/plot_case_backend_comparison.py \
+  --results-dir .asv-openmp/results \
+  --output .asv-openmp/case-backend-comparison.html
+```
+
+By default this report includes both time and peak-memory benchmarks. Use
+`--metric time` or `--metric memory` when you want only one metric.
+
 Build and preview the OpenMP browser report:
 
 ```bash
@@ -640,7 +647,7 @@ asv --config asv.openmp.conf.json publish
 asv --config asv.openmp.conf.json preview
 ```
 
-### Run On Windows
+### Run on Windows
 
 Use native Windows, not WSL, when you want Windows benchmark results. Install
 Microsoft C++ Build Tools first, including the C++ build tools workload and a
@@ -653,20 +660,20 @@ Create the ASV machine profile once:
 asv --config asv.openmp.conf.json machine --yes
 ```
 
-Run a quick current-commit OpenMP smoke run:
+Run a quick OpenMP smoke run for the latest local `main` commit:
 
 ```powershell
-$env:GSTOOLS_BENCHMARK_THREADS = '2,4,8'
-asv --config asv.openmp.conf.json run 'HEAD^!' --quick --bench benchmark_backends --show-stderr
+$env:GSTOOLS_BENCHMARK_THREADS = '1,2,4,8'
+asv --config asv.openmp.conf.json run 'main^!' --quick --bench benchmark_two_point_statistics --show-stderr
 ```
 
 Verify the parallel backends with the PowerShell commands in
-[Verify Parallel Backends](#verify-parallel-backends). If it passes, run the last-five
-commits:
+[Verify Parallel Backends](#verify-parallel-backends). If the check passes,
+run the last five commits:
 
 ```powershell
-$env:GSTOOLS_BENCHMARK_THREADS = '2,4,8'
-asv --config asv.openmp.conf.json run 'HEAD~5..HEAD' --bench benchmark_backends --show-stderr
+$env:GSTOOLS_BENCHMARK_THREADS = '1,2,4,8'
+asv --config asv.openmp.conf.json run 'main~5..main' --bench benchmark_two_point_statistics --show-stderr
 ```
 
 Print Rust-vs-Cython ratios from the OpenMP result folder:
@@ -674,6 +681,26 @@ Print Rust-vs-Cython ratios from the OpenMP result folder:
 ```powershell
 python benchmarks\tools\asv_speedup_summary.py --results-dir .asv-openmp\results
 ```
+
+Build a curated OpenMP HTML report:
+
+```powershell
+python benchmarks\tools\asv_speedup_summary.py `
+  --results-dir .asv-openmp\results `
+  --format html `
+  --output .asv-openmp\backend-report-openmp-overview.html
+```
+
+Build the case/backend comparison report:
+
+```powershell
+python benchmarks\tools\plot_case_backend_comparison.py `
+  --results-dir .asv-openmp\results `
+  --output .asv-openmp\case-backend-comparison.html
+```
+
+By default this report includes both time and peak-memory benchmarks. Use
+`--metric time` or `--metric memory` when you want only one metric.
 
 Build and preview the OpenMP browser report:
 
@@ -688,6 +715,20 @@ be reused:
 ```powershell
 Remove-Item Env:\GSTOOLS_BENCHMARK_THREADS
 ```
+
+### OpenMP Thread Rule
+
+The `GSTOOLS_BENCHMARK_THREADS=1,2,4,8` setting only tells the benchmark code to
+run the same workflows with different `gstools.config.NUM_THREADS` values. It
+does not, by itself, make the Cython backend parallel.
+
+For Cython OpenMP scaling, `gstools-cython` must be compiled with OpenMP inside
+the same `.asv-openmp/env/...` environment that runs the benchmark. The
+`asv.openmp.conf.json` install command does that through
+`benchmarks/tools/install_openmp_cython.py`; the commands in
+[Verify Parallel Backends](#verify-parallel-backends) are the proof that the
+environment is ready. If that check fails, the benchmark may still run, but the
+Cython rows should not be interpreted as OpenMP-enabled Cython results.
 
 ### HPC Notes
 
@@ -707,7 +748,7 @@ same cProfile case several times with the OpenMP ASV environment:
 ASV_OPENMP_ENV="$(ls -td .asv-openmp/env/* | head -n 1)"
 ASV_OPENMP_PYTHON="$ASV_OPENMP_ENV/bin/python"
 
-for threads in threads_2 threads_4 threads_8; do
+for threads in threads_1 threads_2 threads_4 threads_8; do
   "$ASV_OPENMP_PYTHON" benchmarks/tools/profile_benchmark_workflows.py --case krige-extra-large --backend rust_core --threads "$threads" --limit 10
 done
 ```
@@ -720,7 +761,7 @@ $asvOpenmpEnv = Get-ChildItem .asv-openmp\env -Directory |
   Select-Object -First 1
 $asvOpenmpPython = Join-Path $asvOpenmpEnv.FullName 'python.exe'
 
-foreach ($threads in 'threads_2', 'threads_4', 'threads_8') {
+foreach ($threads in 'threads_1', 'threads_2', 'threads_4', 'threads_8') {
   & $asvOpenmpPython benchmarks\tools\profile_benchmark_workflows.py --case krige-extra-large --backend rust_core --threads $threads --limit 10
 }
 ```
@@ -738,145 +779,68 @@ Useful options:
 
 For example, `--limit 10` means "print the top 10 function rows after sorting".
 
-## GitHub Action Benchmark Availability Checks
-
-The repository includes `.github/workflows/asv-benchmarks.yml` to check that
-the benchmark tooling can be installed and started on GitHub-hosted Linux,
-Windows, `macos-latest`, and `macos-15-intel` runners. This workflow is an
-availability check, not a performance benchmark run.
-
-The workflow has two independent matrix jobs:
-
-- `benchmark_asv_existing_env` installs GSTools and the benchmark
-  dependencies with pip, then runs one ASV benchmark method with
-  `-E existing`.
-- `benchmark_parallel_readiness` creates a small conda-forge environment and
-  runs `check_backend_parallel_ready.py --verbose`.
-
-The ASV smoke stage runs a quick command in the existing Python environment:
-
-```bash
-python - <<'PY'
-import json
-from pathlib import Path
-
-config = json.loads(Path("asv.conf.json").read_text())
-config["branches"] = ["HEAD"]
-Path("asv.ci-existing.json").write_text(json.dumps(config, indent=2))
-PY
-
-asv run --config asv.ci-existing.json \
-  -E existing \
-  --set-commit-hash "$(git rev-parse HEAD)" \
-  --no-pull \
-  --quick \
-  --bench benchmark_backends.VariogramWorkflowBenchmarks.time_variogram_estimate \
-  --show-stderr
-```
-
-Do not pass a range such as `HEAD^!` with `-E existing`: ASV cannot checkout
-revisions inside an existing environment. If no range is supplied, ASV resolves
-the branches from the config file. The workflow writes a temporary config that
-points `branches` at `$GITHUB_SHA`, then uses `--set-commit-hash "$GITHUB_SHA"`
-to label the result with the commit already checked out by GitHub Actions.
-
-That benchmark method exercises both configured backend values through ASV
-parameters, but avoids running the full performance suite in CI. Python 3.14
-currently runs this ASV smoke check with the Cython fallback backend only,
-because `gstools_core` 1.2.0 can fail during the Rust variogram smoke case on
-that interpreter.
-
-The parallel-readiness steps intentionally do not run a full ASV OpenMP
-benchmark. They install `gstools-cython` from conda-forge, install
-`gstools_core`, install the local GSTools checkout, and run:
-
-```bash
-conda run -n gstools-benchmark-readiness python \
-  benchmarks/tools/check_backend_parallel_ready.py --verbose
-```
-
-CI does not call `benchmarks/tools/install_openmp_cython.py`; that helper is
-kept for local/manual OpenMP ASV builds through `asv.openmp.conf.json`.
-Locally, run the readiness helper with the Python executable from the ASV
-OpenMP environment:
-
-```bash
-ASV_OPENMP_ENV="$(ls -td .asv-openmp/env/* | head -n 1)"
-"$ASV_OPENMP_ENV/bin/python" benchmarks/tools/check_backend_parallel_ready.py --verbose
-```
-
-That fast check proves that Cython reports OpenMP support and that the Rust
-backend can run a small workflow with `gstools.config.NUM_THREADS=2`. The CI
-probe requires Cython to accept explicit thread counts `2,4,8`; it prints the
-default thread count but does not fail when a runner defaults to one thread. For
-real OpenMP scaling measurements, use `asv.openmp.conf.json` locally with
-`GSTOOLS_BENCHMARK_THREADS=2,4,8`.
-
-The workflow runs automatically on pull requests and pushes that change ASV
-configs, benchmark files, package metadata, or the workflow itself. It can also
-be started from the GitHub Actions tab with `workflow_dispatch`.
-
 ## More ASV Commands
 
-Save results for only the current commit:
+Save results for only the latest local `main` commit:
 
 ```bash
-asv run 'HEAD^!' --bench benchmark_backends
+asv run 'main^!' --bench benchmark_two_point_statistics
 ```
 
-Compare current commit with previous commit:
+Compare the latest local `main` commit with the previous local `main` commit:
 
 ```bash
-asv run 'HEAD~1^!' --bench benchmark_backends
-asv run 'HEAD^!' --bench benchmark_backends
-asv compare HEAD~1 HEAD
+asv run 'main~1^!' --bench benchmark_two_point_statistics
+asv run 'main^!' --bench benchmark_two_point_statistics
+asv compare main~1 main
 ```
 
-Compare local `main` with the current branch tip:
+Compare local `main` with the latest remote `main`:
 
 ```bash
-asv run 'main^!' --bench benchmark_backends
-asv run 'HEAD^!' --bench benchmark_backends
-asv compare main HEAD
+asv run 'main^!' --bench benchmark_two_point_statistics
+git fetch origin main
+asv run 'origin/main^!' --bench benchmark_two_point_statistics
+asv compare origin/main main
 ```
 
-Compare remote `main` with the current branch tip:
+Compare the previous local `main` commit with the latest remote `main`:
 
 ```bash
 git fetch origin main
-asv run 'origin/main^!' --bench benchmark_backends
-asv run 'HEAD^!' --bench benchmark_backends
-asv compare origin/main HEAD
+asv run 'main~1^!' --bench benchmark_two_point_statistics
+asv run 'origin/main^!' --bench benchmark_two_point_statistics
+asv compare main~1 origin/main
 ```
 
 Run the last three commits on local `main`:
 
 ```bash
-asv run 'main~3..main' --bench benchmark_backends --show-stderr
+asv run 'main~3..main' --bench benchmark_two_point_statistics --show-stderr
 ```
 
 Run the last three commits on the latest remote `main`:
 
 ```bash
 git fetch origin main
-asv run 'origin/main~3..origin/main' --bench benchmark_backends --show-stderr
+asv run 'origin/main~3..origin/main' --bench benchmark_two_point_statistics --show-stderr
 ```
 
-On a linear branch, `HEAD~5..HEAD` benchmarks:
+On a linear branch, `main~5..main` benchmarks:
 
 ```text
-HEAD~4
-HEAD~3
-HEAD~2
-HEAD~1
-HEAD
+main~4
+main~3
+main~2
+main~1
+main
 ```
 
 Run a selected list of commits:
 
 ```bash
-git rev-parse HEAD HEAD~3 main e20c88f7 > /tmp/gstools-asv-commits.txt
-asv run HASHFILE:/tmp/gstools-asv-commits.txt --bench benchmark_backends
+git rev-parse main main~3 origin/main e20c88f7 > /tmp/gstools-asv-commits.txt
+asv run HASHFILE:/tmp/gstools-asv-commits.txt --bench benchmark_two_point_statistics
 ```
 
 Use full commit hashes when sharing results. Short hashes and branch names are
@@ -885,7 +849,7 @@ fine locally but can become ambiguous later.
 If running ASV from outside the repo root, pass the config explicitly:
 
 ```bash
-asv --config /path/to/MPS-Tools/GSTools/asv.conf.json run --quick --bench benchmark_backends
+asv --config /path/to/MPS-Tools/GSTools/asv.conf.json run --quick --bench benchmark_two_point_statistics
 ```
 
 ## External Reference

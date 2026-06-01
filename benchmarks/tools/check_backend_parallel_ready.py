@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Check that GSTools benchmark backends are ready for parallel runs.
+"""Check whether GSTools benchmark backends are ready for parallel runs.
 
 This is a fast CI probe. It verifies that GSTools-Cython accepts explicit
 OpenMP thread counts and that the Rust backend can run a small workflow while
@@ -23,7 +23,11 @@ EXPLICIT_THREAD_COUNTS = (2, 4, 8)
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description=__doc__)
+    """Parse command-line options."""
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     parser.add_argument(
         "--threads",
         default=2,
@@ -53,6 +57,7 @@ def parse_args():
 
 
 def package_version(package_name):
+    """Return an installed package version or a clear missing marker."""
     try:
         package = importlib.import_module(package_name)
     except ModuleNotFoundError:
@@ -61,6 +66,7 @@ def package_version(package_name):
 
 
 def check_module(label, module_name):
+    """Check default and explicit OpenMP thread counts for one module."""
     module = importlib.import_module(module_name)
     default_threads = module.set_num_threads(None)
     explicit = {
@@ -71,6 +77,7 @@ def check_module(label, module_name):
 
 
 def check_cython_parallel(verbose=False, require_default_openmp=False):
+    """Validate GSTools-Cython OpenMP readiness across benchmark modules."""
     default_values = []
     for label, module_name in MODULES.items():
         try:
@@ -114,6 +121,7 @@ def check_cython_parallel(verbose=False, require_default_openmp=False):
 
 
 def check_rust_backend(threads):
+    """Run a small Rust-backed GSTools workflow with ``threads`` configured."""
     try:
         import gstools as gs
     except ModuleNotFoundError as err:
@@ -165,6 +173,7 @@ def check_rust_backend(threads):
 
 
 def main():
+    """Run the parallel backend readiness checks."""
     args = parse_args()
     print(f"python: {sys.executable}")
     print(f"gstools: {package_version('gstools')}")
