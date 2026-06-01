@@ -151,7 +151,7 @@ jobs:
           # is currently Cython-only because gstools_core 1.2.0 can fail during
           # the Rust variogram smoke case. Existing environments cannot accept
           # a commit range, so the checked-out commit is recorded explicitly.
-          ASV_SMOKE_BENCHMARK="benchmark_two_point_statistics.VariogramBenchmarks.time_variogram_estimate_full_900_threads_1"
+          ASV_SMOKE_BENCHMARK="benchmark_two_point_statistics.VariogramBenchmarks.time_variogram_estimate"
           asv run \
             --config asv.ci-existing.json \
             -E existing \
