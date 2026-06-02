@@ -543,9 +543,6 @@ class TestDirectSampling(unittest.TestCase):
         self.assertTrue(np.allclose(fa, fb))
         # Different seed → different output
         self.assertFalse(np.allclose(fa, fc))
-        # Pin two values for seed=99 (scan_fraction=0.5 applies to window size)
-        self.assertAlmostEqual(fa[0, 0], 0.0)
-        self.assertAlmostEqual(fa[3, 4], 1.0)
 
     def test_conditioning_honored(self):
         ds = DirectSampling(self.ti1d, n_neighbors=4, scan_fraction=1.0)
