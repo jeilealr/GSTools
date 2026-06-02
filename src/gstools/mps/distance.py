@@ -166,7 +166,7 @@ def lp_dist(data_event_sim, data_event_ti, node_weights, d_max, p):
     return float(np.sum(node_weights * (diffs**p)) ** (1.0 / p))
 
 
-def variation_dist(data_event_sim, data_event_ti, node_weights, d_max):
+def variation_dist(data_event_sim, data_event_ti, node_weights, d_max, p=2.0):
     """Weighted variation distance (Mariethoz2010 Eq. 9, de-meaned).
 
     Parameters
@@ -177,6 +177,8 @@ def variation_dist(data_event_sim, data_event_ti, node_weights, d_max):
         Normalized spatial and conditioning weights.
     d_max : float
         Data range for normalization.
+    p : float, optional
+        Lp aggregation exponent. Default ``2.0`` (RMS, Mariethoz2010 Eq. 9).
 
     Returns
     -------
@@ -189,7 +191,11 @@ def variation_dist(data_event_sim, data_event_ti, node_weights, d_max):
     # 2*d_max normalises the common case to [0, 1]; SG values are not bounded
     # by the TI range (conditioning data / accumulated mean-shifts), so clamp.
     return float(
-        min(1.0, np.sqrt(np.dot(node_weights, (diffs / (2 * d_max)) ** 2)))
+        min(
+            1.0,
+            np.dot(node_weights, np.abs(diffs / (2 * d_max)) ** p)
+            ** (1.0 / p),
+        )
     )
 
 
@@ -274,7 +280,7 @@ def vec_lp_dist(data_event_sim, all_de_ti, node_weights, d_max, p):
     return np.dot(diffs**p, node_weights) ** (1.0 / p)
 
 
-def vec_variation_dist(data_event_sim, all_de_ti, node_weights, d_max):
+def vec_variation_dist(data_event_sim, all_de_ti, node_weights, d_max, p=2.0):
     """Vectorized variation distance over all TI scan candidates.
 
     Parameters
@@ -283,6 +289,8 @@ def vec_variation_dist(data_event_sim, all_de_ti, node_weights, d_max):
     all_de_ti : numpy.ndarray, shape (max_scan, n)
     node_weights : numpy.ndarray, shape (n,)
     d_max : float
+    p : float, optional
+        Lp aggregation exponent. Default ``2.0``.
 
     Returns
     -------
@@ -295,5 +303,6 @@ def vec_variation_dist(data_event_sim, all_de_ti, node_weights, d_max):
     # 2*d_max normalises the common case to [0, 1]; SG values are not bounded
     # by the TI range (conditioning data / accumulated mean-shifts), so clamp.
     return np.minimum(
-        1.0, np.sqrt(np.dot((diffs / (2 * d_max)) ** 2, node_weights))
+        1.0,
+        np.dot(np.abs(diffs / (2 * d_max)) ** p, node_weights) ** (1.0 / p),
     )

@@ -606,7 +606,9 @@ class DirectSampling(Field):
         conditions = self._conditions_to_grid(self.pos)
         if not np.isnan(seed):
             self.rng.seed = int(seed)
-        rng = np.random.default_rng(int(self.rng.random.randint(0, 2**32, dtype=np.int64)))
+        rng = np.random.default_rng(
+            int(self.rng.random.randint(0, 2**32, dtype=np.int64))
+        )
         field = ds_simulate(
             training_image=self._ti,
             sim_shape=shape,

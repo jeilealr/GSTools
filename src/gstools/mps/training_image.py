@@ -61,6 +61,7 @@ class TrainingImage:
             raise ValueError("distance_power must be >= 0")
         self._distance_type = distance
         self._p_norm = None
+        self._variation_p_norm = None
         if not self._categorical:
             distance_lower = str(distance).lower()
             if distance_lower.startswith("l"):
@@ -77,11 +78,26 @@ class TrainingImage:
                     )
                 self._p_norm = p_val
             elif distance_lower == "variation":
-                self._p_norm = None
+                self._variation_p_norm = 2.0
+            elif distance_lower.startswith("variation"):
+                try:
+                    p_val = float(distance_lower[len("variation") :])
+                except ValueError:
+                    raise ValueError(
+                        f"TrainingImage: distance starting with 'variation' must be "
+                        f"followed by a positive number (e.g. 'variation1', 'variation1.5'). "
+                        f"Got {distance!r}"
+                    )
+                if p_val <= 0:
+                    raise ValueError(
+                        f"TrainingImage: variation exponent must be > 0, got {p_val}."
+                    )
+                self._variation_p_norm = p_val
             else:
                 raise ValueError(
-                    f"TrainingImage: distance must be 'l<p>' (e.g. 'l1', 'l2') "
-                    f"or 'variation'. Got {distance!r}"
+                    f"TrainingImage: distance must be 'l<p>' (e.g. 'l1', 'l2'), "
+                    f"'variation', or 'variation<p>' (e.g. 'variation1'). "
+                    f"Got {distance!r}"
                 )
 
         if not self._categorical:
@@ -116,7 +132,7 @@ class TrainingImage:
 
     @property
     def distance_type(self):
-        """str: Distance metric (e.g. ``"l1"``, ``"l2"``, ``"l3.5"``, or ``"variation"``)."""
+        """str: Distance metric (e.g. ``"l1"``, ``"l2"``, ``"variation"``, ``"variation1"``)."""
         return self._distance_type
 
     @property
@@ -181,10 +197,13 @@ class TrainingImage:
             return lp_dist(
                 data_event_sim, data_event_ti, w, self._d_max, self._p_norm
             )
-        else:  # _p_norm is None → distance="variation"
-            return variation_dist(
-                data_event_sim, data_event_ti, w, self._d_max
-            )
+        return variation_dist(
+            data_event_sim,
+            data_event_ti,
+            w,
+            self._d_max,
+            self._variation_p_norm,
+        )
 
     def vec_distance(
         self,
@@ -235,7 +254,9 @@ class TrainingImage:
             return vec_lp_dist(
                 data_event_sim, all_de_ti, w, self._d_max, self._p_norm
             )
-        return vec_variation_dist(data_event_sim, all_de_ti, w, self._d_max)
+        return vec_variation_dist(
+            data_event_sim, all_de_ti, w, self._d_max, self._variation_p_norm
+        )
 
     def adjust_value(self, ti_val, data_event_sim, data_event_ti):
         """Adjust matched TI value before assignment to SG.
@@ -257,7 +278,7 @@ class TrainingImage:
         -------
         float
         """
-        if self._p_norm is not None or self._categorical:
+        if self._variation_p_norm is None or self._categorical:
             return ti_val
         data_event_sim = np.asarray(data_event_sim, dtype=np.float64)
         data_event_ti = np.asarray(data_event_ti, dtype=np.float64)
