@@ -239,7 +239,7 @@ def ds_simulate(
 
     path = np.argwhere(np.isnan(sg))
     path = path[rng.permutation(len(path))]
-    node_seeds = rng.randint(0, 2**32, size=len(path))
+    node_seeds = rng.randint(0, 2**32, size=len(path), dtype=np.int64)
 
     path_flat = np.ravel_multi_index(path.T, sim_shape)
     path_pos_map = np.full(int(np.prod(sim_shape)), -1, dtype=np.intp)
