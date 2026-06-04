@@ -423,7 +423,6 @@ class TestDirectSampling(unittest.TestCase):
             categorical=True,
         )
 
-        # default_rng used deliberately: gstools.random.RNG would shift the seed pins
         rng = np.random.default_rng(0)
         self.ti2d_rand = TrainingImage(
             rng.integers(0, 2, size=(20, 20)).astype(float),
@@ -522,16 +521,16 @@ class TestDirectSampling(unittest.TestCase):
     def test_regression_1d(self):
         ds = DirectSampling(self.ti1d, n_neighbors=4, scan_fraction=1.0)
         field = ds([self.x1d], seed=42)
-        self.assertAlmostEqual(field[0], 0.0)
-        self.assertAlmostEqual(field[5], 1.0)
-        self.assertAlmostEqual(field[9], 1.0)
+        self.assertAlmostEqual(field[0], 1.0)
+        self.assertAlmostEqual(field[5], 0.0)
+        self.assertAlmostEqual(field[9], 0.0)
 
     def test_regression_2d(self):
         ds = DirectSampling(self.ti2d, n_neighbors=4, scan_fraction=1.0)
         field = ds([self.x2d, self.y2d], seed=42)
-        self.assertAlmostEqual(field[0, 0], 0.0)
-        self.assertAlmostEqual(field[2, 3], 1.0)
-        self.assertAlmostEqual(field[5, 5], 0.0)
+        self.assertAlmostEqual(field[0, 0], 1.0)
+        self.assertAlmostEqual(field[2, 3], 0.0)
+        self.assertAlmostEqual(field[5, 5], 1.0)
 
     def test_seeded_reproducibility(self):
         ds = DirectSampling(self.ti2d_rand, n_neighbors=8, scan_fraction=0.5)
@@ -543,6 +542,10 @@ class TestDirectSampling(unittest.TestCase):
         self.assertTrue(np.allclose(fa, fb))
         # Different seed → different output
         self.assertFalse(np.allclose(fa, fc))
+        # Pin two values for seed=99; stable across NumPy versions because DS
+        # uses RandomState (MT19937) throughout, matching the rest of GSTools.
+        self.assertAlmostEqual(fa[0, 0], 0.0)
+        self.assertAlmostEqual(fa[3, 4], 1.0)
 
     def test_conditioning_honored(self):
         ds = DirectSampling(self.ti1d, n_neighbors=4, scan_fraction=1.0)
@@ -618,7 +621,7 @@ class TestDirectSampling(unittest.TestCase):
             n_neighbors=4,
             threshold=0.0,
             scan_fraction=1.0,
-            rng=np.random.default_rng(7),
+            rng=np.random.RandomState(7),
         )
         self.assertEqual(result.shape, (8,))
         self.assertFalse(np.any(np.isnan(result)))

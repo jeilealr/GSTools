@@ -196,7 +196,7 @@ def ds_simulate(
         Fraction of the per-node search window to scan (Mariethoz2010 §3 ¶24).
         Evaluates at most ``floor(f · |window|)`` candidates per node.
         ``1.0`` → full window scan.
-    rng : numpy.random.Generator
+    rng : numpy.random.RandomState
         Random number generator.
     conditions : dict, optional
         ``{tuple_index: value}`` mapping of conditioning data.
@@ -239,7 +239,7 @@ def ds_simulate(
 
     path = np.argwhere(np.isnan(sg))
     path = path[rng.permutation(len(path))]
-    node_seeds = rng.integers(0, 2**32, size=len(path))
+    node_seeds = rng.randint(0, 2**32, size=len(path))
 
     path_flat = np.ravel_multi_index(path.T, sim_shape)
     path_pos_map = np.full(int(np.prod(sim_shape)), -1, dtype=np.intp)
@@ -606,7 +606,7 @@ class DirectSampling(Field):
         conditions = self._conditions_to_grid(self.pos)
         if not np.isnan(seed):
             self.rng.seed = int(seed)
-        rng = np.random.default_rng(
+        rng = np.random.RandomState(
             int(self.rng.random.randint(0, 2**32, dtype=np.int64))
         )
         field = ds_simulate(
