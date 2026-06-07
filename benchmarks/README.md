@@ -124,6 +124,9 @@ The benchmarking setup currently consists of:
 - `benchmarks/tools/check_backend_parallel_ready.py`: CI helper that verifies
   Cython OpenMP detection and Rust backend execution with more than one
   GSTools thread.
+- `benchmarks/tools/install_pyproject_extras.py`: installs selected optional
+  dependencies directly from `pyproject.toml` without installing GSTools or
+  its regular dependencies.
 - `benchmarks/tools/install_openmp_cython.py`: helper used by
   `asv.openmp.conf.json` to compile `gstools-cython` with OpenMP on macOS,
   Linux, and native Windows.
@@ -154,7 +157,7 @@ The repo root `asv.conf.json` is tailored to this GSTools checkout:
     }
   },
   "install_command": [
-    "in-dir={env_dir} python -m pip install gstools_core>=1.0.0",
+    "in-dir={env_dir} python {conf_dir}/benchmarks/tools/install_pyproject_extras.py --pyproject {conf_dir}/pyproject.toml rust",
     "in-dir={env_dir} python -m pip install --no-deps {build_dir}"
   ],
   "number": 1,
@@ -180,8 +183,8 @@ Important details:
 - `{build_dir}` is ASV's temporary checkout/build directory for the exact
   GSTools commit being benchmarked.
 - `install_command` installs the checked-out GSTools revision with `--no-deps`.
-  It also installs `gstools_core` with pip because `gstools-core` is not
-  available as a conda package in every solver/platform combination.
+  It also uses `install_pyproject_extras.py` to install the `rust` extra from
+  `pyproject.toml`, keeping the `gstools_core` requirement in one place.
 - ASV still needs its own `install_command` because it creates isolated
   environments for the commits it benchmarks.
 - Run the cProfile helper with the Python executable from ASV's isolated
