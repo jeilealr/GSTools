@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import html
 import itertools
 import json
 import math
@@ -90,11 +91,28 @@ def parse_args():
         ),
     )
     parser.add_argument(
+        "--max-commits",
+        type=positive_int,
+        default=None,
+        help=(
+            "Include only the newest N commits in the report. Raw ASV result "
+            "files are not changed. Default: include all commits."
+        ),
+    )
+    parser.add_argument(
         "--table",
         action="store_true",
         help="Print a compact terminal table instead of writing HTML.",
     )
     return parser.parse_args()
+
+
+def positive_int(value):
+    """Parse a positive integer command-line value."""
+    parsed = int(value)
+    if parsed < 1:
+        raise argparse.ArgumentTypeError("value must be at least 1")
+    return parsed
 
 
 def default_results_dirs():
@@ -299,7 +317,19 @@ def collect_rows(results_dirs, benchmark_filter=None, metric_filter="all"):
             commit = commit_hash[:8]
             date = data.get("date", 0)
             env_name = data.get("env_name", path.stem)
-            python = data.get("python", "-")
+            params = data.get("params", {})
+            python = data.get("python") or params.get("python", "-")
+            machine = {
+                key: params.get(key, "-")
+                for key in (
+                    "machine",
+                    "os",
+                    "arch",
+                    "cpu",
+                    "num_cpu",
+                    "ram",
+                )
+            }
             for benchmark, raw_result in data.get("results", {}).items():
                 entry = result_entry(raw_result, result_columns)
                 for row in result_rows(benchmark, entry):
@@ -325,10 +355,25 @@ def collect_rows(results_dirs, benchmark_filter=None, metric_filter="all"):
                             "date_label": format_date(date),
                             "env": env_name,
                             "python": python,
+                            **machine,
                         }
                     )
                     rows.append(row)
     return sort_rows(rows)
+
+
+def limit_recent_commits(rows, max_commits=None):
+    """Return rows for only the newest requested commits."""
+    if max_commits is None:
+        return rows
+    ordered_commits = sorted(
+        {(row["date"], row["commit_hash"]) for row in rows},
+        reverse=True,
+    )
+    included = {
+        commit_hash for _, commit_hash in ordered_commits[:max_commits]
+    }
+    return [row for row in rows if row["commit_hash"] in included]
 
 
 def sort_rows(rows):
@@ -441,6 +486,57 @@ def gstools_logo_markup():
     )
 
 
+def format_ram(value):
+    """Format ASV RAM bytes for the machine summary."""
+    try:
+        amount = int(value)
+    except (TypeError, ValueError):
+        return str(value)
+    return f"{amount / (1024**3):.1f} GiB"
+
+
+def machine_summary_markup(rows):
+    """Return report cards for the distinct benchmark machines."""
+    machines = {}
+    for row in rows:
+        key = tuple(
+            str(row.get(field, "-"))
+            for field in (
+                "machine",
+                "os",
+                "arch",
+                "cpu",
+                "num_cpu",
+                "ram",
+                "python",
+            )
+        )
+        machines[key] = {
+            "machine": key[0],
+            "os": key[1],
+            "arch": key[2],
+            "cpu": key[3],
+            "num_cpu": key[4],
+            "ram": format_ram(key[5]),
+            "python": key[6],
+        }
+
+    cards = []
+    for machine in machines.values():
+        title = html.escape(machine["machine"])
+        details = html.escape(
+            f'{machine["os"]} · {machine["arch"]} · {machine["cpu"]} · '
+            f'{machine["num_cpu"]} CPUs · {machine["ram"]} · '
+            f'Python {machine["python"]}'
+        )
+        cards.append(
+            '<div class="machine-card">'
+            f"<strong>{title}</strong><span>{details}</span>"
+            "</div>"
+        )
+    return "".join(cards)
+
+
 def render_html(rows):
     """Render a self-contained interactive HTML report."""
     payload = json.dumps(rows, separators=(",", ":")).replace("</", "<\\/")
@@ -529,6 +625,37 @@ p {
 }
 .lede {
   font-size: 15px;
+}
+.report-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  margin-top: 12px;
+}
+.report-links a {
+  color: var(--accent-strong);
+  font-weight: 650;
+  text-decoration: none;
+}
+.report-links a:hover {
+  text-decoration: underline;
+}
+.machine-summary {
+  display: grid;
+  gap: 8px;
+  margin: 12px 0 4px;
+}
+.machine-card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: grid;
+  gap: 2px;
+  padding: 10px 12px;
+}
+.machine-card span {
+  color: var(--muted);
+  font-size: 12px;
 }
 .controls, .panel {
   background: var(--panel);
@@ -703,9 +830,16 @@ svg {
         Cython and Rust backend results grouped side by side for selected
         two-point statistics cases, thread counts, commits, and metrics.
       </p>
+      <div class="report-links">
+        <a href="asv/">Complete native ASV history</a>
+        <a href="https://asv.readthedocs.io/" rel="noreferrer">
+          Powered by Airspeed Velocity (ASV)
+        </a>
+      </div>
     </div>
     __LOGO_MARKUP__
   </div>
+  <div class="machine-summary">__MACHINE_MARKUP__</div>
 </header>
 <main>
   <section class="controls">
@@ -1223,8 +1357,10 @@ renderAll();
 </body>
 </html>
 """
-    return html.replace("__PAYLOAD__", payload).replace(
-        "__LOGO_MARKUP__", gstools_logo_markup()
+    return (
+        html.replace("__PAYLOAD__", payload)
+        .replace("__LOGO_MARKUP__", gstools_logo_markup())
+        .replace("__MACHINE_MARKUP__", machine_summary_markup(rows))
     )
 
 
@@ -1237,6 +1373,7 @@ def main():
         benchmark_filter=args.benchmark,
         metric_filter=args.metric,
     )
+    rows = limit_recent_commits(rows, args.max_commits)
     if args.table:
         try:
             print_table(rows)
