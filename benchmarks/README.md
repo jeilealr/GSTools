@@ -43,7 +43,6 @@ deciding where optimization work should go:
   - [OpenMP ASV Configuration](#openmp-asv-configuration)
   - [Run on macOS and Linux](#run-on-macos-and-linux)
   - [Verify Parallel Backends](#verify-parallel-backends)
-  - [Automated OpenMP Benchmarking](#automated-openmp-benchmarking)
   - [Run on Windows](#run-on-windows)
   - [OpenMP Thread Rule](#openmp-thread-rule)
   - [HPC Notes](#hpc-notes)
@@ -551,7 +550,7 @@ It also uses fewer repeats than the baseline config:
 "repeat": 20
 ```
 
-That means each OpenMP benchmark case records 10 independent measurements by
+That means each OpenMP benchmark case records 20 independent measurements by
 default, while still running the benchmark code once per measurement.
 
 During ASV installation, it runs:
@@ -653,85 +652,6 @@ Build and preview the OpenMP browser report:
 asv --config asv.openmp.conf.json publish
 asv --config asv.openmp.conf.json preview
 ```
-
-### Automated OpenMP Benchmarking
-
-The GitHub Actions benchmark workflow is split into three responsibilities:
-
-- `.github/workflows/asv-benchmarks.yml` keeps the fast cross-platform smoke
-  and parallel-readiness checks.
-- `.github/workflows/asv-openmp-pr.yml` runs the full Linux OpenMP comparison
-  for benchmark-relevant pull requests. It benchmarks only the PR base and
-  head commits, uploads the custom report and native ASV site as an artifact,
-  and exposes the `OpenMP benchmark gate` required check.
-- `.github/workflows/asv-openmp-publish.yml` runs only for trusted pushes to
-  `jeilealr/GSTools:main`. It benchmarks the newly accepted commit, restores
-  prior results, and publishes the cumulative history to
-  `jeilealr/gstools-benchmarks-asv`.
-
-Both full workflows use Python 3.14, the stable ASV machine name
-`github-actions-ubuntu`, and:
-
-```text
-GSTOOLS_BENCHMARK_THREADS=1,2,4,8
-```
-
-The published benchmark repository serves:
-
-```text
-/          custom case/backend report for the latest 50 accepted commits
-/asv/      complete native ASV OpenMP history
-/results/  cumulative raw ASV result JSON
-```
-
-GitHub-hosted `ubuntu-latest` runner hardware can change. Use the machine
-metadata displayed in the custom report when interpreting long-term results.
-A stable self-hosted runner is preferable if absolute performance comparisons
-become a release requirement.
-
-Before opening a PR, compare the latest local `main` commit with the current
-branch without rerunning an arbitrary history window:
-
-```bash
-asv --config asv.openmp.conf.json machine --yes
-git rev-parse main HEAD > /tmp/gstools-asv-pr-commits.txt
-
-GSTOOLS_BENCHMARK_THREADS=1,2,4,8 \
-asv --config asv.openmp.conf.json run \
-  HASHFILE:/tmp/gstools-asv-pr-commits.txt \
-  --interleave-rounds \
-  --bench benchmark_two_point_statistics \
-  --show-stderr
-```
-
-#### Benchmark Publishing Repository Setup
-
-Create `jeilealr/gstools-benchmarks-asv` as a public repository with an initial
-`README.md`. In that repository, open **Settings > Pages**, select **Deploy
-from a branch**, choose `main` and `/(root)`, then save.
-
-Create the restricted publishing credential from the GitHub profile settings:
-
-1. Open **Settings > Developer settings > Personal access tokens >
-   Fine-grained tokens**.
-2. Generate a token named `GSTools benchmark publisher` with a 90-day
-   expiration.
-3. Select resource owner `jeilealr` and grant access only to
-   `gstools-benchmarks-asv`.
-4. Set repository permission **Contents** to **Read and write**. Leave every
-   other configurable permission at **No access**.
-5. Copy the token once. Never put it in source files, chat, or workflow logs.
-6. In `jeilealr/GSTools`, open **Settings > Secrets and variables > Actions**
-   and create the repository secret `BENCHMARKS_REPO_TOKEN`.
-
-The secret is used only by the trusted publishing workflow. Pull-request
-workflows, including workflows from forks, never receive it. Rotate the token
-before its 90-day expiration.
-
-After the PR workflow has run once, protect `main` in `jeilealr/GSTools` and
-require the `OpenMP benchmark gate` status check. Require the gate rather than
-the conditional `Full OpenMP comparison on Linux` job so pull requests without
-benchmark-relevant changes can still merge.
 
 ### Run on Windows
 

@@ -15,7 +15,7 @@ from pathlib import Path
 
 try:
     import tomllib
-except ModuleNotFoundError:  # pragma: no cover - used on Python 3.8-3.10
+except ModuleNotFoundError:  # pragma: no cover
     import tomli as tomllib
 
 

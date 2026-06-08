@@ -181,13 +181,13 @@ def run_case(
     suite_cls = load_suite_class(class_name, threads)
     suite = suite_cls()
     data = suite.setup_cache()
-    method_name = f"{method_base_name}_{case}_{threads}"
-    method = getattr(suite, method_name)
+    threads_int = int(threads[len("threads_"):])
+    method = getattr(suite, method_base_name)
 
     profiler = cProfile.Profile()
     profiler.enable()
     for _ in range(repeat):
-        method(data, backend)
+        method(data, backend, case, threads_int)
     profiler.disable()
 
     print(f"\n== {name} [{backend}, {threads}] ==")

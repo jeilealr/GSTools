@@ -310,7 +310,7 @@ def collect_rows(results_dirs, benchmark_filter=None, metric_filter="all"):
     for results_dir in results_dirs:
         for path in iter_result_files(results_dir):
             data = load_json(path)
-            if not data:
+            if data is None:
                 continue
             result_columns = data.get("result_columns", [])
             commit_hash = data.get("commit_hash", "unknown")
@@ -541,7 +541,7 @@ def machine_summary_markup(rows):
 def render_html(rows):
     """Render a self-contained interactive HTML report."""
     payload = json.dumps(rows, separators=(",", ":")).replace("</", "<\\/")
-    html = """<!doctype html>
+    template = """<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -1359,7 +1359,7 @@ renderAll();
 </html>
 """
     return (
-        html.replace("__PAYLOAD__", payload)
+        template.replace("__PAYLOAD__", payload)
         .replace("__LOGO_MARKUP__", gstools_logo_markup())
         .replace("__MACHINE_MARKUP__", machine_summary_markup(rows))
     )

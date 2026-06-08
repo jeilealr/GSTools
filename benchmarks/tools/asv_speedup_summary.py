@@ -130,25 +130,6 @@ def flatten_values(values):
     yield values
 
 
-def backend_values(entry):
-    """Return backend values from a normalized ASV result entry."""
-    result = entry.get("result")
-    params = entry.get("params") or []
-    if not isinstance(result, list) or not params:
-        return {}
-
-    values = {}
-    combinations = itertools.product(*params)
-    for combo, value in zip(combinations, flatten_values(result)):
-        if not is_number(value):
-            continue
-        combo_values = [str(item).strip("'\"") for item in combo]
-        for backend in BACKENDS:
-            if backend in combo_values:
-                values[backend] = float(value)
-    return values
-
-
 def parse_benchmark_name(name):
     """Split a benchmark name into benchmark, case, and thread labels."""
     short_name = short_benchmark_name(name)
@@ -222,7 +203,7 @@ def collect_speedups(results_dirs, include_all, include_legacy):
     for results_dir in results_dirs:
         for path in iter_result_files(results_dir):
             data = load_json(path)
-            if not data:
+            if data is None:
                 continue
             result_columns = data.get("result_columns", [])
             commit = data.get("commit_hash", "unknown")[:8]

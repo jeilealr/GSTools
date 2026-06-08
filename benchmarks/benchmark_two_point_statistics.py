@@ -124,13 +124,6 @@ def _use_core(backend):
     raise ValueError(f"Unknown backend: {backend}")
 
 
-def _num_threads(thread_count):
-    """Convert a thread count value to an integer."""
-    if isinstance(thread_count, int):
-        return thread_count
-    raise ValueError(f"Unknown thread count: {thread_count}")
-
-
 def _random_points(seed, count, scale):
     """Create a deterministic two-dimensional point cloud."""
     rng = np.random.RandomState(seed)
