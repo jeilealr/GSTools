@@ -100,9 +100,7 @@ jobs:
 
       - name: Configure stable ASV machine name
         run: |
-          asv --config "$ASV_CONFIG" machine \
-            --machine "$MACHINE_NAME" \
-            --yes
+          python benchmarks/tools/configure_asv_machine.py "$MACHINE_NAME"
 
       - name: Run full OpenMP comparison
         env:

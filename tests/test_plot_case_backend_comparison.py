@@ -50,24 +50,25 @@ class TestPlotCaseBackendComparison(unittest.TestCase):
     """Test ASV result normalization and report rendering."""
 
     def test_collect_rows_includes_machine_metadata(self):
-        """Machine parameters are retained for the generated report."""
+        """Adjacent ASV machine metadata is retained for the report."""
         with tempfile.TemporaryDirectory() as temp_dir:
             results_dir = Path(temp_dir)
             machine_dir = results_dir / "github-actions-ubuntu"
             machine_dir.mkdir()
+            machine = {
+                "machine": "github-actions-ubuntu",
+                "os": "Ubuntu 24.04",
+                "arch": "x86_64",
+                "cpu": "Test CPU",
+                "num_cpu": "4",
+                "ram": str(8 * 1024**3),
+            }
             result = {
                 "commit_hash": "a" * 40,
                 "date": 1_700_000_000_000,
                 "env_name": "conda-py3.14",
                 "python": "3.14",
-                "params": {
-                    "machine": "github-actions-ubuntu",
-                    "os": "Ubuntu 24.04",
-                    "arch": "x86_64",
-                    "cpu": "Test CPU",
-                    "num_cpu": "4",
-                    "ram": str(8 * 1024**3),
-                },
+                "params": {"machine": "github-actions-ubuntu"},
                 "results": {
                     (
                         "benchmark_two_point_statistics.KrigingBenchmarks."
@@ -78,6 +79,10 @@ class TestPlotCaseBackendComparison(unittest.TestCase):
                     }
                 },
             }
+            (machine_dir / "machine.json").write_text(
+                json.dumps(machine),
+                encoding="utf8",
+            )
             (machine_dir / "result.json").write_text(
                 json.dumps(result),
                 encoding="utf8",

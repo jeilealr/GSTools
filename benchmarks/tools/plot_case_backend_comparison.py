@@ -149,7 +149,7 @@ def load_json(path):
     try:
         with path.open(encoding="utf8") as handle:
             return json.load(handle)
-    except json.JSONDecodeError:
+    except (OSError, json.JSONDecodeError):
         return None
 
 
@@ -319,8 +319,9 @@ def collect_rows(results_dirs, benchmark_filter=None, metric_filter="all"):
             env_name = data.get("env_name", path.stem)
             params = data.get("params", {})
             python = data.get("python") or params.get("python", "-")
+            machine_data = load_json(path.parent / "machine.json") or {}
             machine = {
-                key: params.get(key, "-")
+                key: machine_data.get(key, params.get(key, "-"))
                 for key in (
                     "machine",
                     "os",
