@@ -73,7 +73,9 @@ jobs:
           conda-remove-defaults: true
 
       - name: Install ASV driver
-        run: python -m pip install --upgrade pip asv
+        run: |
+          conda install -n gstools-asv-driver -y -c conda-forge pip
+          python -m pip install --upgrade pip asv
 
       - name: Configure PR commits and ASV branches
         env:
