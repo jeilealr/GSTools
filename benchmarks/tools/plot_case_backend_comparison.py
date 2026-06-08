@@ -223,7 +223,7 @@ def parse_benchmark_name(name):
             return prefix, None, threads
         marker = f"{prefix}_"
         if short_name.startswith(marker):
-            return prefix, short_name.removeprefix(marker), threads
+            return prefix, short_name[len(marker) :], threads
 
     return short_name, None, threads
 
@@ -398,7 +398,7 @@ def thread_number(label):
     """Return the numeric part of a ``threads_N`` label."""
     if isinstance(label, str) and label.startswith(THREAD_PREFIX):
         try:
-            return int(label.removeprefix(THREAD_PREFIX))
+            return int(label[len(THREAD_PREFIX) :])
         except ValueError:
             return -1
     return -1
