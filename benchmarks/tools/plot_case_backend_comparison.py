@@ -488,11 +488,18 @@ def gstools_logo_markup():
 
 
 def format_ram(value):
-    """Format ASV RAM bytes for the machine summary."""
+    """Format ASV RAM for the machine summary.
+
+    ASV 0.6+ stores RAM in bytes; older versions stored the raw /proc/meminfo
+    kB value.  Any amount below 1 GiB expressed as bytes is implausible for a
+    benchmark machine, so treat it as kB and convert.
+    """
     try:
         amount = int(value)
     except (TypeError, ValueError):
         return str(value)
+    if amount < 1024 ** 3:
+        amount *= 1024
     return f"{amount / (1024**3):.1f} GiB"
 
 
