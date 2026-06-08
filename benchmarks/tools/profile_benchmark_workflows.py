@@ -151,7 +151,7 @@ def iter_selected(case):
 
 def load_suite_class(class_name, threads):
     """Import a benchmark class after selecting generated thread labels."""
-    os.environ["GSTOOLS_BENCHMARK_THREADS"] = threads.removeprefix("threads_")
+    os.environ["GSTOOLS_BENCHMARK_THREADS"] = threads[len("threads_") :]
     try:
         from benchmarks import benchmark_two_point_statistics
     except ModuleNotFoundError as err:

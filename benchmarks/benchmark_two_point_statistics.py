@@ -64,7 +64,7 @@ def _configured_thread_counts():
         if not item:
             continue
         if item.startswith("threads_"):
-            value = item.removeprefix("threads_")
+            value = item[len("threads_") :]
         else:
             value = item
         thread_counts.append(int(value))
