@@ -7,7 +7,6 @@ on:
 
 permissions:
   contents: read
-  pull-requests: write
 
 concurrency:
   group: openmp-pr-${{ github.event.pull_request.number }}
@@ -209,22 +208,32 @@ jobs:
               )
           PY
 
-      - name: Post benchmark results as PR comment
-        if: always() && github.event.pull_request.head.repo.full_name == github.repository
+      - name: Save PR context for comment workflow
+        if: always()
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          ARTIFACT_URL: ${{ steps.upload.outputs.artifact-url }}
         run: |
-          EXISTING_ID=$(gh api \
-            "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" \
-            --jq '.[] | select(.body | startswith("<!-- gstools-openmp-benchmark -->")) | .id' \
-            | head -1)
-          if [ -n "$EXISTING_ID" ]; then
-            gh api "repos/$GITHUB_REPOSITORY/issues/comments/$EXISTING_ID" \
-              -X PATCH -F body=@/tmp/benchmark_comment.md
-          else
-            gh pr comment "$PR_NUMBER" --body-file /tmp/benchmark_comment.md
-          fi
+          mkdir -p .asv-openmp/pr-context
+          printf '%s' "$PR_NUMBER"    > .asv-openmp/pr-context/pr_number.txt
+          printf '%s' "$BASE_SHA"     > .asv-openmp/pr-context/base_sha.txt
+          printf '%s' "$HEAD_SHA"     > .asv-openmp/pr-context/head_sha.txt
+          printf '%s' "$ARTIFACT_URL" > .asv-openmp/pr-context/artifact_url.txt
+          cp .asv-openmp/artifact/comparison.txt \
+             .asv-openmp/pr-context/comparison.txt 2>/dev/null \
+            || printf '_Comparison output not available._' \
+                 > .asv-openmp/pr-context/comparison.txt
+
+      - name: Upload PR context for comment workflow
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: benchmark-pr-context
+          path: .asv-openmp/pr-context
+          if-no-files-found: warn
+          retention-days: 1
 
   required_gate:
     name: OpenMP benchmark gate
