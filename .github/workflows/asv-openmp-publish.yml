@@ -88,7 +88,7 @@ jobs:
             --machine "$MACHINE_NAME" \
             --skip-existing-successful \
             --no-pull \
-            --bench benchmark_two_point_statistics \
+            --bench "^benchmark_" \
             --show-stderr
 
       - name: Build published reports and preserve raw results

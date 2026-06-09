@@ -111,7 +111,7 @@ jobs:
             --machine "$MACHINE_NAME" \
             --interleave-rounds \
             --no-pull \
-            --bench benchmark_two_point_statistics \
+            --bench "^benchmark_" \
             --show-stderr
 
       - name: Write informational ASV comparison

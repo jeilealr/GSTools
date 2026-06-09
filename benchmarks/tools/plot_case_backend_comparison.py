@@ -196,7 +196,7 @@ def family_from_name(name):
     short_name = short_benchmark_name(name)
     if "variogram" in short_name:
         return "variogram"
-    if "krige" in short_name:
+    if "krig" in short_name:
         return "krige"
     if "field" in short_name:
         return "field"
