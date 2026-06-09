@@ -96,7 +96,6 @@ jobs:
           rm -rf benchmark-site/asv benchmark-site/results
           python benchmarks/tools/plot_case_backend_comparison.py \
             --results-dir .asv-openmp/results \
-            --max-commits 50 \
             --output benchmark-site/index.html
           asv --config "$ASV_CONFIG" publish \
             --no-pull \

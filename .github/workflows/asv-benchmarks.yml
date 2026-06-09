@@ -1,4 +1,4 @@
-name: Benchmark Availability Checks
+name: Benchmark Checks
 
 on:
   # This workflow checks whether the benchmark code can be installed and

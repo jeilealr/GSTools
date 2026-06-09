@@ -1,4 +1,4 @@
-name: OpenMP PR Benchmark
+name: Benchmarking
 
 on:
   pull_request:
@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: write
 
 concurrency:
   group: openmp-pr-${{ github.event.pull_request.number }}
@@ -125,6 +126,7 @@ jobs:
             "$BASE_SHA" \
             "$HEAD_SHA" \
             --machine "$MACHINE_NAME" \
+            --factor 1.05 \
             --split \
             | tee .asv-openmp/artifact/comparison.txt
           compare_status="${PIPESTATUS[0]}"
@@ -136,7 +138,6 @@ jobs:
         run: |
           python benchmarks/tools/plot_case_backend_comparison.py \
             --results-dir .asv-openmp/results \
-            --max-commits 50 \
             --output .asv-openmp/artifact/index.html
           asv --config "$ASV_CONFIG" publish \
             --no-pull \
@@ -144,6 +145,7 @@ jobs:
           cp -R .asv-openmp/results .asv-openmp/artifact/results
 
       - name: Upload OpenMP benchmark reports
+        id: upload
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -151,6 +153,78 @@ jobs:
           path: .asv-openmp/artifact
           if-no-files-found: warn
           retention-days: 30
+
+      - name: Write benchmark step summary
+        if: always()
+        env:
+          ARTIFACT_URL: ${{ steps.upload.outputs.artifact-url }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+
+          base = os.environ["BASE_SHA"][:8]
+          head = os.environ["HEAD_SHA"][:8]
+          artifact_url = os.environ.get("ARTIFACT_URL", "")
+          report_link = (
+              f" · [Full HTML Report ↗]({artifact_url})" if artifact_url else ""
+          )
+
+          try:
+              comparison = Path(".asv-openmp/artifact/comparison.txt").read_text()
+          except FileNotFoundError:
+              comparison = "_Comparison output not available._"
+
+          lines = comparison.splitlines()
+          regressed = sum(
+              1 for l in lines if l.startswith("+") and l[1:2] == " "
+          )
+          improved = sum(
+              1 for l in lines if l.startswith("-") and l[1:2] == " "
+          )
+          if regressed:
+              badge = f"⚠️ {regressed} benchmark(s) regressed"
+          elif improved:
+              badge = f"✅ {improved} benchmark(s) improved, none regressed"
+          else:
+              badge = "✅ No significant changes detected"
+
+          body = (
+              "<!-- gstools-openmp-benchmark -->\n"
+              "## OpenMP Benchmark Results\n\n"
+              f"**Base:** `{base}` → **Head:** `{head}`{report_link}\n\n"
+              f"{badge}\n\n"
+              "<details>\n<summary>Full ASV comparison</summary>\n\n"
+              f"```\n{comparison}\n```\n\n"
+              "</details>\n"
+          )
+          Path("/tmp/benchmark_comment.md").write_text(body)
+
+          summary_env = os.environ.get("GITHUB_STEP_SUMMARY", "")
+          if summary_env:
+              Path(summary_env).write_text(
+                  body.replace("<!-- gstools-openmp-benchmark -->\n", "")
+              )
+          PY
+
+      - name: Post benchmark results as PR comment
+        if: always() && github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          EXISTING_ID=$(gh api \
+            "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" \
+            --jq '.[] | select(.body | startswith("<!-- gstools-openmp-benchmark -->")) | .id' \
+            | head -1)
+          if [ -n "$EXISTING_ID" ]; then
+            gh api "repos/$GITHUB_REPOSITORY/issues/comments/$EXISTING_ID" \
+              -X PATCH -F body=@/tmp/benchmark_comment.md
+          else
+            gh pr comment "$PR_NUMBER" --body-file /tmp/benchmark_comment.md
+          fi
 
   required_gate:
     name: OpenMP benchmark gate
