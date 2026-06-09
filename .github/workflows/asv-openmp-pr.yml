@@ -1,4 +1,4 @@
-name: OpenMP PR Benchmark
+name: Benchmarking
 
 on:
   pull_request:
