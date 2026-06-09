@@ -126,6 +126,7 @@ jobs:
             "$BASE_SHA" \
             "$HEAD_SHA" \
             --machine "$MACHINE_NAME" \
+            --factor 1.05 \
             --split \
             | tee .asv-openmp/artifact/comparison.txt
           compare_status="${PIPESTATUS[0]}"
@@ -153,11 +154,9 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
 
-      - name: Post benchmark results as PR comment
+      - name: Write benchmark step summary
         if: always()
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
           ARTIFACT_URL: ${{ steps.upload.outputs.artifact-url }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
@@ -210,6 +209,12 @@ jobs:
               )
           PY
 
+      - name: Post benchmark results as PR comment
+        if: always() && github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
           EXISTING_ID=$(gh api \
             "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" \
             --jq '.[] | select(.body | startswith("<!-- gstools-openmp-benchmark -->")) | .id' \

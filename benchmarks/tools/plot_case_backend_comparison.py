@@ -865,6 +865,26 @@ svg {
   border-color: var(--accent);
   color: var(--accent-strong);
 }
+.toggle-btn {
+  background: none;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  padding: 2px 10px;
+  text-transform: uppercase;
+}
+.toggle-btn.active {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent-strong);
+}
+.toggle-btn + .toggle-btn {
+  margin-left: 4px;
+}
 @media (max-width: 700px) {
   header, main {
     padding: 18px;
@@ -923,10 +943,6 @@ svg {
 	      <legend>View</legend>
 	      <div id="viewMode" class="checkbox-list"></div>
 	    </fieldset>
-	    <fieldset class="filter-control">
-	      <legend>Reference</legend>
-	      <div id="referenceMode" class="checkbox-list"></div>
-	    </fieldset>
 	    <fieldset class="filter-control wide-control">
 	      <legend>Case</legend>
 	      <div id="case" class="checkbox-list"></div>
@@ -935,20 +951,16 @@ svg {
 	      <legend>Threads</legend>
 	      <div id="threads" class="checkbox-list"></div>
 	    </fieldset>
-	    <fieldset class="filter-control wide-control" id="commitSection">
-	      <legend>Commit</legend>
+	    <fieldset class="filter-control wide-control">
+	      <legend>
+	        <button id="modeCommit" class="toggle-btn active" onclick="setReferenceMode('commit')">Commits</button>
+	        <button id="modeTag" class="toggle-btn" onclick="setReferenceMode('tag')">Tags</button>
+	      </legend>
 	      <select id="commit" class="multi-select" multiple size="5"></select>
+	      <select id="tag" class="multi-select" multiple size="5" style="display:none"></select>
 	      <div class="select-actions">
-	        <button class="select-action-btn" onclick="selectAllOptions('commit')">All</button>
-	        <button class="select-action-btn" onclick="clearAllOptions('commit')">None</button>
-	      </div>
-	    </fieldset>
-	    <fieldset class="filter-control wide-control" id="tagSection" style="display:none">
-	      <legend>Tag</legend>
-	      <select id="tag" class="multi-select" multiple size="5"></select>
-	      <div class="select-actions">
-	        <button class="select-action-btn" onclick="selectAllOptions('tag')">All</button>
-	        <button class="select-action-btn" onclick="clearAllOptions('tag')">None</button>
+	        <button class="select-action-btn" onclick="selectAllOptions(referenceModeValue())">All</button>
+	        <button class="select-action-btn" onclick="clearAllOptions(referenceModeValue())">None</button>
 	      </div>
 	    </fieldset>
 	    <fieldset class="filter-control">
@@ -981,10 +993,7 @@ const modeLabels = {
   bar: "Bar plot",
   line: "Line plot"
 };
-const refLabels = {
-  commits: "By Commits",
-  tags: "By Tags"
-};
+let xMode = "commit";
 const metricUnits = {
   time: {label: "time", unit: "ms", factor: 1000},
   memory: {label: "peak memory", unit: "MiB", factor: 1 / (1024 * 1024)}
@@ -1088,7 +1097,17 @@ function clearAllOptions(id) {
 }
 
 function referenceModeValue() {
-  return checkedValues("referenceMode")[0] || "commits";
+  return xMode;
+}
+
+function setReferenceMode(mode) {
+  xMode = mode;
+  document.getElementById("modeCommit").classList.toggle("active", mode === "commit");
+  document.getElementById("modeTag").classList.toggle("active", mode === "tag");
+  document.getElementById("commit").style.display = mode === "tag" ? "none" : "";
+  document.getElementById("tag").style.display = mode === "tag" ? "" : "none";
+  refreshOptions();
+  renderAll();
 }
 
 function setCheckboxes(
@@ -1172,7 +1191,7 @@ function filteredRows() {
   const cases = checkedValues("case");
   const threads = checkedValues("threads");
   const selectedBackends = checkedValues("backend");
-  const isTagMode = referenceModeValue() === "tags";
+  const isTagMode = referenceModeValue() === "tag";
   const xFilter = isTagMode
     ? (row => row.tag && selectedOptions("tag").includes(row.tag))
     : (row => selectedOptions("commit").includes(row.commit));
@@ -1196,7 +1215,6 @@ function refreshOptions() {
     metrics: checkedValues("metric"),
     families: checkedValues("family"),
     viewModes: checkedValues("viewMode"),
-    refModes: checkedValues("referenceMode"),
     cases: checkedValues("case"),
     threads: checkedValues("threads"),
     commits: selectedOptions("commit"),
@@ -1212,10 +1230,7 @@ function refreshOptions() {
   const defaultFamily = familyOptions.includes("krige") ? "krige" : familyOptions[0];
   setCheckboxes("family", familyOptions, previousMain.families, {}, [defaultFamily]);
   setCheckboxes("viewMode", ["line", "bar"], previousMain.viewModes, modeLabels, ["line"]);
-  setCheckboxes("referenceMode", ["commits", "tags"], previousMain.refModes, refLabels, ["commits"]);
-  const isTagMode = referenceModeValue() === "tags";
-  document.getElementById("commitSection").style.display = isTagMode ? "none" : "";
-  document.getElementById("tagSection").style.display = isTagMode ? "" : "none";
+  const isTagMode = referenceModeValue() === "tag";
   const benchRows = benchmarkRows();
   const caseOptions = unique(benchRows.map(row => row.case));
   const defaultCase = caseOptions.find(value => value.includes("extra_large")) || caseOptions[0];
@@ -1282,7 +1297,7 @@ function orderedKeys(values) {
 }
 
 function barGroupKey(row) {
-  const xKey = referenceModeValue() === "tags" ? row.tag : row.commit;
+  const xKey = referenceModeValue() === "tag" ? row.tag : row.commit;
   return `${row.case}|${row.threads}|${xKey}`;
 }
 
@@ -1306,7 +1321,7 @@ function seriesLabel(key) {
 function chartSubtitle(data) {
   const cases = checkedValues("case");
   const threads = checkedValues("threads");
-  const isTagMode = referenceModeValue() === "tags";
+  const isTagMode = referenceModeValue() === "tag";
   const xValues = isTagMode ? selectedOptions("tag") : selectedOptions("commit");
   const noun = isTagMode ? "tags" : "commits";
   const selectedBackends = checkedValues("backend").map(value => labels[value] || value);
@@ -1402,7 +1417,7 @@ function renderLineChart(data) {
   const legend = document.getElementById("legend");
   const metric = data[0].metric;
   const unit = metricUnits[metric];
-  const isTagMode = referenceModeValue() === "tags";
+  const isTagMode = referenceModeValue() === "tag";
   const rowXKey = row => isTagMode ? row.tag : row.commit;
   const xKeys = isTagMode
     ? tagOrder(data.map(rowXKey))
@@ -1490,7 +1505,7 @@ function renderAll() {
   renderChart();
 }
 
-for (const id of ["metric", "family", "viewMode", "referenceMode"]) {
+for (const id of ["metric", "family", "viewMode"]) {
   document.getElementById(id).addEventListener("change", event => {
     enforceSingleChoice(id, event);
     refreshOptions();
