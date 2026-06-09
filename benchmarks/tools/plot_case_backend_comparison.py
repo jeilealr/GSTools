@@ -28,6 +28,7 @@ import json
 import math
 import os
 import re
+import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -142,6 +143,31 @@ def iter_result_files(results_dir):
         if path.name in {"benchmarks.json", "machine.json"}:
             continue
         yield path
+
+
+def get_git_tags():
+    """Return a mapping from full commit hash to tag name, version-sorted."""
+    try:
+        tag_out = subprocess.run(
+            ["git", "tag", "-l", "--sort=version:refname"],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        if not tag_out:
+            return {}
+        result = {}
+        for tag in tag_out.splitlines():
+            tag = tag.strip()
+            if not tag:
+                continue
+            rev = subprocess.run(
+                ["git", "rev-parse", f"{tag}^{{}}"],
+                capture_output=True, text=True,
+            )
+            if rev.returncode == 0:
+                result[rev.stdout.strip()] = tag
+        return result
+    except (subprocess.SubprocessError, FileNotFoundError):
+        return {}
 
 
 def load_json(path):
@@ -301,7 +327,7 @@ def result_rows(benchmark, entry):
     return rows
 
 
-def collect_rows(results_dirs, benchmark_filter=None, metric_filter="all"):
+def collect_rows(results_dirs, benchmark_filter=None, metric_filter="all", tag_map=None):
     """Collect normalized benchmark rows from ASV result folders."""
     rows = []
     benchmark_filter = (
@@ -352,6 +378,7 @@ def collect_rows(results_dirs, benchmark_filter=None, metric_filter="all"):
                             "source": str(results_dir),
                             "commit": commit,
                             "commit_hash": commit_hash,
+                            "tag": (tag_map or {}).get(commit_hash, ""),
                             "date": date,
                             "date_label": format_date(date),
                             "env": env_name,
@@ -805,6 +832,39 @@ svg {
   height: 3px;
   width: 20px;
 }
+.multi-select {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  box-sizing: border-box;
+  color: var(--text);
+  font: 13px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  min-height: 80px;
+  padding: 3px;
+  width: 100%;
+}
+.multi-select option {
+  border-radius: 3px;
+  padding: 3px 6px;
+}
+.select-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 5px;
+}
+.select-action-btn {
+  background: none;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 11px;
+  padding: 2px 8px;
+}
+.select-action-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent-strong);
+}
 @media (max-width: 700px) {
   header, main {
     padding: 18px;
@@ -863,6 +923,10 @@ svg {
 	      <legend>View</legend>
 	      <div id="viewMode" class="checkbox-list"></div>
 	    </fieldset>
+	    <fieldset class="filter-control">
+	      <legend>Reference</legend>
+	      <div id="referenceMode" class="checkbox-list"></div>
+	    </fieldset>
 	    <fieldset class="filter-control wide-control">
 	      <legend>Case</legend>
 	      <div id="case" class="checkbox-list"></div>
@@ -871,9 +935,21 @@ svg {
 	      <legend>Threads</legend>
 	      <div id="threads" class="checkbox-list"></div>
 	    </fieldset>
-	    <fieldset class="filter-control wide-control">
+	    <fieldset class="filter-control wide-control" id="commitSection">
 	      <legend>Commit</legend>
-	      <div id="commit" class="checkbox-list"></div>
+	      <select id="commit" class="multi-select" multiple size="5"></select>
+	      <div class="select-actions">
+	        <button class="select-action-btn" onclick="selectAllOptions('commit')">All</button>
+	        <button class="select-action-btn" onclick="clearAllOptions('commit')">None</button>
+	      </div>
+	    </fieldset>
+	    <fieldset class="filter-control wide-control" id="tagSection" style="display:none">
+	      <legend>Tag</legend>
+	      <select id="tag" class="multi-select" multiple size="5"></select>
+	      <div class="select-actions">
+	        <button class="select-action-btn" onclick="selectAllOptions('tag')">All</button>
+	        <button class="select-action-btn" onclick="clearAllOptions('tag')">None</button>
+	      </div>
 	    </fieldset>
 	    <fieldset class="filter-control">
 	      <legend>Backend</legend>
@@ -905,6 +981,10 @@ const modeLabels = {
   bar: "Bar plot",
   line: "Line plot"
 };
+const refLabels = {
+  commits: "By Commits",
+  tags: "By Tags"
+};
 const metricUnits = {
   time: {label: "time", unit: "ms", factor: 1000},
   memory: {label: "peak memory", unit: "MiB", factor: 1 / (1024 * 1024)}
@@ -933,6 +1013,10 @@ function optionText(kind, value) {
     const row = rows.find(item => item.commit === value);
     return row ? `${value} (${row.date_label})` : value;
   }
+  if (kind === "tag") {
+    const row = rows.find(item => item.tag === value);
+    return row ? `${value} — ${row.date_label}` : value;
+  }
   return value;
 }
 
@@ -947,10 +1031,64 @@ function commitOrder(values) {
   });
 }
 
+function tagOrder(values) {
+  return Array.from(new Set(values)).sort((a, b) => {
+    const ra = rows.find(r => r.tag === a);
+    const rb = rows.find(r => r.tag === b);
+    const da = ra ? ra.date : 0;
+    const db = rb ? rb.date : 0;
+    if (da !== db) return da - db;
+    return String(a).localeCompare(String(b));
+  });
+}
+
 function checkedValues(id) {
   return Array.from(
     document.querySelectorAll(`#${id} input[type="checkbox"]:checked`)
   ).map(input => input.value);
+}
+
+function selectedOptions(id) {
+  const el = document.getElementById(id);
+  if (!el) return [];
+  if (el.tagName === "SELECT") {
+    return Array.from(el.selectedOptions).map(opt => opt.value);
+  }
+  return checkedValues(id);
+}
+
+function setSelectOptions(id, values, previousValues = [], textByValue = {}, defaultValues = null) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  const retained = values.filter(v => previousValues.includes(v));
+  const defaults = defaultValues === null ? values : defaultValues;
+  const selected = new Set(retained.length ? retained : defaults.filter(v => values.includes(v)));
+  if (!selected.size && values.length) selected.add(values[0]);
+  el.innerHTML = values.map(value => {
+    const sel = selected.has(value) ? " selected" : "";
+    const text = textByValue[value] || optionText(id, value);
+    return `<option value="${escapeHtml(value)}"${sel}>${escapeHtml(text)}</option>`;
+  }).join("");
+}
+
+function selectAllOptions(id) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  for (const opt of el.options) opt.selected = true;
+  refreshOptions();
+  renderAll();
+}
+
+function clearAllOptions(id) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  for (const opt of el.options) opt.selected = false;
+  refreshOptions();
+  renderAll();
+}
+
+function referenceModeValue() {
+  return checkedValues("referenceMode")[0] || "commits";
 }
 
 function setCheckboxes(
@@ -1033,15 +1171,18 @@ function filteredRows() {
   const benchmark = selectedBenchmark();
   const cases = checkedValues("case");
   const threads = checkedValues("threads");
-  const commits = checkedValues("commit");
   const selectedBackends = checkedValues("backend");
+  const isTagMode = referenceModeValue() === "tags";
+  const xFilter = isTagMode
+    ? (row => row.tag && selectedOptions("tag").includes(row.tag))
+    : (row => selectedOptions("commit").includes(row.commit));
   return rows.filter(row =>
     (!metric || row.metric === metric) &&
     (!family || row.family === family) &&
     (!benchmark || row.benchmark === benchmark) &&
     cases.includes(row.case) &&
     threads.includes(row.threads) &&
-    commits.includes(row.commit) &&
+    xFilter(row) &&
     selectedBackends.includes(row.backend)
   );
 }
@@ -1055,9 +1196,11 @@ function refreshOptions() {
     metrics: checkedValues("metric"),
     families: checkedValues("family"),
     viewModes: checkedValues("viewMode"),
+    refModes: checkedValues("referenceMode"),
     cases: checkedValues("case"),
     threads: checkedValues("threads"),
-    commits: checkedValues("commit"),
+    commits: selectedOptions("commit"),
+    tags: selectedOptions("tag"),
     backends: checkedValues("backend")
   };
   const metricOptions = unique(rows.map(row => row.metric));
@@ -1067,14 +1210,12 @@ function refreshOptions() {
     .filter(row => row.metric === metricValue())
     .map(row => row.family));
   const defaultFamily = familyOptions.includes("krige") ? "krige" : familyOptions[0];
-  setCheckboxes(
-    "family",
-    familyOptions,
-    previousMain.families,
-    {},
-    [defaultFamily]
-  );
+  setCheckboxes("family", familyOptions, previousMain.families, {}, [defaultFamily]);
   setCheckboxes("viewMode", ["line", "bar"], previousMain.viewModes, modeLabels, ["line"]);
+  setCheckboxes("referenceMode", ["commits", "tags"], previousMain.refModes, refLabels, ["commits"]);
+  const isTagMode = referenceModeValue() === "tags";
+  document.getElementById("commitSection").style.display = isTagMode ? "none" : "";
+  document.getElementById("tagSection").style.display = isTagMode ? "" : "none";
   const benchRows = benchmarkRows();
   const caseOptions = unique(benchRows.map(row => row.case));
   const defaultCase = caseOptions.find(value => value.includes("extra_large")) || caseOptions[0];
@@ -1086,24 +1227,26 @@ function refreshOptions() {
   const defaultThread = threadOptions.includes("threads_1") ? "threads_1" : threadOptions[0];
   setCheckboxes("threads", threadOptions, previousMain.threads, {}, [defaultThread]);
   const selectedThreads = checkedValues("threads");
-  const commitOptions = commitOrder(benchRows
-    .filter(row => selectedCases.includes(row.case) && selectedThreads.includes(row.threads))
-    .map(row => row.commit));
-  setCheckboxes("commit", commitOptions, previousMain.commits, {}, [lastValue(commitOptions)]);
-  const selectedCommits = checkedValues("commit");
-  const backendOptions = backends.filter(backend => benchRows.some(row =>
-    row.backend === backend &&
-    selectedCases.includes(row.case) &&
-    selectedThreads.includes(row.threads) &&
-    selectedCommits.includes(row.commit)
-  ));
-  setCheckboxes(
-    "backend",
-    backendOptions,
-    previousMain.backends,
-    labels,
-    backendOptions
+  const baseRows = benchRows.filter(row =>
+    selectedCases.includes(row.case) && selectedThreads.includes(row.threads)
   );
+  if (isTagMode) {
+    const tagOptions = tagOrder(baseRows.filter(row => row.tag).map(row => row.tag));
+    setSelectOptions("tag", tagOptions, previousMain.tags, {}, tagOptions);
+    const selectedTags = selectedOptions("tag");
+    const backendOptions = backends.filter(backend => baseRows.some(row =>
+      row.backend === backend && row.tag && selectedTags.includes(row.tag)
+    ));
+    setCheckboxes("backend", backendOptions, previousMain.backends, labels, backendOptions);
+  } else {
+    const commitOptions = commitOrder(baseRows.map(row => row.commit));
+    setSelectOptions("commit", commitOptions, previousMain.commits, {}, [lastValue(commitOptions)]);
+    const selectedCommits = selectedOptions("commit");
+    const backendOptions = backends.filter(backend => baseRows.some(row =>
+      row.backend === backend && selectedCommits.includes(row.commit)
+    ));
+    setCheckboxes("backend", backendOptions, previousMain.backends, labels, backendOptions);
+  }
   const benchmark = selectedBenchmark();
   const mode = viewModeValue() === "line" ? "Line plot" : "Bar plot";
   document.getElementById("chart-title").textContent =
@@ -1139,7 +1282,8 @@ function orderedKeys(values) {
 }
 
 function barGroupKey(row) {
-  return `${row.case}|${row.threads}|${row.commit}`;
+  const xKey = referenceModeValue() === "tags" ? row.tag : row.commit;
+  return `${row.case}|${row.threads}|${xKey}`;
 }
 
 function barGroupLabel(key, showThread, showCommit) {
@@ -1162,13 +1306,15 @@ function seriesLabel(key) {
 function chartSubtitle(data) {
   const cases = checkedValues("case");
   const threads = checkedValues("threads");
-  const commits = checkedValues("commit");
+  const isTagMode = referenceModeValue() === "tags";
+  const xValues = isTagMode ? selectedOptions("tag") : selectedOptions("commit");
+  const noun = isTagMode ? "tags" : "commits";
   const selectedBackends = checkedValues("backend").map(value => labels[value] || value);
   return [
     data[0].benchmark,
     selectionSummary(cases, "cases"),
     selectionSummary(threads, "thread groups"),
-    selectionSummary(commits, "commits"),
+    selectionSummary(xValues, noun),
     selectionSummary(selectedBackends, "backends")
   ].join(" · ");
 }
@@ -1256,17 +1402,21 @@ function renderLineChart(data) {
   const legend = document.getElementById("legend");
   const metric = data[0].metric;
   const unit = metricUnits[metric];
-  const commits = commitOrder(data.map(row => row.commit));
+  const isTagMode = referenceModeValue() === "tags";
+  const rowXKey = row => isTagMode ? row.tag : row.commit;
+  const xKeys = isTagMode
+    ? tagOrder(data.map(rowXKey))
+    : commitOrder(data.map(row => row.commit));
   const values = data.map(formatValue);
   const maxValue = axisMax(values);
-  const width = plotWidthFor(chart, 960, 150, commits.length);
+  const width = plotWidthFor(chart, 960, 150, xKeys.length);
   const height = lineChartHeight(width);
   const margin = {top: 60, right: 42, bottom: 108, left: 88};
   const plotWidth = width - margin.left - margin.right;
   const plotHeight = height - margin.top - margin.bottom;
-  const x = commit => {
-    if (commits.length === 1) return margin.left + plotWidth / 2;
-    return margin.left + commits.indexOf(commit) * (plotWidth / (commits.length - 1));
+  const x = key => {
+    if (xKeys.length === 1) return margin.left + plotWidth / 2;
+    return margin.left + xKeys.indexOf(key) * (plotWidth / (xKeys.length - 1));
   };
   const y = value => margin.top + plotHeight - (value / maxValue) * plotHeight;
   const groups = new Map();
@@ -1285,10 +1435,10 @@ function renderLineChart(data) {
     svg += `<line x1="${margin.left}" x2="${width - margin.right}" y1="${yy}" y2="${yy}" class="grid" />`;
     svg += `<text x="${margin.left - 10}" y="${yy + 4}" text-anchor="end" class="tick">${formatNumber(value)}</text>`;
   }
-  commits.forEach(commit => {
-    const xx = x(commit);
-    const row = rows.find(item => item.commit === commit);
-    svg += `<text x="${xx}" y="${height - 56}" text-anchor="middle" class="tick" transform="rotate(-25 ${xx} ${height - 56})">${escapeHtml(commit)}</text>`;
+  xKeys.forEach(xKey => {
+    const xx = x(xKey);
+    const row = rows.find(item => rowXKey(item) === xKey);
+    svg += `<text x="${xx}" y="${height - 56}" text-anchor="middle" class="tick" transform="rotate(-25 ${xx} ${height - 56})">${escapeHtml(xKey)}</text>`;
     if (row && row.date_label !== "-") {
       svg += `<text x="${xx}" y="${height - 30}" text-anchor="middle" class="tick">${escapeHtml(row.date_label)}</text>`;
     }
@@ -1296,18 +1446,18 @@ function renderLineChart(data) {
 
   Array.from(groups.entries()).forEach(([key, group], index) => {
     const color = linePalette[index % linePalette.length];
-    const byCommit = new Map(group.map(row => [row.commit, row]));
-    const points = commits
-      .filter(commit => byCommit.has(commit))
-      .map(commit => {
-        const row = byCommit.get(commit);
-        return {x: x(commit), y: y(formatValue(row)), row};
+    const byXKey = new Map(group.map(row => [rowXKey(row), row]));
+    const points = xKeys
+      .filter(xKey => byXKey.has(xKey))
+      .map(xKey => {
+        const row = byXKey.get(xKey);
+        return {x: x(xKey), y: y(formatValue(row)), row, xKey};
       });
     if (!points.length) return;
     svg += `<polyline class="line-path" stroke="${color}" points="${points.map(point => `${point.x},${point.y}`).join(" ")}"><title>${escapeHtml(seriesLabel(key))}</title></polyline>`;
     for (const point of points) {
       const value = formatValue(point.row);
-      svg += `<circle class="point" cx="${point.x}" cy="${point.y}" r="3.5" stroke="${color}"><title>${escapeHtml(seriesLabel(key))} · ${point.row.commit}: ${formatNumber(value)} ${unit.unit}</title></circle>`;
+      svg += `<circle class="point" cx="${point.x}" cy="${point.y}" r="3.5" stroke="${color}"><title>${escapeHtml(seriesLabel(key))} · ${escapeHtml(point.xKey)}: ${formatNumber(value)} ${unit.unit}</title></circle>`;
     }
   });
 
@@ -1340,19 +1490,23 @@ function renderAll() {
   renderChart();
 }
 
-for (const id of ["metric", "family", "viewMode"]) {
+for (const id of ["metric", "family", "viewMode", "referenceMode"]) {
   document.getElementById(id).addEventListener("change", event => {
     enforceSingleChoice(id, event);
     refreshOptions();
     renderAll();
   });
 }
-for (const id of ["case", "threads", "commit", "backend"]) {
+for (const id of ["case", "threads", "backend"]) {
   document.getElementById(id).addEventListener("change", event => {
     enforceAtLeastOne(id, event);
     refreshOptions();
     renderAll();
   });
+}
+for (const id of ["commit", "tag"]) {
+  const el = document.getElementById(id);
+  if (el) el.addEventListener("change", () => { refreshOptions(); renderAll(); });
 }
 let resizeTimer = null;
 window.addEventListener("resize", () => {
@@ -1376,10 +1530,12 @@ def main():
     """Run the report generator."""
     args = parse_args()
     results_dirs = existing_results_dirs(args.results_dir)
+    tag_map = get_git_tags()
     rows = collect_rows(
         results_dirs,
         benchmark_filter=args.benchmark,
         metric_filter=args.metric,
+        tag_map=tag_map,
     )
     rows = limit_recent_commits(rows, args.max_commits)
     if args.table:
