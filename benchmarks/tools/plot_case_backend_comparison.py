@@ -1020,7 +1020,9 @@ function unique(values) {
 function optionText(kind, value) {
   if (kind === "commit") {
     const row = rows.find(item => item.commit === value);
-    return row ? `${value} (${row.date_label})` : value;
+    if (!row) return value;
+    const tagPart = row.tag ? ` · ${row.tag}` : "";
+    return `${value}${tagPart} (${row.date_label})`;
   }
   if (kind === "tag") {
     const row = rows.find(item => item.tag === value);
@@ -1405,6 +1407,39 @@ function renderBarChart(data) {
 
   svg += `<line x1="${margin.left}" x2="${width - margin.right}" y1="${margin.top + plotHeight}" y2="${margin.top + plotHeight}" class="axis" />`;
   svg += `<line x1="${margin.left}" x2="${margin.left}" y1="${margin.top}" y2="${margin.top + plotHeight}" class="axis" />`;
+
+  // % change annotations when exactly 2 commits/tags are compared
+  const isTagMode = referenceModeValue() === "tag";
+  const xVals = isTagMode
+    ? tagOrder(selectedOptions("tag"))
+    : commitOrder(selectedOptions("commit"));
+  if (xVals.length === 2) {
+    const baseVals = new Map();
+    groups.forEach((groupKey, groupIndex) => {
+      const parts = groupKey.split("|");
+      const xKey = parts[2];
+      const groupX = plotLeft + groupIndex * groupStep + groupStep / 2;
+      selectedBackends.forEach((backend, backendIndex) => {
+        const row = data.find(item => barGroupKey(item) === groupKey && item.backend === backend);
+        if (!row) return;
+        const value = formatValue(row);
+        const barX = groupX - clusterWidth / 2 + backendIndex * (barWidth + barGap) + barWidth / 2;
+        const key = `${parts[0]}|${parts[1]}|${backend}`;
+        if (xKey === xVals[0]) {
+          baseVals.set(key, value);
+        } else {
+          const base = baseVals.get(key);
+          if (!base) return;
+          const pct = ((value - base) / base) * 100;
+          const sign = pct >= 0 ? "+" : "";
+          const fill = Math.abs(pct) <= 5 ? "var(--muted)" : pct > 0 ? "#c0392b" : "#27ae60";
+          const annotY = Math.max(margin.top + 4, y(value) - 20);
+          svg += `<text x="${barX}" y="${annotY}" text-anchor="middle" font-size="10" fill="${fill}" font-weight="700">${sign}${pct.toFixed(1)}%</text>`;
+        }
+      });
+    });
+  }
+
   svg += `</svg>`;
   chart.innerHTML = svg;
   legend.innerHTML = selectedBackends.map(backend =>
@@ -1490,7 +1525,11 @@ function renderChart() {
   const chart = document.getElementById("chart");
   const legend = document.getElementById("legend");
   if (!data.length) {
-    chart.innerHTML = "<p>No matching ASV rows for this selection.</p>";
+    const emptyMsg = referenceModeValue() === "tag"
+      ? "No benchmarked commits carry a tag in these results. " +
+        "Tags appear once a tagged commit has been through the publish workflow."
+      : "No matching ASV rows for this selection.";
+    chart.innerHTML = `<p style="color:var(--muted);padding:12px 4px">${emptyMsg}</p>`;
     legend.innerHTML = "";
     return;
   }
