@@ -167,7 +167,7 @@ def check_rust_backend(threads):
         # field generation
         model = gs.Gaussian(dim=2, var=1.0, len_scale=3.0)
         srf = gs.SRF(model, seed=1)
-        srf(x, y)
+        srf((x, y))
 
         # kriging
         krige = gs.Krige(
@@ -175,7 +175,7 @@ def check_rust_backend(threads):
             cond_pos=(x[:6], y[:6]),
             cond_val=field[:6],
         )
-        krige(x[6:], y[6:])
+        krige((x[6:], y[6:]))
 
     finally:
         (
