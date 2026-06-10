@@ -122,14 +122,21 @@ The benchmarking setup currently consists of:
   `cProfile`, so you can see which functions take time in the current
   checkout.
 - `benchmarks/tools/check_backend_parallel_ready.py`: CI helper that verifies
-  Cython OpenMP detection and Rust backend execution with more than one
-  GSTools thread.
+  Cython OpenMP detection and Rust backend execution (variogram, field
+  generation, and kriging) with more than one GSTools thread.
+- `benchmarks/tools/configure_asv_machine.py`: writes a named ASV machine
+  profile from detected hardware; used in CI to ensure all results are stored
+  under a stable name regardless of the actual runner.
 - `benchmarks/tools/install_pyproject_extras.py`: installs selected optional
   dependencies directly from `pyproject.toml` without installing GSTools or
   its regular dependencies.
 - `benchmarks/tools/install_openmp_cython.py`: helper used by
   `asv.openmp.conf.json` to compile `gstools-cython` with OpenMP on macOS,
   Linux, and native Windows.
+- `benchmarks/tools/render_benchmark_comment.py`: CI helper used by both the
+  pull-request comparison workflow and the cross-fork comment workflow to
+  render the GitHub PR comment body; keeps badge wording and comment format
+  in sync across both code paths.
 
 ### ASV Configuration
 
@@ -187,6 +194,10 @@ Important details:
   `pyproject.toml`, keeping the `gstools_core` requirement in one place.
 - ASV still needs its own `install_command` because it creates isolated
   environments for the commits it benchmarks.
+- In CI, `configure_asv_machine.py` replaces the interactive `asv machine
+  --yes` step and writes a stable machine name (`github-actions-ubuntu`)
+  regardless of the actual runner hardware. Locally, `asv machine --yes` is
+  sufficient and `configure_asv_machine.py` is not needed.
 - Run the cProfile helper with the Python executable from ASV's isolated
   environment, for example `.asv/env/<env-id>/bin/python`. In that mode, the
   ASV environment provides dependencies while the helper imports the current
@@ -276,6 +287,20 @@ in generated benchmark method names.
 
 That is the default because the first benchmark target is a clean
 Cython-vs-Rust backend comparison without parallelism.
+
+Both constants are driven by environment variables read at import time:
+
+| Variable | Default | Example override |
+|---|---|---|
+| `GSTOOLS_BENCHMARK_THREADS` | `"1"` | `"1,2,4,8"` — run with 1, 2, 4, and 8 threads |
+| `GSTOOLS_BENCHMARK_BACKENDS` | all backends | `"rust_core"` — run Rust only |
+
+These must be set before ASV imports the benchmark module. When running
+locally with ASV, prefix the `asv run` command:
+
+```bash
+GSTOOLS_BENCHMARK_BACKENDS=rust_core asv run 'main^!' --bench benchmark_two_point_statistics
+```
 
 ### Shared Helpers
 
@@ -442,8 +467,18 @@ python benchmarks/tools/asv_speedup_summary.py --format html --output .asv/backe
 
 #### Visualization of Results
 
-You can inspect the results in the ASV browser report by building and opening
-the local website:
+Build a self-contained interactive HTML report from the result files:
+
+```bash
+python benchmarks/tools/plot_case_backend_comparison.py
+```
+
+This reads `.asv/results/` by default and writes
+`case-backend-comparison.html` next to it. Open the file in any browser. Use
+`--metric time` or `--metric memory` to show one metric, and `--benchmark` to
+filter to one family (e.g. `variogram`, `krige`, `srf`).
+
+You can also inspect results in the native ASV browser report:
 
 ```bash
 asv publish
@@ -457,10 +492,10 @@ http://127.0.0.1:8080/#/
 ```
 (or any other `http://127.0.0.1:<port>/#/` URL shown by the running preview).
 
-The browser report shows raw ASV plots and trends. ASV plot views do not draw a
-line when there is only one x-axis point, so a single-commit run such as
-`asv run 'main^!' --bench benchmark_two_point_statistics` may show results
-without useful commit-trend graphs.
+The native ASV report shows raw plots and trends. ASV does not draw a line
+when there is only one x-axis point, so a single-commit run may show results
+without useful trend graphs. The custom HTML report works with one or more
+commits.
 
 ### Profiling With cProfile
 
@@ -507,13 +542,29 @@ List available cases:
 
 On Windows PowerShell, replace `"$ASV_PYTHON"` with `& $asvPython`.
 
-Possible profile selected cases:
+All available cases:
+
+```text
+variogram-full          variogram on 900 points, full pairwise
+variogram-sampled       variogram on 5 000 pts, sampled 1 500
+variogram-extra-large   variogram on 15 000 pts, sampled 4 500
+krige-small             kriging 30 → 500 pts
+krige-large             kriging 120 → 2 000 pts
+krige-extra-large       kriging 360 → 6 000 pts
+srf-unstructured        SRF RandMeth, 2 000 unstructured pts
+srf-structured          SRF RandMeth, 64×64 grid
+srf-fourier             SRF Fourier, 64×64 grid
+condsrf                 conditioned SRF, 40 → 1 000 pts
+```
+
+Profile a selected case:
 
 ```bash
 "$ASV_PYTHON" benchmarks/tools/profile_benchmark_workflows.py --case variogram-sampled --backend rust_core --threads threads_1 --limit 10
 "$ASV_PYTHON" benchmarks/tools/profile_benchmark_workflows.py --case variogram-extra-large --backend rust_core --threads threads_1 --limit 10
 "$ASV_PYTHON" benchmarks/tools/profile_benchmark_workflows.py --case krige-large --backend rust_core --threads threads_1 --limit 10
 "$ASV_PYTHON" benchmarks/tools/profile_benchmark_workflows.py --case krige-extra-large --backend rust_core --threads threads_1 --limit 10
+"$ASV_PYTHON" benchmarks/tools/profile_benchmark_workflows.py --case srf-unstructured --backend rust_core --threads threads_1 --limit 10
 "$ASV_PYTHON" benchmarks/tools/profile_benchmark_workflows.py --case condsrf --backend rust_core --threads threads_1 --limit 10
 ```
 
@@ -543,15 +594,15 @@ This config keeps the OpenMP experiment separate from the default baseline:
 .asv-openmp/html/
 ```
 
-It also uses fewer repeats than the baseline config:
+It uses the same `number` and `repeat` settings as the baseline config:
 
 ```json
 "number": 1,
 "repeat": 20
 ```
 
-That means each OpenMP benchmark case records 20 independent measurements by
-default, while still running the benchmark code once per measurement.
+Each benchmark case records 20 independent measurements, running the benchmark
+code once per measurement.
 
 During ASV installation, it runs:
 
@@ -644,7 +695,14 @@ python benchmarks/tools/plot_case_backend_comparison.py \
 By default this report includes both time and peak-memory benchmarks. Use
 `--metric time` or `--metric memory` when you want only one metric.
 `--max-commits` limits only the generated custom report; it does not delete
-raw ASV results.
+raw ASV results. Use `--benchmark` to filter to one family:
+
+```bash
+python benchmarks/tools/plot_case_backend_comparison.py \
+  --results-dir .asv-openmp/results \
+  --benchmark variogram   # or krige, kriging, field, srf, condsrf, vario
+  --output .asv-openmp/variogram-comparison.html
+```
 
 Build and preview the OpenMP browser report:
 
@@ -706,7 +764,9 @@ python benchmarks\tools\plot_case_backend_comparison.py `
 ```
 
 By default this report includes both time and peak-memory benchmarks. Use
-`--metric time` or `--metric memory` when you want only one metric.
+`--metric time` or `--metric memory` when you want only one metric, and
+`--benchmark` to filter to one family (e.g. `variogram`, `krige`, `field`,
+`srf`, `condsrf`).
 
 Build and preview the OpenMP browser report:
 

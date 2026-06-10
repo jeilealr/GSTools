@@ -50,6 +50,8 @@ BENCHMARK_ALIASES = {
     "field": "field",
     "random_field": "field",
     "random-field": "field",
+    "srf": "field",
+    "condsrf": "field",
 }
 
 
@@ -843,12 +845,10 @@ svg {
   stroke-width: 1;
 }
 .grid { stroke-dasharray: 2 4; }
-.tick, .bar-label, .legend, .axis-label { fill: var(--muted); font-size: 12px; }
+.tick, .bar-label, .axis-label { fill: var(--muted); font-size: 12px; }
 .title { fill: var(--text); font-size: 16px; font-weight: 800; }
 .line-path { fill: none; stroke-width: 2.4; }
 .point { fill: var(--panel); stroke-width: 2; }
-.cython { fill: var(--cython); }
-.rust { fill: var(--rust); }
 .chart-legend {
   display: flex;
   flex-wrap: wrap;
@@ -1251,7 +1251,11 @@ function refreshOptions() {
   const isTagMode = referenceModeValue() === "tag";
   const benchRows = benchmarkRows();
   const caseOptions = unique(benchRows.map(row => row.case));
-  const defaultCase = caseOptions.find(value => value.includes("extra_large")) || caseOptions[0];
+  const defaultCase =
+    caseOptions.find(v => v.includes("extra_large")) ||
+    caseOptions.find(v => v.includes("sampled_15000")) ||
+    caseOptions.find(v => v.includes("srf_unstructured")) ||
+    caseOptions[0];
   setCheckboxes("case", caseOptions, previousMain.cases, {}, [defaultCase]);
   const selectedCases = checkedValues("case");
   const threadOptions = unique(benchRows
@@ -1371,7 +1375,7 @@ function renderBarChart(data) {
   const metric = data[0].metric;
   const unit = metricUnits[metric];
   const selectedThreads = checkedValues("threads");
-  const selectedCommits = checkedValues("commit");
+  const selectedCommits = selectedOptions("commit");
   const selectedBackends = checkedValues("backend");
   const showThread = selectedThreads.length > 1;
   const showCommit = selectedCommits.length > 1;
