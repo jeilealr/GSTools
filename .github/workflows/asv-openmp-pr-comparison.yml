@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: write
 
 concurrency:
   group: openmp-pr-${{ github.event.pull_request.number }}
@@ -207,6 +208,23 @@ jobs:
                   body.replace("<!-- gstools-openmp-benchmark -->\n", "")
               )
           PY
+
+      - name: Post benchmark results as PR comment
+        if: always() && github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          EXISTING_ID=$(gh api \
+            "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" \
+            --jq '.[] | select(.body | startswith("<!-- gstools-openmp-benchmark -->")) | .id' \
+            | head -1)
+          if [ -n "$EXISTING_ID" ]; then
+            gh api "repos/$GITHUB_REPOSITORY/issues/comments/$EXISTING_ID" \
+              -X PATCH -F body=@/tmp/benchmark_comment.md
+          else
+            gh pr comment "$PR_NUMBER" --body-file /tmp/benchmark_comment.md
+          fi
 
       - name: Save PR context for comment workflow
         if: always()
