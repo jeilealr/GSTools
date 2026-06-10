@@ -50,6 +50,8 @@ BENCHMARK_ALIASES = {
     "field": "field",
     "random_field": "field",
     "random-field": "field",
+    "srf": "field",
+    "condsrf": "field",
 }
 
 
@@ -583,49 +585,96 @@ def render_html(rows):
 <title>GSTools Two-Point Statistics Backend Comparison</title>
 <style>
 :root {
-  color-scheme: light;
-  --bg: #f3f6f8;
+  color-scheme: light dark;
+  --bg: #eef4f7;
+  --bg-gradient: radial-gradient(circle at top left, rgba(15, 118, 110, 0.16), transparent 34rem), linear-gradient(180deg, #f7fbfc 0%, #eef4f7 100%);
   --panel: #ffffff;
-  --panel-muted: #f8fafb;
-  --line: #d9e1e7;
-  --line-strong: #b9c6cf;
-  --text: #17202a;
-  --muted: #607080;
+  --panel-muted: #f7fafb;
+  --line: #d8e3e9;
+  --line-strong: #aebfca;
+  --text: #14212b;
+  --muted: #607384;
   --accent: #0f766e;
-  --accent-soft: #e6f3f1;
+  --accent-soft: #e2f3f0;
   --accent-strong: #0b5f59;
   --cython: #2f72b7;
   --rust: #c75a3c;
-  --shadow: 0 14px 34px rgba(26, 44, 56, 0.08);
+  --success: #14804a;
+  --danger: #b42318;
+  --shadow: 0 18px 48px rgba(26, 44, 56, 0.10);
+  --radius: 14px;
 }
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #101820;
+    --bg-gradient: radial-gradient(circle at top left, rgba(20, 184, 166, 0.14), transparent 34rem), linear-gradient(180deg, #111c24 0%, #0d141b 100%);
+    --panel: #17222b;
+    --panel-muted: #111b23;
+    --line: #263744;
+    --line-strong: #405767;
+    --text: #e8f0f4;
+    --muted: #a4b5c1;
+    --accent: #2dd4bf;
+    --accent-soft: rgba(45, 212, 191, 0.12);
+    --accent-strong: #7dded2;
+    --shadow: 0 18px 48px rgba(0, 0, 0, 0.28);
+  }
+}
+* { box-sizing: border-box; }
 body {
   background: var(--bg);
+  background-image: var(--bg-gradient);
   color: var(--text);
-  font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font: 14px/1.5 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   margin: 0;
 }
+a { color: var(--accent-strong); }
+a:hover { text-decoration-thickness: 2px; }
+button, input, select { font: inherit; }
+button { touch-action: manipulation; }
+:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--accent) 42%, transparent);
+  outline-offset: 2px;
+}
+.skip-link {
+  background: var(--accent-strong);
+  border-radius: 0 0 8px 0;
+  color: white;
+  left: 0;
+  padding: 8px 12px;
+  position: fixed;
+  top: 0;
+  transform: translateY(-120%);
+  z-index: 10;
+}
+.skip-link:focus { transform: translateY(0); }
 header, main {
-  box-sizing: border-box;
-  margin: 0;
-  padding: 24px 32px;
+  margin: 0 auto;
+  max-width: none;
+  padding: 26px clamp(16px, 2.2vw, 34px);
   width: 100%;
 }
-header {
-  padding-bottom: 8px;
-}
+header { padding-bottom: 12px; }
 .brand-row {
-  align-items: flex-start;
+  align-items: center;
+  background: color-mix(in srgb, var(--panel) 96%, transparent);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
   display: flex;
-  gap: 24px;
+  gap: 28px;
   justify-content: space-between;
+  padding: clamp(18px, 2.4vw, 28px);
 }
-.brand-copy {
-  min-width: 0;
+.brand-copy { min-width: 0; }
+.brand-logo,
+.brand-fallback {
+  flex: 0 0 auto;
+  height: clamp(64px, 9vw, 82px);
+  width: clamp(64px, 9vw, 82px);
 }
 .brand-logo {
-  flex: 0 0 auto;
-  height: 82px;
-  width: 82px;
+  filter: drop-shadow(0 10px 18px rgba(26, 44, 56, 0.16));
 }
 .brand-fallback {
   align-items: center;
@@ -634,17 +683,15 @@ header {
   border-radius: 50%;
   color: var(--accent-strong);
   display: flex;
-  flex: 0 0 auto;
   font-weight: 800;
-  height: 82px;
   justify-content: center;
-  width: 82px;
 }
 h1 {
-  font-size: 30px;
-  letter-spacing: 0;
-  line-height: 1.15;
-  margin: 8px 0 10px;
+  font-size: clamp(24px, 3.6vw, 40px);
+  letter-spacing: -0.03em;
+  line-height: 1.08;
+  margin: 8px 0 12px;
+  max-width: 900px;
 }
 p {
   color: var(--muted);
@@ -654,59 +701,57 @@ p {
 .eyebrow {
   color: var(--accent);
   font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
+  font-weight: 800;
+  letter-spacing: 0.10em;
   text-transform: uppercase;
 }
-.lede {
-  font-size: 15px;
-}
+.lede { font-size: 15px; }
 .report-links {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px 16px;
-  margin-top: 12px;
+  gap: 10px 18px;
+  margin-top: 14px;
 }
 .report-links a {
+  align-items: center;
   color: var(--accent-strong);
-  font-weight: 650;
+  display: inline-flex;
+  font-weight: 700;
   text-decoration: none;
 }
-.report-links a:hover {
-  text-decoration: underline;
-}
+.report-links a::after { content: "↗"; font-size: 12px; margin-left: 5px; opacity: 0.7; }
+.report-links a:hover { text-decoration: underline; }
 .machine-summary {
   display: grid;
   gap: 8px;
-  margin: 12px 0 4px;
+  margin: 14px 0 0;
 }
 .machine-card {
-  background: var(--panel);
+  background: color-mix(in srgb, var(--panel) 94%, transparent);
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: var(--radius);
+  box-shadow: 0 10px 24px rgba(26, 44, 56, 0.05);
   display: grid;
-  gap: 2px;
-  padding: 10px 12px;
+  gap: 3px;
+  padding: 12px 14px;
 }
 .machine-card span {
   color: var(--muted);
   font-size: 12px;
 }
 .controls, .panel {
-  background: var(--panel);
+  background: color-mix(in srgb, var(--panel) 96%, transparent);
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: var(--radius);
   box-shadow: var(--shadow);
 }
 .controls {
   display: grid;
-  gap: 16px;
-  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
-  padding: 18px;
+  gap: 18px;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  padding: 20px;
 }
-.wide-control {
-  grid-column: span 2;
-}
+.wide-control { grid-column: span 2; }
 .filter-control {
   border: 0;
   margin: 0;
@@ -716,34 +761,37 @@ p {
 .filter-control legend {
   color: var(--muted);
   font-size: 12px;
-  font-weight: 650;
-  margin-bottom: 7px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  margin-bottom: 9px;
   padding: 0;
   text-transform: uppercase;
 }
 .checkbox-list {
   display: flex;
   flex-wrap: wrap;
-  gap: 5px 14px;
+  gap: 8px;
 }
 .check-label {
   align-items: center;
-  background: transparent;
-  border: 0;
-  border-radius: 0;
+  background: var(--panel-muted);
+  border: 1px solid var(--line);
+  border-radius: 999px;
   color: var(--text);
+  cursor: pointer;
   display: inline-flex;
   font-size: 13px;
-  font-weight: 500;
-  gap: 6px;
+  font-weight: 650;
+  gap: 7px;
   line-height: 1.2;
-  min-height: 22px;
-  padding: 1px 0;
-  text-transform: none;
+  min-height: 30px;
+  padding: 5px 10px 5px 8px;
+  transition: background 150ms ease, border-color 150ms ease, transform 150ms ease;
 }
+.check-label:hover { border-color: var(--line-strong); transform: translateY(-1px); }
 .check-label:has(input:checked) {
-  background: transparent;
-  border-color: transparent;
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 48%, var(--line));
   color: var(--accent-strong);
 }
 .check-label input {
@@ -753,7 +801,8 @@ p {
 }
 .panel {
   margin-top: 20px;
-  padding: 20px;
+  overflow: hidden;
+  padding: 0;
 }
 .panel-header {
   align-items: center;
@@ -761,154 +810,121 @@ p {
   display: flex;
   gap: 12px;
   justify-content: space-between;
-  margin: -2px 0 18px;
-  padding-bottom: 14px;
+  padding: 18px 20px;
 }
 .panel-title {
-  font-size: 16px;
-  font-weight: 700;
+  font-size: 17px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
 }
 .panel-note {
-  color: var(--muted);
-  font-size: 13px;
+  background: var(--accent-soft);
+  border: 1px solid color-mix(in srgb, var(--accent) 32%, var(--line));
+  border-radius: 999px;
+  color: var(--accent-strong);
+  font-size: 12px;
+  font-weight: 800;
+  padding: 4px 10px;
 }
 #chart {
   background: var(--panel-muted);
-  border: 1px solid var(--line);
-  border-radius: 8px;
+  border-bottom: 1px solid var(--line);
+  min-height: 280px;
   overflow-x: auto;
-  padding: 8px;
+  padding: 16px;
 }
 svg {
   display: block;
   height: auto;
   max-width: none;
-  min-width: 100%;
+  min-width: min(100%, 1120px);
   width: auto;
 }
 .axis, .grid {
   stroke: var(--line);
   stroke-width: 1;
 }
-.tick, .bar-label, .legend, .axis-label {
-  fill: var(--muted);
-  font-size: 12px;
-}
-.title {
-  fill: var(--text);
-  font-size: 16px;
-  font-weight: 600;
-}
-.line-path {
-  fill: none;
-  stroke-width: 2;
-}
-.point {
-  fill: var(--panel);
-  stroke-width: 2;
-}
-.cython {
-  fill: var(--cython);
-}
-.rust {
-  fill: var(--rust);
-}
+.grid { stroke-dasharray: 2 4; }
+.tick, .bar-label, .axis-label { fill: var(--muted); font-size: 12px; }
+.title { fill: var(--text); font-size: 16px; font-weight: 800; }
+.line-path { fill: none; stroke-width: 2.4; }
+.point { fill: var(--panel); stroke-width: 2; }
 .chart-legend {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px 14px;
-  margin-top: 12px;
+  gap: 9px 14px;
+  padding: 14px 20px 18px;
 }
 .legend-chip {
   align-items: center;
   color: var(--muted);
   display: inline-flex;
   font-size: 12px;
-  gap: 6px;
+  font-weight: 650;
+  gap: 7px;
 }
 .legend-swatch {
-  border-radius: 2px;
+  border-radius: 999px;
   display: inline-block;
-  height: 3px;
-  width: 20px;
+  height: 4px;
+  width: 24px;
 }
 .multi-select {
-  background: var(--panel);
+  background: var(--panel-muted);
   border: 1px solid var(--line);
-  border-radius: 6px;
+  border-radius: 10px;
   box-sizing: border-box;
   color: var(--text);
-  font: 13px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  min-height: 80px;
-  padding: 3px;
+  min-height: 96px;
+  padding: 5px;
   width: 100%;
 }
 .multi-select option {
-  border-radius: 3px;
-  padding: 3px 6px;
+  border-radius: 6px;
+  padding: 5px 8px;
 }
 .select-actions {
   display: flex;
   gap: 8px;
-  margin-top: 5px;
+  margin-top: 7px;
 }
-.select-action-btn {
-  background: none;
+.select-action-btn, .toggle-btn {
+  background: var(--panel-muted);
   border: 1px solid var(--line);
-  border-radius: 4px;
+  border-radius: 8px;
   color: var(--muted);
   cursor: pointer;
   font-size: 11px;
-  padding: 2px 8px;
-}
-.select-action-btn:hover {
-  border-color: var(--accent);
-  color: var(--accent-strong);
-}
-.toggle-btn {
-  background: none;
-  border: 1px solid var(--line);
-  border-radius: 4px;
-  color: var(--muted);
-  cursor: pointer;
-  font-size: 11px;
-  font-weight: 650;
+  font-weight: 800;
   letter-spacing: 0.04em;
-  padding: 2px 10px;
+  padding: 4px 10px;
   text-transform: uppercase;
 }
+.select-action-btn:hover, .toggle-btn:hover { border-color: var(--accent); color: var(--accent-strong); }
 .toggle-btn.active {
   background: var(--accent-soft);
   border-color: var(--accent);
   color: var(--accent-strong);
 }
-.toggle-btn + .toggle-btn {
-  margin-left: 4px;
+.toggle-btn + .toggle-btn { margin-left: 4px; }
+@media (max-width: 900px) {
+  .wide-control { grid-column: auto; }
 }
 @media (max-width: 700px) {
-  header, main {
-    padding: 18px;
-  }
-  .controls {
-    grid-template-columns: 1fr;
-  }
-  .wide-control {
-    grid-column: auto;
-  }
+  header, main { padding: 18px; }
   .brand-row {
+    align-items: flex-start;
     gap: 16px;
+    padding: 16px;
   }
-  .brand-logo, .brand-fallback {
-    height: 60px;
-    width: 60px;
-  }
-  h1 {
-    font-size: 24px;
-  }
+  .brand-logo, .brand-fallback { height: 60px; width: 60px; }
+  .controls { grid-template-columns: 1fr; padding: 16px; }
+  .panel-header { align-items: flex-start; flex-direction: column; }
 }
 </style>
 </head>
 <body>
+<a class="skip-link" href="#main">Skip to benchmark controls</a>
 <header>
   <div class="brand-row">
     <div class="brand-copy">
@@ -929,7 +945,7 @@ svg {
   </div>
   <div class="machine-summary">__MACHINE_MARKUP__</div>
 </header>
-<main>
+<main id="main">
   <section class="controls">
     <fieldset class="filter-control">
       <legend>Metric</legend>
@@ -1020,7 +1036,9 @@ function unique(values) {
 function optionText(kind, value) {
   if (kind === "commit") {
     const row = rows.find(item => item.commit === value);
-    return row ? `${value} (${row.date_label})` : value;
+    if (!row) return value;
+    const tagPart = row.tag ? ` · ${row.tag}` : "";
+    return `${value}${tagPart} (${row.date_label})`;
   }
   if (kind === "tag") {
     const row = rows.find(item => item.tag === value);
@@ -1233,7 +1251,11 @@ function refreshOptions() {
   const isTagMode = referenceModeValue() === "tag";
   const benchRows = benchmarkRows();
   const caseOptions = unique(benchRows.map(row => row.case));
-  const defaultCase = caseOptions.find(value => value.includes("extra_large")) || caseOptions[0];
+  const defaultCase =
+    caseOptions.find(v => v.includes("extra_large")) ||
+    caseOptions.find(v => v.includes("sampled_15000")) ||
+    caseOptions.find(v => v.includes("srf_unstructured")) ||
+    caseOptions[0];
   setCheckboxes("case", caseOptions, previousMain.cases, {}, [defaultCase]);
   const selectedCases = checkedValues("case");
   const threadOptions = unique(benchRows
@@ -1353,7 +1375,7 @@ function renderBarChart(data) {
   const metric = data[0].metric;
   const unit = metricUnits[metric];
   const selectedThreads = checkedValues("threads");
-  const selectedCommits = checkedValues("commit");
+  const selectedCommits = selectedOptions("commit");
   const selectedBackends = checkedValues("backend");
   const showThread = selectedThreads.length > 1;
   const showCommit = selectedCommits.length > 1;
@@ -1405,6 +1427,39 @@ function renderBarChart(data) {
 
   svg += `<line x1="${margin.left}" x2="${width - margin.right}" y1="${margin.top + plotHeight}" y2="${margin.top + plotHeight}" class="axis" />`;
   svg += `<line x1="${margin.left}" x2="${margin.left}" y1="${margin.top}" y2="${margin.top + plotHeight}" class="axis" />`;
+
+  // % change annotations when exactly 2 commits/tags are compared
+  const isTagMode = referenceModeValue() === "tag";
+  const xVals = isTagMode
+    ? tagOrder(selectedOptions("tag"))
+    : commitOrder(selectedOptions("commit"));
+  if (xVals.length === 2) {
+    const baseVals = new Map();
+    groups.forEach((groupKey, groupIndex) => {
+      const parts = groupKey.split("|");
+      const xKey = parts[2];
+      const groupX = plotLeft + groupIndex * groupStep + groupStep / 2;
+      selectedBackends.forEach((backend, backendIndex) => {
+        const row = data.find(item => barGroupKey(item) === groupKey && item.backend === backend);
+        if (!row) return;
+        const value = formatValue(row);
+        const barX = groupX - clusterWidth / 2 + backendIndex * (barWidth + barGap) + barWidth / 2;
+        const key = `${parts[0]}|${parts[1]}|${backend}`;
+        if (xKey === xVals[0]) {
+          baseVals.set(key, value);
+        } else {
+          const base = baseVals.get(key);
+          if (!base) return;
+          const pct = ((value - base) / base) * 100;
+          const sign = pct >= 0 ? "+" : "";
+          const fill = Math.abs(pct) <= 5 ? "var(--muted)" : pct > 0 ? "var(--danger)" : "var(--success)";
+          const annotY = Math.max(margin.top + 4, y(value) - 20);
+          svg += `<text x="${barX}" y="${annotY}" text-anchor="middle" font-size="10" fill="${fill}" font-weight="700">${sign}${pct.toFixed(1)}%</text>`;
+        }
+      });
+    });
+  }
+
   svg += `</svg>`;
   chart.innerHTML = svg;
   legend.innerHTML = selectedBackends.map(backend =>
@@ -1490,7 +1545,11 @@ function renderChart() {
   const chart = document.getElementById("chart");
   const legend = document.getElementById("legend");
   if (!data.length) {
-    chart.innerHTML = "<p>No matching ASV rows for this selection.</p>";
+    const emptyMsg = referenceModeValue() === "tag"
+      ? "No benchmarked commits carry a tag in these results. " +
+        "Tags appear once a tagged commit has been through the publish workflow."
+      : "No matching ASV rows for this selection.";
+    chart.innerHTML = `<p style="color:var(--muted);padding:12px 4px">${emptyMsg}</p>`;
     legend.innerHTML = "";
     return;
   }
