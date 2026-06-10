@@ -40,9 +40,9 @@ jobs:
             pyproject.toml \
             asv.conf.json \
             asv.openmp.conf.json \
-            .github/workflows/asv-benchmarks.yml \
-            .github/workflows/asv-openmp-pr.yml \
-            .github/workflows/asv-openmp-publish.yml
+            .github/workflows/benchmark-readiness.yml \
+            .github/workflows/asv-openmp-pr-comparison.yml \
+            .github/workflows/asv-benchmark-publish.yml
           then
             echo "required=false" >> "$GITHUB_OUTPUT"
           else

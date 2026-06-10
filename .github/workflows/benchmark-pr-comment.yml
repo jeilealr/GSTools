@@ -1,0 +1,83 @@
+name: Post Benchmark PR Comment
+
+on:
+  workflow_run:
+    workflows: ["Benchmarking"]
+    types: [completed]
+
+permissions:
+  pull-requests: write
+
+jobs:
+  comment:
+    # Only runs when the triggering event was a pull_request and the run
+    # produced a benchmark-pr-context artifact (skipped if no relevant changes).
+    if: github.event.workflow_run.event == 'pull_request'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download PR context artifact
+        id: download
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: benchmark-pr-context
+          path: pr-context
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ github.event.workflow_run.id }}
+
+      - name: Post or update benchmark PR comment
+        if: steps.download.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          base         = Path("pr-context/base_sha.txt").read_text().strip()[:8]
+          head         = Path("pr-context/head_sha.txt").read_text().strip()[:8]
+          artifact_url = Path("pr-context/artifact_url.txt").read_text().strip()
+          pr_number    = Path("pr-context/pr_number.txt").read_text().strip()
+
+          report_link = (
+              f" · [Full HTML Report ↗]({artifact_url})" if artifact_url else ""
+          )
+          try:
+              comparison = Path("pr-context/comparison.txt").read_text()
+          except FileNotFoundError:
+              comparison = "_Comparison output not available._"
+
+          lines = comparison.splitlines()
+          regressed = sum(1 for l in lines if l.startswith("+") and l[1:2] == " ")
+          improved  = sum(1 for l in lines if l.startswith("-") and l[1:2] == " ")
+          if regressed:
+              badge = f"⚠️ {regressed} benchmark(s) regressed"
+          elif improved:
+              badge = f"✅ {improved} benchmark(s) improved, none regressed"
+          else:
+              badge = "✅ No significant changes detected"
+
+          body = (
+              "<!-- gstools-openmp-benchmark -->\n"
+              "## OpenMP Benchmark Results\n\n"
+              f"**Base:** `{base}` → **Head:** `{head}`{report_link}\n\n"
+              f"{badge}\n\n"
+              "<details>\n<summary>Full ASV comparison</summary>\n\n"
+              f"```\n{comparison}\n```\n\n"
+              "</details>\n"
+          )
+          Path("/tmp/benchmark_comment.md").write_text(body)
+          Path("/tmp/pr_number.txt").write_text(pr_number)
+          PY
+
+          PR_NUMBER=$(cat /tmp/pr_number.txt)
+          EXISTING_ID=$(gh api \
+            "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" \
+            --jq '.[] | select(.body | startswith("<!-- gstools-openmp-benchmark -->")) | .id' \
+            | head -1)
+          if [ -n "$EXISTING_ID" ]; then
+            gh api "repos/$GITHUB_REPOSITORY/issues/comments/$EXISTING_ID" \
+              -X PATCH -F body=@/tmp/benchmark_comment.md
+          else
+            gh pr comment "$PR_NUMBER" --body-file /tmp/benchmark_comment.md
+          fi

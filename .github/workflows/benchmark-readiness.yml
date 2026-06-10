@@ -8,7 +8,7 @@ on:
     branches:
       - "main"
     paths:
-      - ".github/workflows/asv-benchmarks.yml"
+      - ".github/workflows/benchmark-readiness.yml"
       - "asv*.json"
       - "benchmarks/**"
       - "pyproject.toml"
@@ -16,7 +16,7 @@ on:
     branches:
       - "main"
     paths:
-      - ".github/workflows/asv-benchmarks.yml"
+      - ".github/workflows/benchmark-readiness.yml"
       - "asv*.json"
       - "benchmarks/**"
       - "pyproject.toml"
