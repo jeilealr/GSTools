@@ -449,6 +449,17 @@ def ds_simulate(
                     indegree[j] -= 1
                     if indegree[j] == 0:
                         _submit(j)
+            # Defensive guard: every node must have been scheduled and run.
+            # The DAG is provably acyclic, so this never trips in practice — but
+            # if a future change ever introduced a cycle, no node would reach
+            # in-degree 0, the loop above would exit immediately, and an all-NaN
+            # field would be returned silently. Fail loudly instead.
+            if counts["done"] != len(path):
+                raise ValueError(
+                    "DirectSampling: parallel scheduler simulated "
+                    f"{counts['done']}/{len(path)} nodes; the dependency graph "
+                    "is not acyclic (this should never happen)."
+                )
         else:
             for i, x_i in enumerate(path):
                 x_i_t = tuple(x_i)
@@ -486,7 +497,14 @@ class DirectSampling(Field):
     scan_fraction : float, optional
         Fraction of the per-node search window to scan. Default: 1.
     threshold : float, optional
-        Distance threshold. 0.0 -> DSBC mode. Default: 0.0.
+        Distance threshold for early acceptance. 0.0 -> DSBC mode. Default: 0.0.
+
+        .. note::
+            The threshold is **not comparable across distance metrics**. The
+            ``"variation"`` distance is normalised by ``2·d_max`` (and clamped
+            to ``[0, 1]``), so the same threshold is stricter for
+            ``"variation"`` than for ``"l1"``/``"l2"``. Re-tune ``threshold``
+            when you change the training image's distance metric.
     cond_weight : float, optional
         Weight for conditioning nodes in distance. Default: 1.0.
     boundary : str, optional
@@ -498,6 +516,9 @@ class DirectSampling(Field):
         distance to the nearest neighbour). Values in ``(0, 1)`` accept
         no neighbours at all, making every node fall back to a random TI
         sample.
+    num_threads : int or None, optional
+        Number of threads for outer DAG parallelism. ``None`` defaults to
+        ``config.NUM_THREADS``.
     seed : int or nan, optional
         Master RNG seed. Default: nan.
     """
@@ -622,14 +643,45 @@ class DirectSampling(Field):
             max_radius=self._max_radius,
             num_threads=self._num_threads,
         )
+        # Categorical + post-processing (R2): mean/normalizer/trend are meant
+        # for continuous fields. Applied to categorical output they turn facies
+        # codes into meaningless real values, silently. Warn the user.
+        if (
+            post_process
+            and self._ti.categorical
+            and (
+                self.mean is not None
+                or self.normalizer is not None
+                or self.trend is not None
+            )
+        ):
+            import warnings
+
+            warnings.warn(
+                "DirectSampling: mean/normalizer/trend post-processing is set "
+                "on a categorical training image. This will alter the facies "
+                "codes and produce meaningless values. Pass post_process=False "
+                "or unset mean/normalizer/trend for categorical simulations.",
+                stacklevel=2,
+            )
         return self.post_field(field, name, post_process, save)
 
     def _conditions_to_grid(self, axes):
         """Smart snapping: Mariethoz 2010 collision rule."""
         if self._cond_pos is None:
             return {}
+        # Axis bounds for the out-of-grid check (R6): points outside the domain
+        # snap to the nearest boundary node, which is silently misleading.
+        bounds = [(axes[d].min(), axes[d].max()) for d in range(self.dim)]
+        n_outside = 0
         candidates = {}  # idx -> (val, dist_sq)
         for k in range(self._cond_val.shape[0]):
+            if any(
+                self._cond_pos[d][k] < bounds[d][0]
+                or self._cond_pos[d][k] > bounds[d][1]
+                for d in range(self.dim)
+            ):
+                n_outside += 1
             idx = tuple(
                 int(np.argmin(np.abs(axes[d] - self._cond_pos[d][k])))
                 for d in range(self.dim)
@@ -640,6 +692,15 @@ class DirectSampling(Field):
             )
             if idx not in candidates or dist_sq < candidates[idx][1]:
                 candidates[idx] = (self._cond_val[k], dist_sq)
+        if n_outside:
+            import warnings
+
+            warnings.warn(
+                f"DirectSampling: {n_outside} conditioning point(s) lie "
+                "outside the simulation grid and were snapped to the nearest "
+                "boundary node. Check your conditioning positions.",
+                stacklevel=2,
+            )
         return {idx: val for idx, (val, _) in candidates.items()}
 
     def set_condition(self, cond_pos, cond_val, cond_weight=None):
