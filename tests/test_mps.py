@@ -22,12 +22,15 @@ from gstools.mps.distance import (
 )
 from gstools.mps.training_image import TrainingImage
 
+
 class TestDirectSamplingParallel(unittest.TestCase):
     def test_valid_values(self):
         rng = np.random.default_rng(0)
         data = rng.integers(0, 3, (20, 20))
         ti = TrainingImage(data)
-        ds = DirectSampling(ti, n_neighbors=8, scan_fraction=0.2, num_threads=2)
+        ds = DirectSampling(
+            ti, n_neighbors=8, scan_fraction=0.2, num_threads=2
+        )
         field = ds([np.arange(8, dtype=float)] * 2, seed=0)
         self.assertEqual(field.shape, (8, 8))
         self.assertTrue(np.all(np.isin(field, [0, 1, 2])))
@@ -37,7 +40,9 @@ class TestDirectSamplingParallel(unittest.TestCase):
         rng = np.random.default_rng(0)
         data = rng.integers(0, 3, (20, 20))
         ti = TrainingImage(data)
-        ds = DirectSampling(ti, n_neighbors=8, scan_fraction=0.2, num_threads=2)
+        ds = DirectSampling(
+            ti, n_neighbors=8, scan_fraction=0.2, num_threads=2
+        )
         pos = [np.arange(8, dtype=float)] * 2
         self.assertTrue(np.array_equal(ds(pos, seed=7), ds(pos, seed=7)))
 
@@ -45,7 +50,9 @@ class TestDirectSamplingParallel(unittest.TestCase):
         rng = np.random.default_rng(0)
         data = rng.integers(0, 3, (20, 20))
         ti = TrainingImage(data)
-        ds = DirectSampling(ti, n_neighbors=4, scan_fraction=0.2, num_threads=2)
+        ds = DirectSampling(
+            ti, n_neighbors=4, scan_fraction=0.2, num_threads=2
+        )
         ds.set_condition([[5.0], [5.0]], [2])
         field = ds([np.arange(10, dtype=float)] * 2, seed=0)
         self.assertEqual(field[5, 5], 2)
@@ -73,7 +80,9 @@ class TestDirectSamplingParallel(unittest.TestCase):
         data = rng.integers(0, 2, (30, 30))
         ti = TrainingImage(data)
         pos = [np.arange(12, dtype=float)] * 2
-        ds = DirectSampling(ti, n_neighbors=2, scan_fraction=0.3, num_threads=4)
+        ds = DirectSampling(
+            ti, n_neighbors=2, scan_fraction=0.3, num_threads=4
+        )
         field = ds(pos, seed=42)
         self.assertEqual(field.shape, (12, 12))
         self.assertTrue(np.all(np.isin(field, [0.0, 1.0])))
@@ -97,6 +106,33 @@ class TestDirectSamplingParallel(unittest.TestCase):
             field = ds(pos, seed=11)
             self.assertEqual(field.shape, (25, 25))
             self.assertTrue(np.all(np.isin(field, [0, 1, 2, 3])))
+
+    def test_serial_equals_parallel(self):
+        rng = np.random.default_rng(0)
+        cases = [
+            TrainingImage(
+                rng.integers(0, 3, (25, 25)).astype(float), categorical=True
+            ),
+            TrainingImage(
+                rng.random((25, 25)), categorical=False, distance="l2"
+            ),
+            TrainingImage(
+                rng.random((25, 25)), categorical=False, distance="variation"
+            ),
+        ]
+        pos = [np.arange(16, dtype=float)] * 2
+        for ti in cases:
+            serial = DirectSampling(
+                ti, n_neighbors=8, scan_fraction=0.5, num_threads=1
+            )(pos, seed=7)
+            for nt in (2, 4, 8):
+                parallel = DirectSampling(
+                    ti, n_neighbors=8, scan_fraction=0.5, num_threads=nt
+                )(pos, seed=7)
+                self.assertTrue(
+                    np.array_equal(serial, parallel),
+                    msg=f"serial != parallel (num_threads={nt})",
+                )
 
 
 class TestTrainingImage(unittest.TestCase):
@@ -445,6 +481,14 @@ class TestDirectSampling(unittest.TestCase):
             DirectSampling(self.ti1d, max_radius=0)
         with self.assertRaises(ValueError):
             DirectSampling(self.ti1d, max_radius=-1.0)
+        with self.assertRaises(ValueError):
+            DirectSampling(self.ti1d, n_neighbors=0)
+        with self.assertRaises(ValueError):
+            DirectSampling(self.ti1d, scan_fraction=0)
+        with self.assertRaises(ValueError):
+            DirectSampling(self.ti1d, scan_fraction=1.5)
+        with self.assertRaises(ValueError):
+            DirectSampling(self.ti1d, threshold=-0.1)
         ds = DirectSampling(self.ti1d)
         with self.assertRaises(ValueError):
             ds([self.x1d], seed=42, mesh_type="unstructured")
@@ -636,6 +680,91 @@ class TestDirectSampling(unittest.TestCase):
         self.assertEqual(field.shape, (5,))
         self.assertFalse(np.any(np.isnan(field)))
         self.assertTrue(set(np.unique(field)).issubset({0.0, 1.0}))
+
+    def test_post_process_categorical_noop(self):
+        # Default construction leaves mean/normalizer/trend unset, so
+        # post_process must not alter categorical output (only float cast).
+        ds = DirectSampling(self.ti2d, n_neighbors=4, scan_fraction=1.0)
+        processed = ds([self.x2d, self.y2d], seed=7, post_process=True)
+        raw = ds([self.x2d, self.y2d], seed=7, post_process=False)
+        np.testing.assert_array_equal(processed, raw)
+        self.assertTrue(set(np.unique(processed)).issubset({0.0, 1.0}))
+
+    def test_conditioning_outside_grid_snaps_to_boundary(self):
+        # A conditioning point beyond the domain snaps to the nearest grid node
+        # (current behaviour: silent boundary snap, no error).
+        ds = DirectSampling(self.ti2d, n_neighbors=4, scan_fraction=1.0)
+        ds.set_condition([[100.0], [100.0]], [1.0])  # far outside the 6x6 grid
+        field = ds([self.x2d, self.y2d], seed=7)
+        self.assertAlmostEqual(field[5, 5], 1.0)
+
+    def test_max_radius_below_one_random_fill(self):
+        # max_radius in (0, 1) excludes every neighbour (nearest cell is at
+        # distance 1.0), so each node falls back to a random TI sample. Must
+        # still run and produce valid values.
+        ds = DirectSampling(
+            self.ti2d, n_neighbors=4, scan_fraction=1.0, max_radius=0.5
+        )
+        field = ds([self.x2d, self.y2d], seed=7)
+        self.assertEqual(field.shape, (6, 6))
+        self.assertFalse(np.any(np.isnan(field)))
+        self.assertTrue(set(np.unique(field)).issubset({0.0, 1.0}))
+
+    def test_simulation_3d(self):
+        rng = np.random.default_rng(0)
+        ti = TrainingImage(
+            rng.integers(0, 2, (10, 10, 10)).astype(float), categorical=True
+        )
+        ds = DirectSampling(ti, n_neighbors=6, scan_fraction=0.5)
+        field = ds([np.arange(6, dtype=float)] * 3, seed=7)
+        self.assertEqual(field.shape, (6, 6, 6))
+        self.assertFalse(np.any(np.isnan(field)))
+        self.assertTrue(set(np.unique(field)).issubset({0.0, 1.0}))
+
+    def test_continuous_2d_simulation(self):
+        rng = np.random.default_rng(0)
+        ti = TrainingImage(
+            rng.random((20, 20)), categorical=False, distance="l2"
+        )
+        ds = DirectSampling(
+            ti, n_neighbors=6, scan_fraction=0.5, threshold=0.05
+        )
+        field = ds([np.arange(10, dtype=float)] * 2, seed=7)
+        self.assertEqual(field.shape, (10, 10))
+        self.assertFalse(np.any(np.isnan(field)))
+        # values are copied from the TI, so they stay within the TI range
+        self.assertGreaterEqual(field.min(), ti.data.min())
+        self.assertLessEqual(field.max(), ti.data.max())
+
+    def test_lp_distance_simulation(self):
+        # Exercises the vectorized Lp scan path through a full simulation
+        # (p != 1, 2), which the unit-level distance tests do not cover.
+        rng = np.random.default_rng(2)
+        ti = TrainingImage(
+            rng.random((20, 20)), categorical=False, distance="l3"
+        )
+        ds = DirectSampling(
+            ti, n_neighbors=6, scan_fraction=0.5, threshold=0.05
+        )
+        field = ds([np.arange(10, dtype=float)] * 2, seed=7)
+        self.assertEqual(field.shape, (10, 10))
+        self.assertFalse(np.any(np.isnan(field)))
+        self.assertGreaterEqual(field.min(), ti.data.min())
+        self.assertLessEqual(field.max(), ti.data.max())
+
+    def test_variation_distance_simulation(self):
+        # The variation metric applies the mean-shift on assignment, so values
+        # may leave the raw TI range; they must stay finite and non-NaN.
+        rng = np.random.default_rng(1)
+        ti = TrainingImage(
+            rng.random((20, 20)), categorical=False, distance="variation"
+        )
+        ds = DirectSampling(
+            ti, n_neighbors=6, scan_fraction=0.5, threshold=0.05
+        )
+        field = ds([np.arange(10, dtype=float)] * 2, seed=7)
+        self.assertEqual(field.shape, (10, 10))
+        self.assertTrue(np.all(np.isfinite(field)))
 
     def test_gstools_namespace(self):
         self.assertIs(gs.DirectSampling, DirectSampling)
