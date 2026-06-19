@@ -16,6 +16,7 @@ import numpy as np
 
 from gstools import config
 from gstools.field.base import Field
+from gstools.normalizer.base import Normalizer
 from gstools.random.rng import RNG
 
 __all__ = ["DirectSampling"]
@@ -643,25 +644,28 @@ class DirectSampling(Field):
             max_radius=self._max_radius,
             num_threads=self._num_threads,
         )
-        # Categorical + post-processing (R2): mean/normalizer/trend are meant
-        # for continuous fields. Applied to categorical output they turn facies
-        # codes into meaningless real values, silently. Warn the user.
+        # mean/normalizer/trend silently turn facies codes into meaningless
+        # values on a categorical TI -- warn the user. self.normalizer is
+        # never None, so check against the identity Normalizer() instead.
+        # This will change in on coming versions.
         if (
             post_process
             and self._ti.categorical
             and (
                 self.mean is not None
-                or self.normalizer is not None
+                or type(self.normalizer) is not Normalizer
                 or self.trend is not None
             )
         ):
             import warnings
 
             warnings.warn(
-                "DirectSampling: mean/normalizer/trend post-processing is set "
-                "on a categorical training image. This will alter the facies "
-                "codes and produce meaningless values. Pass post_process=False "
-                "or unset mean/normalizer/trend for categorical simulations.",
+                "DirectSampling: this training image is categorical (e.g. "
+                "facies codes like 0/1), but mean/normalizer/trend is set. "
+                "Those only make sense for continuous data and will turn "
+                "your category codes into meaningless numbers (e.g. 0/1 "
+                "could become 5.0/6.3). Fix: unset mean/normalizer/trend, "
+                "or call this with post_process=False to skip the step.",
                 stacklevel=2,
             )
         return self.post_field(field, name, post_process, save)
@@ -670,8 +674,6 @@ class DirectSampling(Field):
         """Smart snapping: Mariethoz 2010 collision rule."""
         if self._cond_pos is None:
             return {}
-        # Axis bounds for the out-of-grid check (R6): points outside the domain
-        # snap to the nearest boundary node, which is silently misleading.
         bounds = [(axes[d].min(), axes[d].max()) for d in range(self.dim)]
         n_outside = 0
         candidates = {}  # idx -> (val, dist_sq)
@@ -696,9 +698,11 @@ class DirectSampling(Field):
             import warnings
 
             warnings.warn(
-                f"DirectSampling: {n_outside} conditioning point(s) lie "
-                "outside the simulation grid and were snapped to the nearest "
-                "boundary node. Check your conditioning positions.",
+                f"DirectSampling: {n_outside} conditioning point(s) fall outside "
+                "the simulation grid. Each point was still pinned to the nearest "
+                "edge node, so it will look like a real measurement taken there. "
+                "If this isn't intended, check that your conditioning coordinates "
+                "use the same units and coordinate system as the simulation grid.",
                 stacklevel=2,
             )
         return {idx: val for idx, (val, _) in candidates.items()}
