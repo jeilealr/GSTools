@@ -3,14 +3,32 @@ GStools subpackage for Multiple Point Statistics (MPS).
 
 .. currentmodule:: gstools.mps
 
-Multiple Point Statistics
-^^^^^^^^^^^^^^^^^^^^^^^^^
+Training Image
+^^^^^^^^^^^^^^
+Training image wrapper holding spatial pattern data and distance metrics.
+
+.. autosummary::
+   :toctree:
+
+   TrainingImage
+
+MPS Model
+^^^^^^^^^
+Configuration class bundling a training image with Direct Sampling search parameters.
+
+.. autosummary::
+   :toctree:
+
+   MPSModel
+
+Simulation
+^^^^^^^^^^
+Direct Sampling simulation following the gstools field interface.
+
 .. autosummary::
    :toctree:
 
    DirectSampling
-   MPSModel
-   TrainingImage
 """
 
 from gstools.mps.direct_sampling import DirectSampling
