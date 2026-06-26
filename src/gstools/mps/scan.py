@@ -45,6 +45,8 @@ def _scan_window(lo, win_shape, start, max_scan, threshold, dist_fn):
         empty-neighbourhood case and draws a defined TI cell.
     """
     win_size = int(np.prod(win_shape))
+    # Random start in the search window, then sequential scan from there
+    # (Mariethoz2010 ¶19, Juda2022 §2 third step).
     positions = (start + np.arange(max_scan)) % win_size
     y_all = lo + np.column_stack(np.unravel_index(positions, win_shape))
 

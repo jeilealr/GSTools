@@ -66,7 +66,7 @@ def _select_neighbors(
     max_radius,
     n_neighbors,
 ):
-    """Closest valid neighbours of ``x_i``, with their path indices.
+    """Closest valid neighbours of ``x_i``, with their path indices (Mariethoz2010 ¶15, Juda2022 Eq. 1).
 
     A candidate is valid when it is in bounds, has path index ``< curr_idx``
     (already-simulated in path order) or ``-1`` (conditioning data), and — if
@@ -152,7 +152,7 @@ def _transform_lags(lags, M, *arrays):
             # "once per location" filter collapses the routine anisotropic case
             # to a single warning per session instead of one per node.
             warnings.warn(
-                "Anisotropy/rotation transform collapsed neighbour lag(s) onto "
+                "gstools.mps: anisotropy/rotation transform collapsed neighbour lag(s) onto "
                 "duplicate TI positions; the duplicates are excluded from the "
                 "data event. Reduce the anisotropy ratio or rotation to retain "
                 "them.",
@@ -221,7 +221,7 @@ def _reduce_to_fit(lags_ti, ti_shape, *arrays):
 
 
 def _window_bounds(lags_ti, ti_shape, boundary):
-    """Compute the TI search window for a set of lag vectors.
+    """Compute the TI search window for a set of lag vectors (Mariethoz2010 ¶18, Juda2022 Eq. 5).
 
     h=0 rows (collocated constraints) do not constrain the window — they map
     anchor ``y`` to ``y`` itself so every window position is valid for them.
@@ -262,7 +262,7 @@ def _window_bounds(lags_ti, ti_shape, boundary):
         # Strict window infeasible (TI too small for the full data event).
         # Fall through to partial truncation, but do not do so silently.
         warnings.warn(
-            "boundary='strict' could not fit the full data event inside the "
+            "gstools.mps: boundary='strict' could not fit the full data event inside the "
             "TI; falling back to partial mode (dropping the furthest "
             "neighbour(s)). Ensure the TI is at least as large as the data "
             "event extent to enforce strict mode.",
@@ -313,8 +313,9 @@ def _lag_transform_matrix(dim, rotation_map, anis_map, x_i):
     -------
     M : numpy.ndarray, shape (dim, dim)
         Isometrization matrix from :func:`gstools.tools.geometric.matrix_isometrize`.
-        Apply as ``lags_ti = lags_sg @ M.T`` to transform SG lag vectors into
-        the TI frame.
+        Lags are stored as **row vectors** (shape ``(k, dim)``), so the SG→TI
+        frame map is applied as ``lags_ti = lags_sg @ M.T`` (right-multiply by
+        the transpose) rather than as a left-multiply column-vector form.
     """
     angles_i = set_angles(
         dim,

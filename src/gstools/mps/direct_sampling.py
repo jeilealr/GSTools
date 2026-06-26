@@ -13,13 +13,6 @@ import numpy as np
 
 from gstools.field.base import Field
 from gstools.mps.model import MPSModel
-from gstools.mps.model import _validate_boundary as _mv_validate_boundary
-from gstools.mps.model import _validate_max_radius as _mv_validate_max_radius
-from gstools.mps.model import _validate_n_neighbors as _mv_validate_n_neighbors
-from gstools.mps.model import (
-    _validate_scan_fraction as _mv_validate_scan_fraction,
-)
-from gstools.mps.model import _validate_threshold as _mv_validate_threshold
 from gstools.mps.simulate import _MV_VAR, _univar_as_mv_ti, ds_simulate
 from gstools.normalizer.tools import apply_mean_norm_trend
 from gstools.random.rng import RNG
@@ -68,7 +61,7 @@ def _resolve_nonstationary_map(param, sim_shape, n_stationary):
         if arr.size == n_stationary:
             return arr
         raise ValueError(
-            f"1-D non-stationary value of length {arr.size} matches neither a "
+            f"DirectSampling: 1-D non-stationary value of length {arr.size} matches neither a "
             f"stationary value ({n_stationary} component(s) for a "
             f"{len(sim_shape)}-D grid) nor a per-node map. For per-node values "
             f"pass an array shaped like the grid {tuple(sim_shape)!r}, not a "
@@ -77,7 +70,7 @@ def _resolve_nonstationary_map(param, sim_shape, n_stationary):
     if arr.shape[: len(sim_shape)] == tuple(sim_shape):
         return arr
     raise ValueError(
-        f"Non-stationary map shape {arr.shape!r} is incompatible with "
+        f"DirectSampling: Non-stationary map shape {arr.shape!r} is incompatible with "
         f"simulation grid shape {tuple(sim_shape)!r}. Pass a scalar or "
         f"1-D vector for a stationary value, or an array whose leading "
         f"dimensions match the grid."
@@ -115,35 +108,6 @@ class DirectSampling(Field):
 
     default_field_names = ["field"]
 
-    @staticmethod
-    def _validate_variation_n_neighbors(n_neighbors, ti):
-        """Reject variation distance with a single-neighbour data event.
-
-        The variation distance (Mariethoz2010 Eq. 9) compares each event to its
-        own local mean. With ``n_neighbors == 1`` the local mean equals the sole
-        value, so every deviation is zero and every TI candidate matches — the
-        scan degenerates to a random draw. Fail fast instead.
-        """
-        dist_type = ti.distance_type
-        if isinstance(dist_type, dict):
-            dist_map = dist_type
-            n_map = (
-                n_neighbors
-                if isinstance(n_neighbors, dict)
-                else {v: n_neighbors for v in dist_map}
-            )
-        else:
-            dist_map = {None: dist_type}
-            n_map = {None: n_neighbors}
-        for var, dt in dist_map.items():
-            if isinstance(dt, str) and dt.lower().startswith("variation"):
-                if int(n_map[var]) < 2:
-                    where = "" if var is None else f" for variable {var!r}"
-                    raise ValueError(
-                        f"distance='variation' requires n_neighbors >= 2{where}: "
-                        "a single-point data event has no local mean deviation."
-                    )
-
     def __init__(
         self,
         model,
@@ -156,18 +120,12 @@ class DirectSampling(Field):
                 "DirectSampling(MPSModel(ti, n_neighbors=…, …))"
             )
 
-        self._model = model
         super().__init__(model=None, dim=model.ti.ndim, value_type="scalar")
+        # Retain the MPSModel as the single source of truth for search
+        # parameters. It is NOT stored in Field._model (which stays None) —
+        # Field.pre_pos/field_dim/latlon/temporal assume a CovModel there.
+        self._mps_model = model
         self._ti = model.ti
-        self._n_neighbors = model.n_neighbors
-        DirectSampling._validate_variation_n_neighbors(
-            self._n_neighbors, self._ti
-        )
-        self._scan_fraction = model.scan_fraction
-        self._threshold = model.threshold
-        self._cond_weight = model.cond_weight
-        self._boundary = model.boundary
-        self._max_radius = model.max_radius
         self._num_threads = None
         self._cond_pos = None
         self._cond_val = None
@@ -200,7 +158,11 @@ class DirectSampling(Field):
     ):
         """Generate the spatial random field via Direct Sampling.
 
-        The field is saved as ``self.field`` and is also returned.
+        For a univariate training image the field is saved as ``self.field``
+        and is also returned. For a multivariate training image no single
+        ``self.field`` is set — each variable is stored under its own name
+        (accessible via ``self[variable]`` / :attr:`all_fields`) and a
+        ``{variable: numpy.ndarray}`` dict is returned.
 
         Parameters
         ----------
@@ -287,24 +249,40 @@ class DirectSampling(Field):
         n_threads = (
             num_threads if num_threads is not None else self._num_threads
         )
+        # Unify engine invocation: always present a multivariate TI and
+        # conditions dict to ds_simulate, regardless of whether the user's TI
+        # is univariate or multivariate.  The single-call result is then
+        # unwrapped to the appropriate return type at the end.
         if self._ti.multivariate:
-            result = ds_simulate(
-                training_image=self._ti,
-                sim_shape=shape,
-                n_neighbors=self._n_neighbors,
-                threshold=self._threshold,
-                scan_fraction=self._scan_fraction,
-                rng_path=rng_path,
-                rng_nodes=rng_nodes,
-                conditions=conditions,
-                cond_weight=self._cond_weight,
-                boundary=self._boundary,
-                max_radius=self._max_radius,
-                num_threads=n_threads,
-                rotation_map=rotation_map,
-                anis_map=anis_map,
-                progress=progress,
+            sim_ti = self._ti
+            sim_conditions = conditions  # already {idx: {var: val}}
+        else:
+            sim_ti = _univar_as_mv_ti(self._ti)
+            sim_conditions = (
+                {idx: {_MV_VAR: val} for idx, val in conditions.items()}
+                if conditions
+                else None
             )
+        result = ds_simulate(
+            training_image=sim_ti,
+            sim_shape=shape,
+            n_neighbors=self.n_neighbors,
+            threshold=self.threshold,
+            scan_fraction=self.scan_fraction,
+            rng_path=rng_path,
+            rng_nodes=rng_nodes,
+            conditions=sim_conditions,
+            cond_weight=self.cond_weight,
+            boundary=self.boundary,
+            max_radius=self.max_radius,
+            num_threads=n_threads,
+            rotation_map=rotation_map,
+            anis_map=anis_map,
+            progress=progress,
+        )
+        # Branch only on the return type: multivariate → dict of named arrays;
+        # univariate → bare array (unwrap the single _MV_VAR key).
+        if self._ti.multivariate:
             # Equal treatment: every variable is a first-class named field
             # (no privileged primary). Returned as a dict keyed by variable name.
             # Per-variable transforms (mean/normalizer/trend) are applied here
@@ -331,30 +309,7 @@ class DirectSampling(Field):
                     )
                 out[v] = self.post_field(fld, name=v, process=False, save=save)
             return out
-        mv_ti = _univar_as_mv_ti(self._ti)
-        mv_cond = (
-            {idx: {_MV_VAR: val} for idx, val in conditions.items()}
-            if conditions
-            else None
-        )
-        mv_result = ds_simulate(
-            training_image=mv_ti,
-            sim_shape=shape,
-            n_neighbors=self._n_neighbors,
-            threshold=self._threshold,
-            scan_fraction=self._scan_fraction,
-            rng_path=rng_path,
-            rng_nodes=rng_nodes,
-            conditions=mv_cond,
-            cond_weight=self._cond_weight,
-            boundary=self._boundary,
-            max_radius=self._max_radius,
-            num_threads=n_threads,
-            rotation_map=rotation_map,
-            anis_map=anis_map,
-            progress=progress,
-        )
-        return self.post_field(mv_result[_MV_VAR], name, post_process, save)
+        return self.post_field(result[_MV_VAR], name, post_process, save)
 
     def _conditions_to_grid(self, axes):
         """Snap conditioning points to nearest grid nodes (Mariethoz2010 §3 ¶12).
@@ -380,7 +335,7 @@ class DirectSampling(Field):
             return {}
         if self._ti.multivariate and isinstance(self._cond_val, dict):
             if not self._cond_val:
-                raise ValueError("cond_val must not be empty")
+                raise ValueError("DirectSampling: cond_val must not be empty")
             # idx -> {variable: (value, dist_sq)}; the closest finite value per
             # variable wins, so a farther point fills variables the closer one
             # left NaN (per-variable collision resolution).
@@ -435,10 +390,10 @@ class DirectSampling(Field):
             at construction. Default: :any:`None` (keep existing weight)
         """
         if cond_weight is not None:
-            self._cond_weight = float(cond_weight)
+            self._mps_model.cond_weight = float(cond_weight)
         if self._ti.multivariate and isinstance(cond_val, dict):
             if not cond_val:
-                raise ValueError("cond_val must not be empty")
+                raise ValueError("DirectSampling: cond_val must not be empty")
             unknown = set(cond_val) - set(self._ti.variables)
             if unknown:
                 raise ValueError(
@@ -541,56 +496,59 @@ class DirectSampling(Field):
             self._anis = anis_arr
 
     @property
+    def mps_model(self):
+        """:any:`MPSModel`: the search-parameter configuration (training image + parameters)."""
+        return self._mps_model
+
+    @property
     def ti(self):
-        """TrainingImage: The training image model."""
+        """:any:`TrainingImage`: The training image model."""
         return self._ti
 
     @property
     def n_neighbors(self):
         """:class:`int` or :class:`dict`: Maximum neighbours in the data event (per-variable dict for multivariate TIs)."""
-        return self._n_neighbors
+        return self._mps_model.n_neighbors
 
     @n_neighbors.setter
     def n_neighbors(self, value):
-        validated = _mv_validate_n_neighbors(value, self._ti)
-        DirectSampling._validate_variation_n_neighbors(validated, self._ti)
-        self._n_neighbors = validated
+        self._mps_model.n_neighbors = value
 
     @property
     def scan_fraction(self):
         """:class:`float`: Fraction of the TI to scan per node (capped at the search window)."""
-        return self._scan_fraction
+        return self._mps_model.scan_fraction
 
     @scan_fraction.setter
     def scan_fraction(self, value):
-        self._scan_fraction = _mv_validate_scan_fraction(value)
+        self._mps_model.scan_fraction = value
 
     @property
     def threshold(self):
         """:class:`float`: Distance threshold (0.0 → DSBC mode)."""
-        return self._threshold
+        return self._mps_model.threshold
 
     @threshold.setter
     def threshold(self, value):
-        self._threshold = _mv_validate_threshold(value)
+        self._mps_model.threshold = value
 
     @property
     def cond_weight(self):
         """:class:`float`: Weight for conditioning nodes in distance."""
-        return self._cond_weight
+        return self._mps_model.cond_weight
 
     @cond_weight.setter
     def cond_weight(self, value):
-        self._cond_weight = float(value)
+        self._mps_model.cond_weight = value
 
     @property
     def boundary(self):
         """:class:`str`: Search-window strategy (``"strict"`` or ``"partial"``)."""
-        return self._boundary
+        return self._mps_model.boundary
 
     @boundary.setter
     def boundary(self, value):
-        self._boundary = _mv_validate_boundary(value)
+        self._mps_model.boundary = value
 
     @property
     def max_radius(self):
@@ -600,11 +558,11 @@ class DirectSampling(Field):
         at distance 1.0), causing every node to fall back to a random TI
         sample.
         """
-        return self._max_radius
+        return self._mps_model.max_radius
 
     @max_radius.setter
     def max_radius(self, value):
-        self._max_radius = _mv_validate_max_radius(value)
+        self._mps_model.max_radius = value
 
     @property
     def num_threads(self):

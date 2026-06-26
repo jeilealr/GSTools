@@ -147,7 +147,9 @@ def vec_categorical_dist(
 
 
 def vec_l1_dist(data_event_sim, all_de_ti, node_weights, d_max, has_nan=False):
-    """Vectorized L1 distance over all TI scan candidates.
+    """Vectorized L1 distance over all TI scan candidates (Juda2022 Eq. 7 = Mariethoz2010 Eq. 6).
+
+    Mean absolute error normalized by the TI value range ``d_max``.
 
     Parameters
     ----------
@@ -169,7 +171,10 @@ def vec_l1_dist(data_event_sim, all_de_ti, node_weights, d_max, has_nan=False):
 
 
 def vec_l2_dist(data_event_sim, all_de_ti, node_weights, d_max, has_nan=False):
-    """Vectorized L2 distance over all TI scan candidates.
+    """Vectorized L2 distance over all TI scan candidates (Mariethoz2010 Eq. 4–5).
+
+    Weighted RMSE normalized by the TI value range ``d_max``; spatial-decay
+    weights ``α_i`` embed the ``d_max²`` denominator (Mariethoz2010 Eq. 5).
 
     Parameters
     ----------

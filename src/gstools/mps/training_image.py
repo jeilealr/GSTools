@@ -25,19 +25,12 @@ from gstools.mps.distance import (
 __all__ = ["TrainingImage"]
 
 
-def _warn_if_nan(*arrays):
-    """Warn once if any (float) TI array contains undefined (NaN) cells."""
-    for arr in arrays:
-        if np.issubdtype(arr.dtype, np.floating) and np.isnan(arr).any():
-            warnings.warn(
-                "TrainingImage contains NaN cell(s); they are treated as "
-                "undefined (masked): excluded from the continuous data range "
-                "and from pattern distances, and never pasted into the "
-                "simulation.",
-                UserWarning,
-                stacklevel=3,
-            )
-            return
+def _any_float_nan(*arrays):
+    """Return True if any floating-dtype array in *arrays* contains NaN."""
+    return any(
+        np.issubdtype(arr.dtype, np.floating) and np.isnan(arr).any()
+        for arr in arrays
+    )
 
 
 def _data_range(arr):
@@ -59,21 +52,24 @@ class TrainingImage:
 
     Parameters
     ----------
-    data : numpy.ndarray or dict of {str: numpy.ndarray}
+    data : :class:`numpy.ndarray` or :class:`dict` of {:class:`str`: :class:`numpy.ndarray`}
         Training image data (n-d array). Pass a dict of named arrays to create
         a multivariate (co-simulation) training image; all arrays must share
         the same shape.
-    categorical : bool or dict of {str: bool}, optional
+    categorical : :class:`bool` or :class:`dict` of {:class:`str`: :class:`bool`}, optional
         Whether the variable is categorical. For multivariate TIs, a dict gives
         one flag per variable (a scalar is broadcast to all). Default: ``True``.
-    weights : dict of {str: float}, optional
+    weights : :class:`dict` of {:class:`str`: :class:`float`}, optional
         Per-variable distance weights for multivariate TIs (must sum to 1).
         Default: uniform. Ignored for univariate TIs.
-    distance : str or dict of {str: str}, optional
+    distance : :class:`str` or :class:`dict` of {:class:`str`: :class:`str`}, optional
         Distance metric for continuous variables: ``"l1"`` (Juda2022
         Eq. 7, default), ``"l2"`` (Mariethoz2010 Eq. 4–5), or
         ``"variation"`` (Mariethoz2010 Eq. 9). Ignored when categorical.
-    distance_power : float, optional
+        For multivariate TIs, any variable omitted from the dict defaults to
+        ``"l1"``; the value is ignored for categorical variables (which always
+        use the mismatch fraction).
+    distance_power : :class:`float`, optional
         Exponent δ for spatial-decay weighting of neighbours
         (Mariethoz2010 Eq. 3). Applied to **all** distance types.
         ``0.0`` → uniform weights (oracle-compatible default).
@@ -90,7 +86,7 @@ class TrainingImage:
     ):
         self._distance_power = float(distance_power)
         if self._distance_power < 0:
-            raise ValueError("distance_power must be >= 0")
+            raise ValueError("TrainingImage: distance_power must be >= 0")
 
         if isinstance(data, dict):
             self._init_multivariate(data, categorical, weights, distance)
@@ -106,7 +102,8 @@ class TrainingImage:
         self._distance_type = distance
         self._p_norm = None
         self._variation_p_norm = None
-        _warn_if_nan(self._data)
+        self._has_nan = _any_float_nan(self._data)
+        self._warn_if_nan()
         if not self._categorical:
             self._p_norm, self._variation_p_norm = self._parse_distance(
                 distance
@@ -184,10 +181,13 @@ class TrainingImage:
             raise ValueError("TrainingImage: multivariate data dict is empty.")
         shapes = {v.shape for v in self._variables.values()}
         if len(shapes) != 1:
-            raise ValueError("All variables must have the same shape.")
+            raise ValueError(
+                "TrainingImage: All variables must have the same shape."
+            )
         self._shape = shapes.pop()
         names = list(self._variables)
-        _warn_if_nan(*self._variables.values())
+        self._has_nan = _any_float_nan(*self._variables.values())
+        self._warn_if_nan()
 
         self._categorical = (
             {k: bool(categorical[k]) for k in names}
@@ -195,7 +195,7 @@ class TrainingImage:
             else {k: bool(categorical) for k in names}
         )
         self._distance_type = (
-            {k: distance[k] for k in names}
+            {k: distance.get(k, "l1") for k in names}
             if isinstance(distance, dict)
             else {k: distance for k in names}
         )
@@ -226,54 +226,73 @@ class TrainingImage:
                 )
             wsum = float(sum(weights[k] for k in names))
             if not np.isclose(wsum, 1.0):
-                raise ValueError(f"weights must sum to 1.0, got {wsum}.")
+                raise ValueError(
+                    f"TrainingImage: weights must sum to 1.0, got {wsum}."
+                )
             self._weights = {k: float(weights[k]) for k in names}
+
+    def _warn_if_nan(self):
+        """Warn once (at construction) if the TI contains any NaN cell."""
+        if self._has_nan:
+            warnings.warn(
+                "TrainingImage: contains NaN cell(s); they are treated as "
+                "undefined (masked): excluded from the continuous data range "
+                "and from pattern distances, and never pasted into the "
+                "simulation.",
+                UserWarning,
+                stacklevel=3,
+            )
 
     # ------------------------------------------------------------------
     # Properties
     # ------------------------------------------------------------------
 
     @property
+    def has_nan(self):
+        """:class:`bool`: True if any floating-dtype variable array contains NaN."""
+        return self._has_nan
+
+    @property
     def data(self):
-        """numpy.ndarray: Raw training image data."""
+        """:class:`numpy.ndarray`: Raw training image data."""
         return self._data
 
     @property
     def ndim(self):
-        """int: Number of spatial dimensions."""
+        """:class:`int`: Number of spatial dimensions."""
         return len(self._shape)
 
     @property
     def shape(self):
-        """tuple: Shape of the training image (shared across variables)."""
+        """:class:`tuple`: Shape of the training image (shared across variables)."""
         return self._shape
 
     @property
     def multivariate(self):
-        """bool: Whether the TI holds multiple co-simulated variables."""
+        """:class:`bool`: Whether the TI holds multiple co-simulated variables."""
         return self._multivariate
 
     @property
     def variables(self):
-        """list or None: Variable names (insertion order, all equal), or None if univariate."""
+        """:class:`list` or :any:`None`: Variable names (insertion order, all equal), or None if univariate."""
         return list(self._variables) if self._multivariate else None
 
     @property
     def weights(self):
-        """dict or None: Per-variable distance weights (sum to 1), or None."""
+        """:class:`dict` or :any:`None`: Per-variable distance weights (sum to 1), or None."""
         return dict(self._weights) if self._multivariate else None
 
     def variable(self, name):
-        """numpy.ndarray: Data array for one variable (multivariate TIs).
+        """:class:`numpy.ndarray`: Data array for one variable (multivariate TIs).
 
         Parameters
         ----------
-        name : str
+        name : :class:`str`
             Variable name.
 
         Returns
         -------
-        numpy.ndarray
+        :class:`numpy.ndarray`
         """
         if not self._multivariate:
             raise TypeError(
@@ -283,17 +302,17 @@ class TrainingImage:
 
     @property
     def categorical(self):
-        """bool or dict of {str: bool}: Whether the variable(s) are categorical."""
+        """:class:`bool` or :class:`dict` of {:class:`str`: :class:`bool`}: Whether the variable(s) are categorical."""
         return self._categorical
 
     @property
     def distance_type(self):
-        """str or dict of {str: str}: Distance metric(s) (e.g. ``"l1"``, ``"l2"``, ``"variation"``)."""
+        """:class:`str` or :class:`dict` of {:class:`str`: :class:`str`}: Distance metric(s) (e.g. ``"l1"``, ``"l2"``, ``"variation"``)."""
         return self._distance_type
 
     @property
     def distance_power(self):
-        """float: Spatial-decay exponent δ for node weighting."""
+        """:class:`float`: Spatial-decay exponent δ for node weighting."""
         return self._distance_power
 
     # ------------------------------------------------------------------
