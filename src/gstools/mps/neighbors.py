@@ -95,6 +95,10 @@ def _select_neighbors(
     # bounded by the ``max_radius`` ball when one is set.
     dim = offset_arr.shape[1]
     r_sq = max_radius * max_radius if max_radius is not None else None
+    # C-order strides: stride[d] = prod(sim_shape[d+1:])
+    strides = np.array(
+        [int(np.prod(sim_shape[d + 1 :])) for d in range(dim)], dtype=np.intp
+    )
     found_coords = []
     found_vidx = []
     for off in offset_arr:
@@ -104,7 +108,7 @@ def _select_neighbors(
         cand = x_i + off
         if np.any(cand < 0) or np.any(cand >= sim_shape_arr):
             continue
-        vi = path_pos_map[int(np.ravel_multi_index(tuple(cand), sim_shape))]
+        vi = path_pos_map[int(cand @ strides)]
         if not (vi < curr_idx or vi == -1):
             continue
         if informed is not None and not informed[tuple(cand)]:

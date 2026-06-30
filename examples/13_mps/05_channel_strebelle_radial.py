@@ -82,13 +82,13 @@ spiral_path = np.column_stack(
 # We use scan_fraction=0.25 and a relaxed threshold=0.05. Perfect matches
 # under continuous rotation/scaling are very rare, so a relaxed threshold
 # prevents the algorithm from picking bad fallbacks.
-ds = gs.DirectSampling(
-    gs.MPSModel(ti, scan_fraction=0.25, threshold=0.05)
-)
+ds = gs.DirectSampling(gs.MPSModel(ti, scan_fraction=0.25, threshold=0.05))
 ds.set_nonstationary(rotation=rotation, anis=anis)
 
-print(f"Simulating non-stationary field ({sg_size}x{sg_size}) with spiral path...")
-field = ds([xs, ys], seed=53, num_threads=1, path=spiral_path)
+print(
+    f"Simulating non-stationary field ({sg_size}x{sg_size}) with spiral path..."
+)
+field = ds([xs, ys], seed=5, num_threads=1, path="random")
 
 # Plotting the reproduction of Mariethoz Figure 7
 fig, axes = plt.subplots(2, 2, figsize=(10, 10))

@@ -922,15 +922,18 @@ class TestDirectSampling(unittest.TestCase):
         ds = DirectSampling(model)
         ds.threshold = 0.3
         ds.scan_fraction = 0.5
-        ds.cond_weight = 4.0
-        # The instance and its model agree — single source of truth.
+        # threshold and scan_fraction still delegate to the shared model.
         self.assertAlmostEqual(ds.mps_model.threshold, 0.3)
         self.assertAlmostEqual(ds.mps_model.scan_fraction, 0.5)
-        self.assertAlmostEqual(ds.mps_model.cond_weight, 4.0)
-        # set_condition(cond_weight=...) also reaches the model.
+        # cond_weight uses a per-instance override: the instance reports the
+        # override value, but the shared model is NOT mutated.
+        ds.cond_weight = 4.0
+        self.assertAlmostEqual(ds.cond_weight, 4.0)
+        self.assertAlmostEqual(ds.mps_model.cond_weight, 1.0)  # model default unchanged
+        # set_condition(cond_weight=...) also uses the override, not the model.
         ds.set_condition([np.array([2.0])], np.array([1.0]), cond_weight=2.5)
-        self.assertAlmostEqual(ds.mps_model.cond_weight, 2.5)
         self.assertAlmostEqual(ds.cond_weight, 2.5)
+        self.assertAlmostEqual(ds.mps_model.cond_weight, 1.0)  # still unchanged
 
 
 class TestMultivariateTrainingImage(unittest.TestCase):
@@ -2813,6 +2816,58 @@ class TestSimulationPath(unittest.TestCase):
 
         expected = np.arange(5).reshape(5, 1)
         np.testing.assert_array_equal(captured["path"], expected)
+
+
+class TestCondWeightOverride(unittest.TestCase):
+    """Finding #6: cond_weight override must not mutate the shared MPSModel."""
+
+    def setUp(self):
+        rng = np.random.default_rng(42)
+        self.ti_data = rng.integers(0, 3, (20, 20))
+
+    def test_shared_model_not_mutated(self):
+        """set_condition(cond_weight=…) on ds1 must not change ds2.cond_weight."""
+        ti = TrainingImage(self.ti_data, n_neighbors=4)
+        model = MPSModel(ti, scan_fraction=0.5, cond_weight=1.0)
+        ds1 = DirectSampling(model)
+        ds2 = DirectSampling(model)
+
+        cpos = [np.array([5.0, 10.0]), np.array([5.0, 10.0])]
+        cval = np.array([1.0, 2.0])
+        ds1.set_condition(cpos, cval, cond_weight=2.0)
+
+        # ds1 sees the override
+        self.assertAlmostEqual(ds1.cond_weight, 2.0)
+        # ds2 must still see the model default
+        self.assertAlmostEqual(ds2.cond_weight, 1.0)
+        # The shared model itself is unchanged
+        self.assertAlmostEqual(model.cond_weight, 1.0)
+
+    def test_override_honored_in_simulation(self):
+        """ds1 with set_condition(cond_weight=2) must equal direct construction with cond_weight=2."""
+        ti1 = TrainingImage(self.ti_data, n_neighbors=4)
+        ds_override = DirectSampling(MPSModel(ti1, scan_fraction=0.5, cond_weight=1.0))
+        cpos = [np.array([5.0, 10.0]), np.array([5.0, 10.0])]
+        cval = np.array([1.0, 2.0])
+        ds_override.set_condition(cpos, cval, cond_weight=2.0)
+        out_override = ds_override([np.arange(15, dtype=float)] * 2, seed=7)
+
+        ti2 = TrainingImage(self.ti_data, n_neighbors=4)
+        ds_direct = DirectSampling(MPSModel(ti2, scan_fraction=0.5, cond_weight=2.0))
+        ds_direct.set_condition(cpos, cval)
+        out_direct = ds_direct([np.arange(15, dtype=float)] * 2, seed=7)
+
+        np.testing.assert_array_equal(out_override, out_direct)
+
+    def test_setter_uses_override_not_model(self):
+        """The cond_weight setter must not mutate the shared MPSModel."""
+        ti = TrainingImage(self.ti_data, n_neighbors=4)
+        model = MPSModel(ti, scan_fraction=0.5, cond_weight=1.0)
+        ds = DirectSampling(model)
+        ds.cond_weight = 3.5
+
+        self.assertAlmostEqual(ds.cond_weight, 3.5)
+        self.assertAlmostEqual(model.cond_weight, 1.0)
 
 
 if __name__ == "__main__":

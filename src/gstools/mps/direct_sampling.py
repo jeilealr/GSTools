@@ -130,6 +130,7 @@ class DirectSampling(Field):
         self._num_threads = None
         self._cond_pos = None
         self._cond_val = None
+        self._cond_weight_override = None
         self._mv_mean = {}
         self._mv_normalizer = {}
         self._mv_trend = {}
@@ -206,9 +207,9 @@ class DirectSampling(Field):
             or store it under a custom name (string).
             Default: :any:`True`
         progress : :class:`bool` or callable or None, optional
-            Show simulation progress. ``True`` displays a :mod:`tqdm` bar (or a
-            plain percentage line if ``tqdm`` is not installed); a callable is
-            invoked as ``progress(n_done, n_total)`` once per completed node.
+            Show simulation progress. ``True`` prints a plain percentage line
+            (no third-party dependency); a callable is invoked as
+            ``progress(n_done, n_total)`` once per completed node.
             ``None``/``False`` (default) disables it.
 
         Returns
@@ -401,7 +402,7 @@ class DirectSampling(Field):
             at construction. Default: :any:`None` (keep existing weight)
         """
         if cond_weight is not None:
-            self._mps_model.cond_weight = float(cond_weight)
+            self._cond_weight_override = float(cond_weight)
         if self._ti.multivariate and isinstance(cond_val, dict):
             if not cond_val:
                 raise ValueError("DirectSampling: cond_val must not be empty")
@@ -566,12 +567,20 @@ class DirectSampling(Field):
 
     @property
     def cond_weight(self):
-        """:class:`float`: Weight for conditioning nodes in distance."""
+        """:class:`float`: Weight for conditioning nodes in distance.
+
+        Returns the per-instance override set via :meth:`set_condition` (or the
+        ``cond_weight`` setter) when one is active; otherwise returns the value
+        from the shared :class:`MPSModel`.  The shared model is never mutated
+        by per-instance overrides.
+        """
+        if self._cond_weight_override is not None:
+            return self._cond_weight_override
         return self._mps_model.cond_weight
 
     @cond_weight.setter
     def cond_weight(self, value):
-        self._mps_model.cond_weight = value
+        self._cond_weight_override = float(value)
 
     @property
     def boundary(self):

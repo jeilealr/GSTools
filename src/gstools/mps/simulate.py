@@ -280,17 +280,24 @@ class _DirectSamplingEngine:
         """
         lags_v, de_v, cm_v, ln_v = {}, {}, {}, {}
         for var in self.variables:
-            coords, _ = _select_neighbors(
-                x_i,
-                self.offset_arr,
-                self.sim_shape_arr,
-                self.sim_shape,
-                self.vmap[var],
-                curr_idx,
-                self.informed[var],
-                self.max_radius_per_var[var],
-                self.n_k[var],
-            )
+            # Parallel path: the DAG pass already computed the identical
+            # _select_neighbors result (same call, informed=None, all earlier-
+            # path deps guaranteed informed by DAG ordering). Reuse those coords
+            # instead of recomputing.  Serial path (cache absent): compute normally.
+            if self._neighbor_cache is not None:
+                coords = self._neighbor_cache[curr_idx][var]
+            else:
+                coords, _ = _select_neighbors(
+                    x_i,
+                    self.offset_arr,
+                    self.sim_shape_arr,
+                    self.sim_shape,
+                    self.vmap[var],
+                    curr_idx,
+                    self.informed[var],
+                    self.max_radius_per_var[var],
+                    self.n_k[var],
+                )
             if len(coords):
                 lv = (coords - x_i).astype(np.float64)
                 dv = self.sg[var][tuple(coords.T)]
@@ -584,6 +591,17 @@ class _DirectSamplingEngine:
             progress, len(self.path), "DS"
         )
 
+        # Parallel-only neighbour cache: the DAG build already calls
+        # _select_neighbors per node×variable; on_cache_ready is called by
+        # _run_path right after DAG build (before any node futures run) so
+        # _gather_neighborhood can skip the redundant _select_neighbors call.
+        # Serial mode (executor is None) leaves _neighbor_cache as None and
+        # _gather_neighborhood computes normally.
+        self._neighbor_cache = None
+
+        def _on_cache_ready(coord_cache):
+            self._neighbor_cache = coord_cache
+
         try:
             _run_path(
                 self.path,
@@ -600,6 +618,9 @@ class _DirectSamplingEngine:
                 self.n_k,
                 self.sim_shape,
                 self.max_radius,
+                on_cache_ready=_on_cache_ready
+                if executor is not None
+                else None,
             )
         finally:
             close_progress()
@@ -678,9 +699,9 @@ def ds_simulate(
         Per-node anisotropy ratios, shape matching the simulation grid.
         ``None`` → isotropic (stationary). All values must be positive.
     progress : bool or callable or None, optional
-        Show simulation progress. ``True`` displays a :mod:`tqdm` bar (or a
-        plain percentage line if ``tqdm`` is not installed); a callable is
-        invoked as ``progress(n_done, n_total)`` once per completed node.
+        Show simulation progress. ``True`` prints a plain percentage line
+        (no third-party dependency); a callable is invoked as
+        ``progress(n_done, n_total)`` once per completed node.
         ``None``/``False`` (default) disables it.
 
     Returns
