@@ -87,10 +87,11 @@ class DirectSampling(Field):
     Parameters
     ----------
     model : MPSModel
-        Algorithm configuration: training image, neighbour count, scan
-        fraction, threshold, conditioning weight, boundary strategy, and
-        maximum search radius. Build one with
-        ``MPSModel(ti, n_neighbors=…, scan_fraction=…, …)``.
+        Algorithm configuration: training image, scan fraction, threshold,
+        conditioning weight, and boundary strategy. Neighbour count and
+        maximum search radius live on each :class:`Variable` inside the
+        :class:`TrainingImage`. Build one with
+        ``MPSModel(ti, scan_fraction=…, threshold=…)``.
     seed : int or nan, optional
         Master RNG seed. Default: nan.
 
@@ -117,7 +118,7 @@ class DirectSampling(Field):
             raise TypeError(
                 "DirectSampling requires an MPSModel as its first argument. "
                 "Wrap a TrainingImage first: "
-                "DirectSampling(MPSModel(ti, n_neighbors=…, …))"
+                "DirectSampling(MPSModel(ti, scan_fraction=…))"
             )
 
         super().__init__(model=None, dim=model.ti.ndim, value_type="scalar")
