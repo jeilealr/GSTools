@@ -130,3 +130,4 @@ docs/source/sg_execution_times.rst
 *.vtk
 
 *.npz
+!examples/13_mps/mps_strebelle.npz
