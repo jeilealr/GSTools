@@ -28,19 +28,20 @@ ti_data = ((np.sin(gx / 5.0) + np.sin((gx + gy) / 8.0)) > 0).astype(float)
 # codes) the distance is the fraction of mismatching neighbours, so the
 # ``distance`` argument is ignored here.
 
-ti = gs.TrainingImage(ti_data, categorical=True)
+ti = gs.TrainingImage(ti_data, categorical=True, n_neighbors=12)
 print(ti)
 
 ###############################################################################
 # Create the :any:`DirectSampling` generator and simulate on a 40x40 grid.
 #
-# * ``n_neighbors`` — how many already-known cells define each data event.
+# * ``n_neighbors`` — how many already-known cells define each data event
+#   (set on the :any:`TrainingImage`).
 # * ``scan_fraction`` — fraction of the training image scanned per cell
 #   (smaller is faster, slightly noisier).
 # * ``threshold=0.0`` — the recommended DSBC mode: always take the best match.
 
 ds = gs.DirectSampling(
-    gs.MPSModel(ti, n_neighbors=12, scan_fraction=0.3, threshold=0.0)
+    gs.MPSModel(ti, scan_fraction=0.3, threshold=0.0)
 )
 field = ds([np.arange(40, dtype=float)] * 2, seed=20250616)
 

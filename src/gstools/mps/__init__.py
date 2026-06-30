@@ -11,6 +11,7 @@ Training image wrapper holding spatial pattern data and distance metrics.
    :toctree:
 
    TrainingImage
+   Variable
 
 MPS Model
 ^^^^^^^^^
@@ -33,6 +34,6 @@ Direct Sampling simulation following the gstools field interface.
 
 from gstools.mps.direct_sampling import DirectSampling
 from gstools.mps.model import MPSModel
-from gstools.mps.training_image import TrainingImage
+from gstools.mps.training_image import TrainingImage, Variable
 
-__all__ = ["DirectSampling", "MPSModel", "TrainingImage"]
+__all__ = ["DirectSampling", "MPSModel", "TrainingImage", "Variable"]

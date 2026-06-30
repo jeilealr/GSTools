@@ -6,6 +6,7 @@ GStools subpackage providing the TrainingImage class for MPS simulations.
 The following classes and functions are provided
 
 .. autosummary::
+   Variable
    TrainingImage
 """
 
@@ -22,7 +23,7 @@ from gstools.mps.distance import (
     vec_variation_dist,
 )
 
-__all__ = ["TrainingImage"]
+__all__ = ["Variable", "TrainingImage"]
 
 
 def _any_float_nan(*arrays):
@@ -44,6 +45,218 @@ def _data_range(arr):
     return dmax if dmax > 0 else 1.0
 
 
+def _parse_distance(distance):
+    """Parse a continuous-distance string into (p_norm, variation_p_norm).
+
+    Exactly one of the two return values is non-``None``:
+    ``"l<p>"`` -> ``(p, None)``; ``"variation"`` -> ``(None, 2.0)``;
+    ``"variation<p>"`` -> ``(None, p)``.
+
+    Returns
+    -------
+    tuple of (float or None, float or None)
+    """
+    distance_lower = str(distance).lower()
+    if distance_lower.startswith("l"):
+        try:
+            p_val = float(distance_lower[1:])
+        except ValueError:
+            raise ValueError(
+                f"TrainingImage: distance starting with 'l' must be followed by "
+                f"a positive number (e.g. 'l1', 'l2', 'l3.5'). Got {distance!r}"
+            )
+        if p_val <= 0:
+            raise ValueError(
+                f"TrainingImage: Lp norm exponent must be > 0, got {p_val}."
+            )
+        return p_val, None
+    if distance_lower == "variation":
+        return None, 2.0
+    if distance_lower.startswith("variation"):
+        try:
+            p_val = float(distance_lower[len("variation") :])
+        except ValueError:
+            raise ValueError(
+                f"TrainingImage: distance starting with 'variation' must be "
+                f"followed by a positive number (e.g. 'variation1', 'variation1.5'). "
+                f"Got {distance!r}"
+            )
+        if p_val <= 0:
+            raise ValueError(
+                f"TrainingImage: variation exponent must be > 0, got {p_val}."
+            )
+        return None, p_val
+    raise ValueError(
+        f"TrainingImage: distance must be 'l<p>' (e.g. 'l1', 'l2'), "
+        f"'variation', or 'variation<p>' (e.g. 'variation1'). "
+        f"Got {distance!r}"
+    )
+
+
+_SENTINEL = object()
+
+
+class Variable:
+    """One channel's data and per-variable distance configuration for MPS.
+
+    Parameters
+    ----------
+    name : str or None
+        Valid Python identifier (unique within a TrainingImage). ``None`` is
+        reserved for the anonymous variable created by univariate
+        ``TrainingImage`` sugar — not for direct user construction.
+    data : numpy.ndarray
+        n-D array. Copied defensively at construction.
+    categorical : bool, optional
+        Whether the variable is categorical. Default: ``True``.
+    distance : str, optional
+        Continuous-distance metric: ``"l1"`` (default), ``"l2"``, ``"lp"``
+        (p > 0), ``"variation"``, ``"variation<p>"``. Ignored when
+        ``categorical=True``.
+    weight : float or None, optional
+        Relative weight for the multivariate joint distance. ``None`` means
+        equal share (resolved at ``TrainingImage`` level). Default: ``None``.
+    n_neighbors : int, optional
+        Maximum neighbours in the data event. Default: 32.
+    max_radius : float or None, optional
+        Exclude SG neighbours beyond this Euclidean distance from the data
+        event. ``None`` → no limit (default).
+    """
+
+    def __init__(
+        self,
+        name,
+        data,
+        *,
+        categorical=True,
+        distance="l1",
+        weight=None,
+        n_neighbors=32,
+        max_radius=None,
+    ):
+        if name is not None and (
+            not isinstance(name, str) or not name.isidentifier()
+        ):
+            raise ValueError(
+                f"Variable: name must be a valid Python identifier, got {name!r}."
+            )
+        self._name = name
+        self._data = np.array(data, copy=True)
+        self._categorical = bool(categorical)
+        self._distance = str(distance)
+        self._weight = None if weight is None else float(weight)
+        if max_radius is not None and float(max_radius) <= 0:
+            raise ValueError(
+                f"Variable: max_radius must be a positive float, got {max_radius!r}."
+            )
+        self._max_radius = None if max_radius is None else float(max_radius)
+        self._has_nan = _any_float_nan(self._data)
+        if self._has_nan:
+            warnings.warn(
+                f"Variable {name!r}: contains NaN cell(s); treated as undefined "
+                "(excluded from continuous data range and pattern distances, "
+                "never pasted into the simulation).",
+                UserWarning,
+                stacklevel=2,
+            )
+        if not self._categorical:
+            self._p_norm, self._variation_p_norm = _parse_distance(
+                self._distance
+            )
+            self._d_max = _data_range(self._data)
+        else:
+            self._p_norm = None
+            self._variation_p_norm = None
+            self._d_max = None
+        # set via setter so the variation guard runs on construction too
+        self._n_neighbors = 32
+        self.n_neighbors = n_neighbors
+
+    # --- read-only properties ---
+
+    @property
+    def name(self):
+        """:class:`str` or None: Variable name."""
+        return self._name
+
+    @property
+    def data(self):
+        """:class:`numpy.ndarray`: Training image data array (defensive copy)."""
+        return self._data
+
+    @property
+    def categorical(self):
+        """:class:`bool`: Whether the variable is categorical."""
+        return self._categorical
+
+    @property
+    def distance(self):
+        """:class:`str`: Distance metric string (e.g. ``"l1"``, ``"variation"``)."""
+        return self._distance
+
+    @property
+    def weight(self):
+        """:class:`float` or None: Raw (un-normalized) weight, or None for equal share."""
+        return self._weight
+
+    @property
+    def p_norm(self):
+        """:class:`float` or None: Lp exponent for continuous variables; None for categorical/variation."""
+        return self._p_norm
+
+    @property
+    def variation_p_norm(self):
+        """:class:`float` or None: Variation-distance exponent; None unless distance is 'variation'."""
+        return self._variation_p_norm
+
+    @property
+    def d_max(self):
+        """:class:`float` or None: Data range (max−min over finite cells) for normalization."""
+        return self._d_max
+
+    @property
+    def has_nan(self):
+        """:class:`bool`: True if the data array contains any NaN."""
+        return self._has_nan
+
+    @property
+    def max_radius(self):
+        """:class:`float` or None: Maximum neighbour radius, or ``None`` for no limit."""
+        return self._max_radius
+
+    # --- mutable property ---
+
+    @property
+    def n_neighbors(self):
+        """:class:`int`: Maximum neighbours in the data event."""
+        return self._n_neighbors
+
+    @n_neighbors.setter
+    def n_neighbors(self, value):
+        v = int(value)
+        if v < 1:
+            raise ValueError(
+                f"Variable: n_neighbors must be >= 1, got {value!r}."
+            )
+        if self._variation_p_norm is not None and v < 2:
+            raise ValueError(
+                "Variable: distance='variation' requires n_neighbors >= 2 "
+                "(a single-point data event has no local mean deviation)."
+            )
+        self._n_neighbors = v
+
+    def __repr__(self):
+        parts = [
+            f"Variable({self._name!r}, shape={self._data.shape}",
+            f"categorical={self._categorical}",
+            f"distance={self._distance!r}",
+            f"n_neighbors={self._n_neighbors}",
+        ]
+        if self._max_radius is not None:
+            parts.append(f"max_radius={self._max_radius!r}")
+        return ", ".join(parts) + ")"
+
+
 class TrainingImage:
     """Training image for multiple point statistics simulation.
 
@@ -52,23 +265,19 @@ class TrainingImage:
 
     Parameters
     ----------
-    data : :class:`numpy.ndarray` or :class:`dict` of {:class:`str`: :class:`numpy.ndarray`}
-        Training image data (n-d array). Pass a dict of named arrays to create
-        a multivariate (co-simulation) training image; all arrays must share
-        the same shape.
-    categorical : :class:`bool` or :class:`dict` of {:class:`str`: :class:`bool`}, optional
-        Whether the variable is categorical. For multivariate TIs, a dict gives
-        one flag per variable (a scalar is broadcast to all). Default: ``True``.
-    weights : :class:`dict` of {:class:`str`: :class:`float`}, optional
-        Per-variable distance weights for multivariate TIs (must sum to 1).
-        Default: uniform. Ignored for univariate TIs.
-    distance : :class:`str` or :class:`dict` of {:class:`str`: :class:`str`}, optional
-        Distance metric for continuous variables: ``"l1"`` (Juda2022
-        Eq. 7, default), ``"l2"`` (Mariethoz2010 Eq. 4–5), or
-        ``"variation"`` (Mariethoz2010 Eq. 9). Ignored when categorical.
-        For multivariate TIs, any variable omitted from the dict defaults to
-        ``"l1"``; the value is ignored for categorical variables (which always
-        use the mismatch fraction).
+    data : :class:`numpy.ndarray` or list of :class:`Variable`
+        Training image data. Pass a numpy array for a univariate TI; pass a
+        non-empty list of :class:`Variable` objects for a multivariate TI.
+    categorical : :class:`bool`, optional
+        Whether the variable is categorical (univariate TIs only). Default: ``True``.
+    distance : :class:`str`, optional
+        Distance metric for continuous variables (univariate TIs only):
+        ``"l1"`` (default), ``"l2"``, ``"lp"`` (p > 0), ``"variation"``,
+        ``"variation<p>"``. Ignored when ``categorical=True``.
+    n_neighbors : :class:`int`, optional
+        Maximum neighbours in the data event (univariate TIs only). Default: 32.
+    max_radius : :class:`float` or None, optional
+        Exclude SG neighbours beyond this distance (univariate TIs only). Default: None.
     distance_power : :class:`float`, optional
         Exponent δ for spatial-decay weighting of neighbours
         (Mariethoz2010 Eq. 3). Applied to **all** distance types.
@@ -79,169 +288,83 @@ class TrainingImage:
     def __init__(
         self,
         data,
+        *,
         categorical=True,
         distance="l1",
+        n_neighbors=32,
+        max_radius=None,
         distance_power=0.0,
-        weights=None,
     ):
         self._distance_power = float(distance_power)
         if self._distance_power < 0:
             raise ValueError("TrainingImage: distance_power must be >= 0")
 
-        if isinstance(data, dict):
-            self._init_multivariate(data, categorical, weights, distance)
-            return
-
-        # ---- univariate (unchanged behaviour) ----
-        self._multivariate = False
-        self._variables = None
-        self._weights = None
-        self._data = np.array(data, copy=True)
-        self._shape = self._data.shape
-        self._categorical = bool(categorical)
-        self._distance_type = distance
-        self._p_norm = None
-        self._variation_p_norm = None
-        self._has_nan = _any_float_nan(self._data)
-        self._warn_if_nan()
-        if not self._categorical:
-            self._p_norm, self._variation_p_norm = self._parse_distance(
-                distance
-            )
-            self._d_max = _data_range(self._data)
+        if isinstance(data, list):
+            self._init_from_variables(data)
         else:
-            self._d_max = None
+            # Univariate sugar: build one anonymous Variable
+            self._multivariate = False
+            var = Variable(
+                None,
+                data,
+                categorical=categorical,
+                distance=distance,
+                weight=1.0,
+                n_neighbors=n_neighbors,
+                max_radius=max_radius,
+            )
+            self._variables = [var]
+            self._var_map = {None: var}
+            self._shape = var.data.shape
+            self._has_nan = var.has_nan
+            self._normalized_weights = None
 
-    @staticmethod
-    def _parse_distance(distance):
-        """Parse a continuous-distance string into (p_norm, variation_p_norm).
-
-        Exactly one of the two return values is non-``None``:
-        ``"l<p>"`` -> ``(p, None)``; ``"variation"`` -> ``(None, 2.0)``;
-        ``"variation<p>"`` -> ``(None, p)``.
-
-        Returns
-        -------
-        tuple of (float or None, float or None)
-        """
-        distance_lower = str(distance).lower()
-        if distance_lower.startswith("l"):
-            try:
-                p_val = float(distance_lower[1:])
-            except ValueError:
-                raise ValueError(
-                    f"TrainingImage: distance starting with 'l' must be followed by "
-                    f"a positive number (e.g. 'l1', 'l2', 'l3.5'). Got {distance!r}"
-                )
-            if p_val <= 0:
-                raise ValueError(
-                    f"TrainingImage: Lp norm exponent must be > 0, got {p_val}."
-                )
-            return p_val, None
-        if distance_lower == "variation":
-            return None, 2.0
-        if distance_lower.startswith("variation"):
-            try:
-                p_val = float(distance_lower[len("variation") :])
-            except ValueError:
-                raise ValueError(
-                    f"TrainingImage: distance starting with 'variation' must be "
-                    f"followed by a positive number (e.g. 'variation1', 'variation1.5'). "
-                    f"Got {distance!r}"
-                )
-            if p_val <= 0:
-                raise ValueError(
-                    f"TrainingImage: variation exponent must be > 0, got {p_val}."
-                )
-            return None, p_val
-        raise ValueError(
-            f"TrainingImage: distance must be 'l<p>' (e.g. 'l1', 'l2'), "
-            f"'variation', or 'variation<p>' (e.g. 'variation1'). "
-            f"Got {distance!r}"
-        )
-
-    def _init_multivariate(self, data, categorical, weights, distance):
-        """Initialise a multivariate (dict-valued) training image.
-
-        Parameters
-        ----------
-        data : dict of {str: numpy.ndarray}
-            Named variable arrays (all the same shape).
-        categorical : bool or dict of {str: bool}
-            Categorical flag, scalar (broadcast) or per-variable.
-        weights : dict of {str: float} or None
-            Per-variable distance weights (must sum to 1); ``None`` → uniform.
-        distance : str or dict of {str: str}
-            Continuous-distance metric, scalar (broadcast) or per-variable.
-        """
-        self._multivariate = True
-        self._data = None
-        self._variables = {k: np.array(v, copy=True) for k, v in data.items()}
-        if len(self._variables) == 0:
-            raise ValueError("TrainingImage: multivariate data dict is empty.")
-        shapes = {v.shape for v in self._variables.values()}
+    def _init_from_variables(self, var_list):
+        if not var_list or not all(isinstance(v, Variable) for v in var_list):
+            raise TypeError(
+                "TrainingImage: data must be a numpy.ndarray (univariate) or a "
+                "non-empty list of Variable objects (multivariate)."
+            )
+        names = [v.name for v in var_list]
+        if any(n is None for n in names):
+            raise ValueError(
+                "TrainingImage: Variable names must not be None in a Variable list."
+            )
+        if len(set(names)) != len(names):
+            raise ValueError(
+                f"TrainingImage: Variable names must be unique, got {names!r}."
+            )
+        shapes = {v.data.shape for v in var_list}
         if len(shapes) != 1:
             raise ValueError(
                 "TrainingImage: All variables must have the same shape."
             )
+        self._multivariate = True
+        self._variables = list(var_list)
+        self._var_map = {v.name: v for v in self._variables}
         self._shape = shapes.pop()
-        names = list(self._variables)
-        self._has_nan = _any_float_nan(*self._variables.values())
-        self._warn_if_nan()
+        self._has_nan = any(v.has_nan for v in self._variables)
 
-        self._categorical = (
-            {k: bool(categorical[k]) for k in names}
-            if isinstance(categorical, dict)
-            else {k: bool(categorical) for k in names}
-        )
-        self._distance_type = (
-            {k: distance.get(k, "l1") for k in names}
-            if isinstance(distance, dict)
-            else {k: distance for k in names}
-        )
-        self._p_norm, self._variation_p_norm, self._d_max = {}, {}, {}
-        for k in names:
-            if self._categorical[k]:
-                self._p_norm[k] = None
-                self._variation_p_norm[k] = None
-                self._d_max[k] = None
-            else:
-                self._p_norm[k], self._variation_p_norm[k] = (
-                    self._parse_distance(self._distance_type[k])
-                )
-                self._d_max[k] = _data_range(self._variables[k])
-
-        if weights is None:
-            self._weights = {k: 1.0 / len(names) for k in names}
-        else:
-            missing = set(names) - set(weights)
-            if missing:
-                raise ValueError(
-                    f"TrainingImage: weights missing for variables {sorted(missing)}."
-                )
-            extra = set(weights) - set(names)
-            if extra:
-                raise ValueError(
-                    f"TrainingImage: weights has unknown variables {sorted(extra)}."
-                )
-            wsum = float(sum(weights[k] for k in names))
-            if not np.isclose(wsum, 1.0):
-                raise ValueError(
-                    f"TrainingImage: weights must sum to 1.0, got {wsum}."
-                )
-            self._weights = {k: float(weights[k]) for k in names}
-
-    def _warn_if_nan(self):
-        """Warn once (at construction) if the TI contains any NaN cell."""
-        if self._has_nan:
-            warnings.warn(
-                "TrainingImage: contains NaN cell(s); they are treated as "
-                "undefined (masked): excluded from the continuous data range "
-                "and from pattern distances, and never pasted into the "
-                "simulation.",
-                UserWarning,
-                stacklevel=3,
+        # Weight normalization: all-None → uniform 1/m; all-explicit → normalize;
+        # mixed → error.
+        raw = [v.weight for v in var_list]
+        n = len(var_list)
+        if all(w is None for w in raw):
+            self._normalized_weights = {v.name: 1.0 / n for v in var_list}
+        elif any(w is None for w in raw):
+            raise ValueError(
+                "TrainingImage: mixing None and explicit weights is not allowed. "
+                "Either specify weight on every Variable or on none."
             )
+        else:
+            total = sum(raw)
+            if total <= 0:
+                raise ValueError(
+                    "TrainingImage: sum of weights must be positive."
+                )
+            self._normalized_weights = {
+                v.name: v.weight / total for v in var_list
+            }
 
     # ------------------------------------------------------------------
     # Properties
@@ -249,13 +372,15 @@ class TrainingImage:
 
     @property
     def has_nan(self):
-        """:class:`bool`: True if any floating-dtype variable array contains NaN."""
+        """:class:`bool`: True if any Variable contains NaN."""
         return self._has_nan
 
     @property
     def data(self):
-        """:class:`numpy.ndarray`: Raw training image data."""
-        return self._data
+        """:class:`numpy.ndarray` or None: Raw data for univariate TIs; None for MV."""
+        if self._multivariate:
+            return None
+        return self._var_map[None].data
 
     @property
     def ndim(self):
@@ -264,51 +389,68 @@ class TrainingImage:
 
     @property
     def shape(self):
-        """:class:`tuple`: Shape of the training image (shared across variables)."""
+        """:class:`tuple`: Shape of the training image."""
         return self._shape
 
     @property
     def multivariate(self):
-        """:class:`bool`: Whether the TI holds multiple co-simulated variables."""
+        """:class:`bool`: True for Variable-list TIs; False for bare-array TIs."""
         return self._multivariate
 
     @property
     def variables(self):
-        """:class:`list` or :any:`None`: Variable names (insertion order, all equal), or None if univariate."""
-        return list(self._variables) if self._multivariate else None
+        """:class:`list` of :class:`Variable`: All variables (univariate has one anonymous entry)."""
+        return list(self._variables)
 
     @property
     def weights(self):
-        """:class:`dict` or :any:`None`: Per-variable distance weights (sum to 1), or None."""
-        return dict(self._weights) if self._multivariate else None
+        """:class:`dict` or None: Normalized {name: float} weights for MV TIs; None for UV."""
+        if not self._multivariate:
+            return None
+        return dict(self._normalized_weights)
 
-    def variable(self, name):
-        """:class:`numpy.ndarray`: Data array for one variable (multivariate TIs).
+    def variable(self, name=_SENTINEL):
+        """Return the live Variable by name, or the sole variable if called with no argument.
 
         Parameters
         ----------
-        name : :class:`str`
-            Variable name.
+        name : str, optional
+            Variable name. Omit to return the single variable of a one-variable TI.
 
         Returns
         -------
-        :class:`numpy.ndarray`
+        Variable
         """
-        if not self._multivariate:
-            raise TypeError(
-                "variable() is only available on multivariate TrainingImages."
-            )
-        return self._variables[name]
+        if name is _SENTINEL:
+            if len(self._variables) != 1:
+                raise TypeError(
+                    "variable() with no argument requires exactly one variable; "
+                    f"this TI has {len(self._variables)}."
+                )
+            return self._variables[0]
+        if name not in self._var_map:
+            raise KeyError(f"TrainingImage: no variable named {name!r}.")
+        return self._var_map[name]
 
     @property
     def categorical(self):
-        """:class:`bool` or :class:`dict` of {:class:`str`: :class:`bool`}: Whether the variable(s) are categorical."""
-        return self._categorical
+        """:class:`bool`: Whether the variable is categorical (univariate TIs only)."""
+        if self._multivariate:
+            raise AttributeError(
+                "TrainingImage.categorical is not available for multivariate TIs. "
+                "Use ti.variable(name).categorical."
+            )
+        return self._var_map[None].categorical
 
     @property
     def distance_type(self):
-        """:class:`str` or :class:`dict` of {:class:`str`: :class:`str`}: Distance metric(s) (e.g. ``"l1"``, ``"l2"``, ``"variation"``)."""
-        return self._distance_type
+        """:class:`str`: Distance metric string (univariate TIs only)."""
+        if self._multivariate:
+            raise AttributeError(
+                "TrainingImage.distance_type is not available for multivariate TIs. "
+                "Use ti.variable(name).distance."
+            )
+        return self._var_map[None].distance
 
     @property
     def distance_power(self):
@@ -379,30 +521,21 @@ class TrainingImage:
             SG data event (used to compute Z̄(x_i)).
         data_event_ti : array-like
             TI data event (used to compute Z̄(y)).
-        var : str, optional
-            Variable name for multivariate TIs. When ``None``, uses the
-            univariate attributes.
+        var : str or None, optional
+            Variable name for multivariate TIs. ``None`` selects the anonymous
+            univariate variable.
 
         Returns
         -------
         float
         """
-        if var is None:
-            categorical = self._categorical
-            vp_norm = self._variation_p_norm
-        else:
-            categorical = self._categorical[var]
-            vp_norm = self._variation_p_norm[var]
-        if vp_norm is None or categorical:
+        v = self._var_map[var]
+        if v.variation_p_norm is None or v.categorical:
             return ti_val
         data_event_sim = np.asarray(data_event_sim, dtype=np.float64)
         data_event_ti = np.asarray(data_event_ti, dtype=np.float64)
         if data_event_sim.size == 0 or data_event_ti.size == 0:
             return ti_val
-        # nanmean: the matched TI event may include undefined (NaN) neighbours
-        # on a masked TI; de-mean over the defined positions only. For a fully
-        # finite event this is identical to ``mean``. If every TI neighbour is
-        # undefined, drop the TI mean-shift term (treat as 0).
         ti_mean = (
             np.nanmean(data_event_ti)
             if np.isfinite(data_event_ti).any()
@@ -425,8 +558,8 @@ class TrainingImage:
 
         Parameters
         ----------
-        var : str
-            Variable name.
+        var : str or None
+            Variable name (str for multivariate TIs; None for univariate internal).
         de_sim : array-like, shape (n,)
             SG data event for this variable.
         all_de_ti : array-like, shape (max_scan, n)
@@ -446,6 +579,7 @@ class TrainingImage:
         numpy.ndarray, shape (max_scan,)
             Distance in [0, 1] for each candidate.
         """
+        v = self._var_map[var]  # var is a str or None (univariate internal)
         de_sim = np.asarray(de_sim, dtype=np.float64)
         all_de_ti = np.asarray(all_de_ti, dtype=np.float64)
         n = len(de_sim)
@@ -459,10 +593,10 @@ class TrainingImage:
             )
         )
         return self._dispatch_metric(
-            self._categorical[var],
-            self._p_norm[var],
-            self._variation_p_norm[var],
-            self._d_max[var],
+            v.categorical,
+            v.p_norm,
+            v.variation_p_norm,
+            v.d_max,
             de_sim,
             all_de_ti,
             w,
@@ -470,8 +604,12 @@ class TrainingImage:
         )
 
     def __repr__(self):
+        if self._multivariate:
+            names = [v.name for v in self._variables]
+            return f"TrainingImage(variables={names!r}, shape={self.shape})"
+        v = self._var_map[None]
         return (
             f"TrainingImage(shape={self.shape}, "
-            f"categorical={self._categorical}, "
-            f"distance={self._distance_type!r})"
+            f"categorical={v.categorical}, "
+            f"distance={v.distance!r})"
         )

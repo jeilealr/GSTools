@@ -6,7 +6,6 @@ captured by closures inside `ds_simulate`. The engine orchestrates per-node
 simulation by calling the stateless `neighbors`, `scan`, and `runner` modules.
 """
 
-import warnings
 from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
@@ -22,31 +21,98 @@ from gstools.mps.neighbors import (
 )
 from gstools.mps.runner import _make_progress, _run_path
 from gstools.mps.scan import _scan_for_match
-from gstools.mps.training_image import TrainingImage
-
-# Sentinel variable name used when wrapping a univariate TI for the MV engine.
-_MV_VAR = "_v"
 
 
-def _univar_as_mv_ti(ti):
-    """Wrap a univariate TrainingImage as a single-variable multivariate TI.
+def _build_path(unknown, path, rng_path, sim_shape):
+    """Build the (N, dim) node visit order.
 
-    The resulting TI is bit-identical to a hand-crafted single-variable MV TI
-    using the same data and distance parameters.  Used by ``ds_simulate`` and
-    ``DirectSampling.__call__`` to route univariate work through ``ds_simulate``.
+    Parameters
+    ----------
+    unknown : numpy.ndarray of bool, shape sim_shape
+        Mask of nodes that require simulation (at least one uninformed variable).
+    path : str or array-like
+        ``"random"`` — uniformly shuffled raster order (default DS behaviour).
+        ``"sequential"`` — lexicographic (raster) order; ``rng_path`` is not
+        consumed, making the visit order deterministic without a ``path_seed``.
+        An explicit ``(N, dim)`` integer array — the caller-supplied visit
+        order.  Must include every unknown node; conditioned nodes present in
+        the array are silently skipped so that a full-grid path (e.g. a spiral
+        over all nodes) works unchanged with conditioning data.  Duplicate rows
+        and missing unknown nodes are still errors.
+    rng_path : numpy.random.RandomState
+        Controls shuffling when ``path="random"``; unused for the other modes.
+    sim_shape : tuple of int
+        Simulation grid shape.
 
-    Re-wraps the *same* data the user already constructed, so any NaN/masked-TI
-    warning was already raised at the user's construction; suppress the
-    duplicate here.
+    Returns
+    -------
+    numpy.ndarray, shape (N, dim), dtype numpy.intp
+        Node visit order.
+
+    Raises
+    ------
+    ValueError
+        For an unrecognised string or an invalid explicit array.
     """
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", UserWarning)
-        return TrainingImage(
-            {_MV_VAR: ti.data},
-            categorical={_MV_VAR: ti.categorical},
-            distance={_MV_VAR: ti.distance_type},
-            distance_power=ti.distance_power,
+    base = np.argwhere(
+        unknown
+    )  # raster (lexicographic) order over unknown nodes
+    if isinstance(path, str):
+        if path == "sequential":
+            return base
+        if path == "random":
+            return base[rng_path.permutation(len(base))]
+        raise ValueError(
+            f"DirectSampling: path must be 'random', 'sequential', or an "
+            f"(N, dim) array; got {path!r}"
         )
+    arr = np.asarray(path)
+    dim = len(sim_shape)
+    # Shape check
+    if arr.ndim != 2 or arr.shape[1] != dim:
+        raise ValueError(
+            f"DirectSampling: explicit path shape must be (N, dim={dim}); "
+            f"got {arr.shape!r}"
+        )
+    # Integer check and bounds check
+    if not np.issubdtype(arr.dtype, np.integer):
+        # Allow float arrays with integer values (e.g. from argwhere stored as float)
+        if not np.all(arr == np.floor(arr)):
+            raise ValueError(
+                "DirectSampling: explicit path must contain integer coordinates"
+            )
+        arr = arr.astype(np.intp)
+    else:
+        arr = arr.astype(np.intp, copy=False)
+    for d in range(dim):
+        if np.any(arr[:, d] < 0) or np.any(arr[:, d] >= sim_shape[d]):
+            raise ValueError(
+                f"DirectSampling: explicit path has out-of-bounds coordinates "
+                f"along axis {d} for grid shape {sim_shape!r}"
+            )
+    # Validation: duplicates → error; conditioned extras → silently drop;
+    # missing unknown nodes → error.
+    flat_path = np.ravel_multi_index(arr.T, sim_shape)
+    flat_base = (
+        np.ravel_multi_index(base.T, sim_shape)
+        if len(base)
+        else np.empty(0, dtype=np.intp)
+    )
+    if len(np.unique(flat_path)) != len(flat_path):
+        raise ValueError(
+            "DirectSampling: explicit path contains duplicate nodes"
+        )
+    # Keep only unknown-set nodes (conditioned entries are silently dropped)
+    unknown_mask = np.isin(flat_path, flat_base)
+    arr = arr[unknown_mask]
+    flat_path = flat_path[unknown_mask]
+    # Every unknown node must appear in the (filtered) path
+    if not np.array_equal(np.sort(flat_path), np.sort(flat_base)):
+        raise ValueError(
+            "DirectSampling: explicit path is missing one or more unknown nodes "
+            "(every unset grid node must appear in the path)"
+        )
+    return arr
 
 
 class _DirectSamplingEngine:
@@ -56,7 +122,6 @@ class _DirectSamplingEngine:
         self,
         training_image,
         sim_shape,
-        n_neighbors,
         threshold,
         scan_fraction,
         rng_path,
@@ -64,15 +129,20 @@ class _DirectSamplingEngine:
         conditions=None,
         cond_weight=1.0,
         boundary="strict",
-        max_radius=None,
         rotation_map=None,
         anis_map=None,
+        path="random",
     ):
         self.training_image = training_image
-        self.variables = training_image.variables
+        self.variables = [v.name for v in training_image.variables]
         self.weights = (
-            training_image.weights
-        )  # hoisted once (avoid per-block dict copy)
+            {
+                v.name: training_image.weights[v.name]
+                for v in training_image.variables
+            }
+            if training_image.multivariate
+            else {None: 1.0}
+        )
         self.ti_shape = np.array(training_image.shape)
         self.sim_shape = sim_shape
         self.sim_shape_arr = np.array(sim_shape)
@@ -81,15 +151,11 @@ class _DirectSamplingEngine:
         self.scan_fraction = scan_fraction
         self.cond_weight = cond_weight
         self.boundary = boundary
-        self.max_radius = max_radius
         self.rotation_map = rotation_map
         self.anis_map = anis_map
 
-        self.n_k = (
-            {v: int(n_neighbors[v]) for v in self.variables}
-            if isinstance(n_neighbors, dict)
-            else {v: int(n_neighbors) for v in self.variables}
-        )
+        self.n_k = {v.name: v.n_neighbors for v in training_image.variables}
+        self.ti_vars = {v.name: v.data for v in training_image.variables}
 
         self.sg = {v: np.full(sim_shape, np.nan) for v in self.variables}
         self.informed = {
@@ -105,27 +171,33 @@ class _DirectSamplingEngine:
                     self.is_cond[v][idx] = True
                     self.informed[v][idx] = True
 
+        self.max_radius_per_var = {
+            v.name: v.max_radius for v in training_image.variables
+        }
+        _radii = [r for r in self.max_radius_per_var.values() if r is not None]
+        global_max_radius = max(_radii) if _radii else None
         max_off_int = (
-            int(np.ceil(max_radius)) if max_radius is not None else None
+            int(np.ceil(global_max_radius))
+            if global_max_radius is not None
+            else None
         )
         self.offset_arr = _precompute_offsets(sim_shape, max_off_int)
+        self.max_radius = global_max_radius
 
         # Node path: every node with >= 1 uninformed variable.  Fully-conditioned
         # nodes need no simulation and are excluded (they stay -1 / always available).
         unknown = np.zeros(sim_shape, dtype=bool)
         for v in self.variables:
             unknown |= np.isnan(self.sg[v])
-        path = np.argwhere(unknown)
-        path = path[rng_path.permutation(len(path))]
-        self.path = path
-        n_nodes = len(path)
+        self.path = _build_path(unknown, path, rng_path, sim_shape)
+        n_nodes = len(self.path)
         self.u_start = rng_nodes.uniform(size=n_nodes)
         self.u_fallback = rng_nodes.uniform(size=(n_nodes, self.dim))
 
         sg_size = int(np.prod(sim_shape))
         path_flat = (
-            np.ravel_multi_index(path.T, sim_shape)
-            if len(path)
+            np.ravel_multi_index(self.path.T, sim_shape)
+            if len(self.path)
             else np.empty(0, dtype=np.intp)
         )
         # Per-variable position maps over the node path.  A path node carries its
@@ -139,10 +211,6 @@ class _DirectSamplingEngine:
             m[path_flat] = np.arange(len(path_flat))
             m[np.flatnonzero(self.is_cond[v].reshape(-1))] = -1
             self.vmap[v] = m
-
-        # Hoist TI variable arrays once — avoids repeated method-call overhead
-        # inside the per-node scan loop; all inner closures read from this dict.
-        self.ti_vars = {v: training_image.variable(v) for v in self.variables}
 
         # Masked-TI support: NaN cells are undefined. When present, distances
         # exclude them per-position and fallback draws are restricted to cells that
@@ -220,7 +288,7 @@ class _DirectSamplingEngine:
                 self.vmap[var],
                 curr_idx,
                 self.informed[var],
-                self.max_radius,
+                self.max_radius_per_var[var],
                 self.n_k[var],
             )
             if len(coords):
@@ -544,7 +612,6 @@ class _DirectSamplingEngine:
 def ds_simulate(
     training_image,
     sim_shape,
-    n_neighbors,
     threshold,
     scan_fraction,
     rng_path,
@@ -552,11 +619,11 @@ def ds_simulate(
     conditions=None,
     cond_weight=1.0,
     boundary="strict",
-    max_radius=None,
     num_threads=None,
     rotation_map=None,
     anis_map=None,
     progress=None,
+    path="random",
 ):
     """Node-wise multivariate Direct Sampling (Mariethoz2010 §3, Eq. 8).
 
@@ -573,28 +640,34 @@ def ds_simulate(
     Parameters
     ----------
     training_image : TrainingImage
-        Multivariate training image (``training_image.multivariate`` is True).
+        Training image; per-variable ``n_neighbors`` and ``max_radius`` are
+        read from each :class:`Variable` object.
     sim_shape : tuple
         Simulation grid shape.
-    n_neighbors : int or dict
-        Maximum neighbours per variable. An ``int`` broadcasts to all variables;
-        a dict gives one value per variable name.
     threshold : float
         Distance threshold (Juda2022 §2). ``0.0`` -> DSBC mode.
     scan_fraction : float
         Fraction of the TI to scan per node, capped at the valid search window.
     rng_path : numpy.random.RandomState
         RandomState controlling the simulation path (node visit order).
+        Only consumed when ``path="random"``; unused otherwise.
     rng_nodes : numpy.random.RandomState
         RandomState controlling TI scan entry points and fallback cells.
+    path : str or array-like, optional
+        Node visit order.  ``"random"`` (default) shuffles the unknown nodes
+        uniformly using ``rng_path`` — the standard DS behaviour.
+        ``"sequential"`` visits nodes in raster (lexicographic) order, which
+        is deterministic and does not consume ``rng_path``.  An explicit
+        integer array of shape ``(N, dim)`` provides a caller-supplied order
+        and must be a permutation of exactly the unknown-node set (missing
+        nodes, extra nodes, and duplicate rows all raise ``ValueError``).
+        Default: ``"random"``.
     conditions : dict, optional
         ``{node_index: {variable: value}}`` conditioning data.
     cond_weight : float, optional
         Weight delta for conditioning nodes (Mariethoz2010 §3 ¶26).
     boundary : str, optional
         ``"strict"`` (default) or ``"partial"`` search-window strategy.
-    max_radius : float, optional
-        Euclidean cap on neighbour selection.
     num_threads : int or None, optional
         Threads for the node-wise DAG. ``None`` -> ``config.NUM_THREADS``.
     rotation_map : numpy.ndarray or None, optional
@@ -618,7 +691,6 @@ def ds_simulate(
     engine = _DirectSamplingEngine(
         training_image,
         sim_shape,
-        n_neighbors,
         threshold,
         scan_fraction,
         rng_path,
@@ -626,8 +698,8 @@ def ds_simulate(
         conditions=conditions,
         cond_weight=cond_weight,
         boundary=boundary,
-        max_radius=max_radius,
         rotation_map=rotation_map,
         anis_map=anis_map,
+        path=path,
     )
     return engine.run(num_threads=num_threads, progress=progress)

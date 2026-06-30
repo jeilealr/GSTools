@@ -20,7 +20,7 @@ import gstools as gs
 
 gx, gy = np.meshgrid(np.arange(60), np.arange(60), indexing="ij")
 ti_data = ((np.sin(gx / 5.0) + np.sin((gx + gy) / 8.0)) > 0).astype(float)
-ti = gs.TrainingImage(ti_data, categorical=True)
+ti = gs.TrainingImage(ti_data, categorical=True, n_neighbors=12)
 
 ###############################################################################
 # Draw 40 random "hard data" points and read their facies from the TI. In a
@@ -37,7 +37,7 @@ cond_val = ti_data[cond_x.astype(int), cond_y.astype(int)]
 # its nearest grid node, so the values are honoured exactly at those cells.
 
 ds = gs.DirectSampling(
-    gs.MPSModel(ti, n_neighbors=12, scan_fraction=0.3, threshold=0.0)
+    gs.MPSModel(ti, scan_fraction=0.3, threshold=0.0)
 )
 ds.set_condition([cond_x, cond_y], cond_val)
 field = ds([np.arange(40, dtype=float)] * 2, seed=7)

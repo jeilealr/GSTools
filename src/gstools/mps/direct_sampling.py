@@ -13,7 +13,7 @@ import numpy as np
 
 from gstools.field.base import Field
 from gstools.mps.model import MPSModel
-from gstools.mps.simulate import _MV_VAR, _univar_as_mv_ti, ds_simulate
+from gstools.mps.simulate import ds_simulate
 from gstools.normalizer.tools import apply_mean_norm_trend
 from gstools.random.rng import RNG
 from gstools.tools.geometric import no_of_angles
@@ -137,11 +137,10 @@ class DirectSampling(Field):
         self.rng = RNG(None if np.isnan(seed) else int(seed))
         if model.ti.multivariate:
             for v in model.ti.variables:
-                if not v.isidentifier() or v in dir(self):
+                if v.name in dir(self):
                     raise ValueError(
-                        f"DirectSampling: variable name {v!r} cannot be used as "
-                        f"a field name; use a valid Python identifier that does "
-                        f"not collide with an existing attribute."
+                        f"DirectSampling: variable name {v.name!r} collides with an "
+                        f"existing attribute."
                     )
 
     def __call__(
@@ -150,6 +149,7 @@ class DirectSampling(Field):
         seed=np.nan,
         path_seed=np.nan,
         node_seed=np.nan,
+        path="random",
         mesh_type="structured",
         post_process=True,
         store=True,
@@ -177,12 +177,23 @@ class DirectSampling(Field):
             visited. If ``np.nan`` (default), derived from the master RNG
             together with ``node_seed``. Fix this while varying ``node_seed``
             to study the effect of TI search randomness under a constant
-            visit order, or vice versa.
+            visit order, or vice versa.  Only has an effect when
+            ``path="random"``; inert for ``"sequential"`` and explicit arrays.
             Default: ``np.nan``
         node_seed : :class:`int` or :any:`numpy.nan`, optional
             Seed controlling the TI scan entry point and fallback cell for
             every node. If ``np.nan`` (default), derived from the master RNG.
             Default: ``np.nan``
+        path : :class:`str` or array-like, optional
+            Node visit order.  ``"random"`` (default) shuffles the unknown
+            nodes uniformly using the ``path_seed``-controlled RNG — the
+            standard DS behaviour.  ``"sequential"`` visits nodes in raster
+            (lexicographic) order, which is deterministic regardless of
+            ``path_seed``.  An explicit integer array of shape ``(N, dim)``
+            provides a caller-supplied visit order and must be a permutation
+            of exactly the unknown-node set (missing nodes, extra nodes, and
+            duplicate rows all raise :class:`ValueError`).
+            Default: ``"random"``
         mesh_type : :class:`str`, optional
             Grid type. Must be ``"structured"``.
             Default: ``"structured"``
@@ -249,24 +260,21 @@ class DirectSampling(Field):
         n_threads = (
             num_threads if num_threads is not None else self._num_threads
         )
-        # Unify engine invocation: always present a multivariate TI and
-        # conditions dict to ds_simulate, regardless of whether the user's TI
-        # is univariate or multivariate.  The single-call result is then
-        # unwrapped to the appropriate return type at the end.
+        # ds_simulate now accepts both univariate and multivariate TIs directly.
+        # Univariate TIs produce {None: array}; multivariate produce {name: array}.
+        # Conditions for univariate are {idx: value}; ds_simulate expects
+        # {idx: {var: value}} so we remap using the sentinel key None.
         if self._ti.multivariate:
-            sim_ti = self._ti
             sim_conditions = conditions  # already {idx: {var: val}}
         else:
-            sim_ti = _univar_as_mv_ti(self._ti)
             sim_conditions = (
-                {idx: {_MV_VAR: val} for idx, val in conditions.items()}
+                {idx: {None: val} for idx, val in conditions.items()}
                 if conditions
                 else None
             )
         result = ds_simulate(
-            training_image=sim_ti,
+            training_image=self._ti,
             sim_shape=shape,
-            n_neighbors=self.n_neighbors,
             threshold=self.threshold,
             scan_fraction=self.scan_fraction,
             rng_path=rng_path,
@@ -274,14 +282,14 @@ class DirectSampling(Field):
             conditions=sim_conditions,
             cond_weight=self.cond_weight,
             boundary=self.boundary,
-            max_radius=self.max_radius,
             num_threads=n_threads,
             rotation_map=rotation_map,
             anis_map=anis_map,
             progress=progress,
+            path=path,
         )
         # Branch only on the return type: multivariate → dict of named arrays;
-        # univariate → bare array (unwrap the single _MV_VAR key).
+        # univariate → bare array (unwrap the single None key).
         if self._ti.multivariate:
             # Equal treatment: every variable is a first-class named field
             # (no privileged primary). Returned as a dict keyed by variable name.
@@ -291,11 +299,11 @@ class DirectSampling(Field):
             # post_field is then called with process=False to handle storage only.
             out = {}
             for v in self._ti.variables:
-                fld = result[v]
+                fld = result[v.name]
                 if post_process:
-                    mv_mean = self._mv_mean.get(v, self.mean)
-                    mv_norm = self._mv_normalizer.get(v, self.normalizer)
-                    mv_trend = self._mv_trend.get(v, self.trend)
+                    mv_mean = self._mv_mean.get(v.name, self.mean)
+                    mv_norm = self._mv_normalizer.get(v.name, self.normalizer)
+                    mv_trend = self._mv_trend.get(v.name, self.trend)
                     fld = apply_mean_norm_trend(
                         pos=self.pos,
                         field=fld,
@@ -307,9 +315,11 @@ class DirectSampling(Field):
                         check_shape=False,
                         stacked=False,
                     )
-                out[v] = self.post_field(fld, name=v, process=False, save=save)
+                out[v.name] = self.post_field(
+                    fld, name=v.name, process=False, save=save
+                )
             return out
-        return self.post_field(result[_MV_VAR], name, post_process, save)
+        return self.post_field(result[None], name, post_process, save)
 
     def _conditions_to_grid(self, axes):
         """Snap conditioning points to nearest grid nodes (Mariethoz2010 §3 ¶12).
@@ -394,11 +404,11 @@ class DirectSampling(Field):
         if self._ti.multivariate and isinstance(cond_val, dict):
             if not cond_val:
                 raise ValueError("DirectSampling: cond_val must not be empty")
-            unknown = set(cond_val) - set(self._ti.variables)
+            unknown = set(cond_val) - {v.name for v in self._ti.variables}
             if unknown:
                 raise ValueError(
                     f"cond_val contains unknown variable(s): {sorted(unknown)}. "
-                    f"TI variables are: {sorted(self._ti.variables)}"
+                    f"TI variables are: {sorted(v.name for v in self._ti.variables)}"
                 )
             cond_pos_arr = np.asarray(cond_pos, dtype=np.double).reshape(
                 self.dim, -1
@@ -507,12 +517,33 @@ class DirectSampling(Field):
 
     @property
     def n_neighbors(self):
-        """:class:`int` or :class:`dict`: Maximum neighbours in the data event (per-variable dict for multivariate TIs)."""
-        return self._mps_model.n_neighbors
+        """:class:`int` or :class:`dict`: n_neighbors per variable (scalar if all equal)."""
+        vars_ = self._ti.variables
+        vals = [v.n_neighbors for v in vars_]
+        if len(set(vals)) == 1:
+            return vals[0]
+        return {v.name: v.n_neighbors for v in vars_}
 
     @n_neighbors.setter
     def n_neighbors(self, value):
-        self._mps_model.n_neighbors = value
+        if isinstance(value, dict):
+            if not self._ti.multivariate:
+                raise ValueError(
+                    "DirectSampling: dict n_neighbors requires a multivariate TrainingImage."
+                )
+            known = {v.name for v in self._ti.variables}
+            unknown = set(value) - known
+            if unknown:
+                raise ValueError(
+                    f"DirectSampling: n_neighbors dict contains unknown variable(s): "
+                    f"{sorted(str(k) for k in unknown)}. "
+                    f"TI variables: {sorted(known)}."
+                )
+            for name, n in value.items():
+                self._ti.variable(name).n_neighbors = n
+        else:
+            for v in self._ti.variables:
+                v.n_neighbors = int(value)
 
     @property
     def scan_fraction(self):
@@ -558,11 +589,44 @@ class DirectSampling(Field):
         at distance 1.0), causing every node to fall back to a random TI
         sample.
         """
-        return self._mps_model.max_radius
+        if self._ti.multivariate:
+            vals = [v.max_radius for v in self._ti.variables]
+            if len(set(vals)) == 1:
+                return vals[0]
+            return {v.name: v.max_radius for v in self._ti.variables}
+        return self._ti.variable().max_radius
 
     @max_radius.setter
     def max_radius(self, value):
-        self._mps_model.max_radius = value
+        if isinstance(value, dict):
+            if not self._ti.multivariate:
+                raise ValueError(
+                    "DirectSampling: dict max_radius requires a multivariate TrainingImage."
+                )
+            known = {v.name for v in self._ti.variables}
+            unknown = set(value) - known
+            if unknown:
+                raise ValueError(
+                    f"DirectSampling: max_radius dict contains unknown variable(s): "
+                    f"{sorted(str(k) for k in unknown)}. "
+                    f"TI variables: {sorted(known)}."
+                )
+            for name, r in value.items():
+                if r is not None and float(r) <= 0:
+                    raise ValueError(
+                        f"DirectSampling: max_radius must be positive or None, got {r!r}."
+                    )
+                self._ti.variable(name)._max_radius = (
+                    None if r is None else float(r)
+                )
+        else:
+            if value is not None and float(value) <= 0:
+                raise ValueError(
+                    f"DirectSampling: max_radius must be positive or None, got {value!r}."
+                )
+            norm = None if value is None else float(value)
+            for v in self._ti.variables:
+                v._max_radius = norm
 
     @property
     def num_threads(self):
