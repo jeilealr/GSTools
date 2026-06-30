@@ -8,6 +8,7 @@ import numpy as np
 
 import gstools as gs
 from gstools import config as gs_config
+from gstools.mps.data_event import DataEvent
 from gstools.mps.direct_sampling import DirectSampling
 from gstools.mps.distance import (
     compute_node_weights,
@@ -86,9 +87,9 @@ class TestDirectSamplingParallel(unittest.TestCase):
         old = gs_config.NUM_THREADS
         try:
             gs_config.NUM_THREADS = 2
-            field = DirectSampling(
-                MPSModel(ti, scan_fraction=0.2)
-            )(pos, seed=7)
+            field = DirectSampling(MPSModel(ti, scan_fraction=0.2))(
+                pos, seed=7
+            )
         finally:
             gs_config.NUM_THREADS = old
         self.assertEqual(field.shape, (8, 8))
@@ -131,7 +132,9 @@ class TestDirectSamplingParallel(unittest.TestCase):
         # the fallback. Verify the fallback is triggered and no TypeError occurs
         # (ValueError from NaN output is acceptable for all-NaN TI).
         ti_data = np.full((5, 5), np.nan, dtype=float)
-        ti = TrainingImage(ti_data, categorical=False, distance="l2", n_neighbors=2)
+        ti = TrainingImage(
+            ti_data, categorical=False, distance="l2", n_neighbors=2
+        )
         ds = DirectSampling(MPSModel(ti, scan_fraction=0.2))
         ds.num_threads = 1
         try:
@@ -166,14 +169,21 @@ class TestVariable(unittest.TestCase):
         self.assertEqual(v.data[0], 0)
 
     def test_continuous_attributes(self):
-        v = Variable("p", np.linspace(0, 1, 20), categorical=False, distance="l2")
+        v = Variable(
+            "p", np.linspace(0, 1, 20), categorical=False, distance="l2"
+        )
         self.assertEqual(v.p_norm, 2.0)
         self.assertIsNone(v.variation_p_norm)
         self.assertGreater(v.d_max, 0)
 
     def test_variation_distance(self):
-        v = Variable("p", np.linspace(0, 1, 20), categorical=False,
-                     distance="variation", n_neighbors=2)
+        v = Variable(
+            "p",
+            np.linspace(0, 1, 20),
+            categorical=False,
+            distance="variation",
+            n_neighbors=2,
+        )
         self.assertIsNone(v.p_norm)
         self.assertEqual(v.variation_p_norm, 2.0)
 
@@ -199,12 +209,22 @@ class TestVariable(unittest.TestCase):
 
     def test_variation_guard_at_construction(self):
         with self.assertRaisesRegex(ValueError, "variation"):
-            Variable("x", np.linspace(0, 1, 10), categorical=False,
-                     distance="variation", n_neighbors=1)
+            Variable(
+                "x",
+                np.linspace(0, 1, 10),
+                categorical=False,
+                distance="variation",
+                n_neighbors=1,
+            )
 
     def test_variation_guard_via_setter(self):
-        v = Variable("x", np.linspace(0, 1, 10), categorical=False,
-                     distance="variation", n_neighbors=2)
+        v = Variable(
+            "x",
+            np.linspace(0, 1, 10),
+            categorical=False,
+            distance="variation",
+            n_neighbors=2,
+        )
         with self.assertRaisesRegex(ValueError, "variation"):
             v.n_neighbors = 1
         self.assertEqual(v.n_neighbors, 2)  # unchanged
@@ -633,7 +653,9 @@ class TestDirectSampling(unittest.TestCase):
 
         # 1-D continuous TI
         self.ti1d_cont = TrainingImage(
-            np.linspace(0.0, 1.0, 20), categorical=False, distance="l1",
+            np.linspace(0.0, 1.0, 20),
+            categorical=False,
+            distance="l1",
             n_neighbors=8,
         )
 
@@ -668,7 +690,7 @@ class TestDirectSampling(unittest.TestCase):
         self.assertIsInstance(r, str)
         self.assertIn("DirectSampling", r)
 
-    def test_properties_and_setters(self):
+    def test_properties(self):
         ds = DirectSampling(
             MPSModel(
                 self.ti1d,
@@ -685,15 +707,6 @@ class TestDirectSampling(unittest.TestCase):
         self.assertAlmostEqual(ds.cond_weight, 2.0)
         self.assertEqual(ds.boundary, "partial")
         self.assertIsNone(ds.max_radius)
-
-        ds.n_neighbors = 4
-        self.assertEqual(ds.n_neighbors, 4)
-        ds.scan_fraction = 1.0
-        self.assertAlmostEqual(ds.scan_fraction, 1.0)
-        ds.threshold = 0.0
-        self.assertAlmostEqual(ds.threshold, 0.0)
-        ds.cond_weight = 1.0
-        self.assertAlmostEqual(ds.cond_weight, 1.0)
 
     def test_offsets_shape(self):
         off = _precompute_offsets((5, 5))
@@ -717,17 +730,13 @@ class TestDirectSampling(unittest.TestCase):
         self.assertEqual(off.shape, (8, 2))
 
     def test_shape_1d(self):
-        ds = DirectSampling(
-            MPSModel(self.ti1d, scan_fraction=1.0)
-        )
+        ds = DirectSampling(MPSModel(self.ti1d, scan_fraction=1.0))
         field = ds([self.x1d], seed=42)
         self.assertEqual(field.shape, (10,))
         self.assertFalse(np.any(np.isnan(field)))
 
     def test_shape_2d(self):
-        ds = DirectSampling(
-            MPSModel(self.ti2d, scan_fraction=1.0)
-        )
+        ds = DirectSampling(MPSModel(self.ti2d, scan_fraction=1.0))
         field = ds([self.x2d, self.y2d], seed=42)
         self.assertEqual(field.shape, (6, 6))
         self.assertFalse(np.any(np.isnan(field)))
@@ -736,27 +745,21 @@ class TestDirectSampling(unittest.TestCase):
         self.assertTrue(unique_vals.issubset({0.0, 1.0}))
 
     def test_regression_1d(self):
-        ds = DirectSampling(
-            MPSModel(self.ti1d, scan_fraction=1.0)
-        )
+        ds = DirectSampling(MPSModel(self.ti1d, scan_fraction=1.0))
         field = ds([self.x1d], seed=42)
         self.assertAlmostEqual(field[0], 1.0)
         self.assertAlmostEqual(field[5], 0.0)
         self.assertAlmostEqual(field[9], 0.0)
 
     def test_regression_2d(self):
-        ds = DirectSampling(
-            MPSModel(self.ti2d, scan_fraction=1.0)
-        )
+        ds = DirectSampling(MPSModel(self.ti2d, scan_fraction=1.0))
         field = ds([self.x2d, self.y2d], seed=42)
         self.assertAlmostEqual(field[0, 0], 1.0)
         self.assertAlmostEqual(field[2, 3], 0.0)
         self.assertAlmostEqual(field[5, 5], 1.0)
 
     def test_seeded_reproducibility(self):
-        ds = DirectSampling(
-            MPSModel(self.ti2d_rand, scan_fraction=0.5)
-        )
+        ds = DirectSampling(MPSModel(self.ti2d_rand, scan_fraction=0.5))
         pos = [self.x2d, self.y2d]
         fa = ds(pos, seed=99)
         fb = ds(pos, seed=99)
@@ -771,9 +774,7 @@ class TestDirectSampling(unittest.TestCase):
         self.assertAlmostEqual(fa[3, 4], 0.0)
 
     def test_conditioning_honored(self):
-        ds = DirectSampling(
-            MPSModel(self.ti1d, scan_fraction=1.0)
-        )
+        ds = DirectSampling(MPSModel(self.ti1d, scan_fraction=1.0))
         # Three exact grid node positions — spec requires ≥ 3 to exercise multi-point handling
         cond_pos = [np.array([2.0, 4.0, 7.0])]
         cond_val = np.array([0.0, 1.0, 1.0])
@@ -830,10 +831,7 @@ class TestDirectSampling(unittest.TestCase):
         self.assertTrue(set(np.unique(field)).issubset({0.0, 1.0}))
 
     def test_max_radius(self):
-        ds = DirectSampling(
-            MPSModel(
-                self.ti2d, scan_fraction=1.0)
-        )
+        ds = DirectSampling(MPSModel(self.ti2d, scan_fraction=1.0))
         field = ds([self.x2d, self.y2d], seed=42)
         self.assertEqual(field.shape, (6, 6))
         self.assertFalse(np.any(np.isnan(field)))
@@ -872,9 +870,7 @@ class TestDirectSampling(unittest.TestCase):
     def test_empty_search_window_recovery(self):
         # n_neighbors >> TI size collapses search windows → must recover silently
         ti_tiny = TrainingImage(np.array([0.0, 1.0, 0.0]), categorical=True)
-        ds = DirectSampling(
-            MPSModel(ti_tiny, scan_fraction=1.0)
-        )
+        ds = DirectSampling(MPSModel(ti_tiny, scan_fraction=1.0))
         field = ds([np.arange(5, dtype=float)], seed=1)
         self.assertEqual(field.shape, (5,))
         self.assertFalse(np.any(np.isnan(field)))
@@ -888,7 +884,7 @@ class TestDirectSampling(unittest.TestCase):
         m.boundary = "partial"
         self.assertEqual(m.boundary, "partial")
         with self.assertRaises(ValueError):
-            m.scan_fraction = 0.0          # out of (0, 1]
+            m.scan_fraction = 0.0  # out of (0, 1]
         with self.assertRaises(ValueError):
             m.boundary = "bad"
         with self.assertRaises(ValueError):
@@ -896,6 +892,7 @@ class TestDirectSampling(unittest.TestCase):
 
     def test_threshold_warning_points_at_user_code(self):
         import warnings as _w
+
         # constructor path: the warning must originate from THIS test file,
         # not from inside gstools/mps/model.py
         with _w.catch_warnings(record=True) as rec:
@@ -912,43 +909,44 @@ class TestDirectSampling(unittest.TestCase):
     def test_gstools_namespace(self):
         self.assertIs(gs.DirectSampling, DirectSampling)
         self.assertIs(gs.TrainingImage, TrainingImage)
-        self.assertIs(gs.Variable, Variable)
+        self.assertFalse(hasattr(gs, "Variable"))
         self.assertIs(gs.mps.DirectSampling, DirectSampling)
         self.assertIs(gs.mps.TrainingImage, TrainingImage)
         self.assertIs(gs.mps.Variable, Variable)
 
-    def test_setters_delegate_to_model(self):
-        model = MPSModel(self.ti1d, threshold=0.0)
+    def test_config_is_read_only_view(self):
+        model = MPSModel(
+            self.ti1d, threshold=0.3, scan_fraction=0.5, cond_weight=4.0
+        )
         ds = DirectSampling(model)
-        ds.threshold = 0.3
-        ds.scan_fraction = 0.5
-        # threshold and scan_fraction still delegate to the shared model.
-        self.assertAlmostEqual(ds.mps_model.threshold, 0.3)
-        self.assertAlmostEqual(ds.mps_model.scan_fraction, 0.5)
-        # cond_weight uses a per-instance override: the instance reports the
-        # override value, but the shared model is NOT mutated.
-        ds.cond_weight = 4.0
+        # Getters read straight from the shared model (no instance copy).
+        self.assertAlmostEqual(ds.threshold, 0.3)
+        self.assertAlmostEqual(ds.scan_fraction, 0.5)
         self.assertAlmostEqual(ds.cond_weight, 4.0)
-        self.assertAlmostEqual(ds.mps_model.cond_weight, 1.0)  # model default unchanged
-        # set_condition(cond_weight=...) also uses the override, not the model.
-        ds.set_condition([np.array([2.0])], np.array([1.0]), cond_weight=2.5)
-        self.assertAlmostEqual(ds.cond_weight, 2.5)
-        self.assertAlmostEqual(ds.mps_model.cond_weight, 1.0)  # still unchanged
+        # Setters are gone: config lives on the MPSModel.
+        with self.assertRaises(AttributeError):
+            ds.threshold = 0.1
+        with self.assertRaises(AttributeError):
+            ds.cond_weight = 2.0
 
 
 class TestMultivariateTrainingImage(unittest.TestCase):
     def test_shape_mismatch(self):
         with self.assertRaisesRegex(ValueError, "same shape"):
-            TrainingImage([
-                Variable("a", np.zeros((4, 4))),
-                Variable("b", np.zeros((3, 3))),
-            ])
+            TrainingImage(
+                [
+                    Variable("a", np.zeros((4, 4))),
+                    Variable("b", np.zeros((3, 3))),
+                ]
+            )
 
     def test_equal_weights(self):
-        ti = TrainingImage([
-            Variable("a", np.zeros((4, 4), dtype=int)),
-            Variable("b", np.ones((4, 4), dtype=int)),
-        ])
+        ti = TrainingImage(
+            [
+                Variable("a", np.zeros((4, 4), dtype=int)),
+                Variable("b", np.ones((4, 4), dtype=int)),
+            ]
+        )
         self.assertTrue(ti.multivariate)
         self.assertEqual([v.name for v in ti.variables], ["a", "b"])
         self.assertAlmostEqual(ti.weights["a"], 0.5)
@@ -959,26 +957,36 @@ class TestMultivariateTrainingImage(unittest.TestCase):
     def test_weights_must_sum_positive(self):
         # all-zero weights are invalid
         with self.assertRaisesRegex(ValueError, "positive"):
-            TrainingImage([
-                Variable("a", np.zeros((4, 4), dtype=int), weight=0.0),
-                Variable("b", np.zeros((4, 4), dtype=int), weight=0.0),
-            ])
+            TrainingImage(
+                [
+                    Variable("a", np.zeros((4, 4), dtype=int), weight=0.0),
+                    Variable("b", np.zeros((4, 4), dtype=int), weight=0.0),
+                ]
+            )
 
     def test_distance_weighted_sum(self):
-        ti = TrainingImage([
-            Variable("a", np.zeros((4, 4), dtype=int), weight=0.5),
-            Variable("b", np.zeros((4, 4), dtype=int), weight=0.5),
-        ])
+        ti = TrainingImage(
+            [
+                Variable("a", np.zeros((4, 4), dtype=int), weight=0.5),
+                Variable("b", np.zeros((4, 4), dtype=int), weight=0.5),
+            ]
+        )
         de_sg = {"a": np.array([1, 1]), "b": np.array([0, 0])}
         de_ti = {"a": np.array([0, 0]), "b": np.array([0, 0])}
         self.assertAlmostEqual(_mv_dist(ti, de_sg, de_ti), 0.5)
 
     def test_per_variable_categorical_and_distance(self):
-        ti = TrainingImage([
-            Variable("cat", np.zeros((4, 4), dtype=int), categorical=True),
-            Variable("cont", np.linspace(0, 100, 16).reshape(4, 4),
-                     categorical=False, distance="l2"),
-        ])
+        ti = TrainingImage(
+            [
+                Variable("cat", np.zeros((4, 4), dtype=int), categorical=True),
+                Variable(
+                    "cont",
+                    np.linspace(0, 100, 16).reshape(4, 4),
+                    categorical=False,
+                    distance="l2",
+                ),
+            ]
+        )
         self.assertTrue(ti.variable("cat").categorical)
         self.assertFalse(ti.variable("cont").categorical)
         self.assertAlmostEqual(ti.variable("cont").d_max, 100.0)
@@ -1007,43 +1015,60 @@ class TestMultivariateTrainingImage(unittest.TestCase):
             uni.variable("a")
 
     def test_adjust_value_multivariate(self):
-        ti = TrainingImage([
-            Variable("v", np.linspace(0, 100, 16).reshape(4, 4),
-                     categorical=False, distance="variation"),
-            Variable("c", np.zeros((4, 4), dtype=int), categorical=True),
-        ])
+        ti = TrainingImage(
+            [
+                Variable(
+                    "v",
+                    np.linspace(0, 100, 16).reshape(4, 4),
+                    categorical=False,
+                    distance="variation",
+                ),
+                Variable("c", np.zeros((4, 4), dtype=int), categorical=True),
+            ]
+        )
         self.assertAlmostEqual(
-            ti.adjust_value(50.0, np.array([10.0, 20.0, 30.0]),
-                            np.array([40.0, 50.0, 60.0]), var="v"),
+            ti.adjust_value(
+                50.0,
+                np.array([10.0, 20.0, 30.0]),
+                np.array([40.0, 50.0, 60.0]),
+                var="v",
+            ),
             20.0,
         )
         self.assertEqual(
-            ti.adjust_value(1.0, np.array([0, 1]), np.array([1, 0]), var="c"), 1.0
+            ti.adjust_value(1.0, np.array([0, 1]), np.array([1, 0]), var="c"),
+            1.0,
         )
 
     def test_mixing_none_and_explicit_weights_raises(self):
         with self.assertRaisesRegex(ValueError, "mixing"):
-            TrainingImage([
-                Variable("a", np.zeros((4, 4)), weight=0.5),
-                Variable("b", np.zeros((4, 4)), weight=None),
-            ])
+            TrainingImage(
+                [
+                    Variable("a", np.zeros((4, 4)), weight=0.5),
+                    Variable("b", np.zeros((4, 4)), weight=None),
+                ]
+            )
 
     def test_duplicate_names_raises(self):
         with self.assertRaisesRegex(ValueError, "unique"):
-            TrainingImage([
-                Variable("x", np.zeros((4, 4))),
-                Variable("x", np.zeros((4, 4))),
-            ])
+            TrainingImage(
+                [
+                    Variable("x", np.zeros((4, 4))),
+                    Variable("x", np.zeros((4, 4))),
+                ]
+            )
 
 
 class TestMultivariateDirectSampling(unittest.TestCase):
     def test_fills_all_nodes(self):
         # Node-wise path must leave no NaN in any variable.
         rng = np.random.default_rng(42)
-        ti = TrainingImage([
-            Variable("a", rng.integers(0, 2, (20, 20))),
-            Variable("b", rng.integers(0, 2, (20, 20))),
-        ])
+        ti = TrainingImage(
+            [
+                Variable("a", rng.integers(0, 2, (20, 20))),
+                Variable("b", rng.integers(0, 2, (20, 20))),
+            ]
+        )
         ds = DirectSampling(MPSModel(ti, scan_fraction=0.3))
         field = ds([np.arange(6, dtype=float)] * 2, seed=1)
         self.assertFalse(np.any(np.isnan(field["a"])))
@@ -1051,10 +1076,12 @@ class TestMultivariateDirectSampling(unittest.TestCase):
 
     def test_output_shapes(self):
         rng = np.random.default_rng(0)
-        ti = TrainingImage([
-            Variable("primary", rng.integers(0, 3, (20, 20))),
-            Variable("secondary", rng.integers(0, 2, (20, 20))),
-        ])
+        ti = TrainingImage(
+            [
+                Variable("primary", rng.integers(0, 3, (20, 20))),
+                Variable("secondary", rng.integers(0, 2, (20, 20))),
+            ]
+        )
         ds = DirectSampling(MPSModel(ti, scan_fraction=0.1))
         field = ds([np.arange(10, dtype=float)] * 2, seed=0)
         self.assertEqual(field["primary"].shape, (10, 10))
@@ -1063,10 +1090,12 @@ class TestMultivariateDirectSampling(unittest.TestCase):
 
     def test_values_valid(self):
         rng = np.random.default_rng(1)
-        ti = TrainingImage([
-            Variable("a", rng.integers(0, 4, (20, 20))),
-            Variable("b", rng.integers(0, 2, (20, 20))),
-        ])
+        ti = TrainingImage(
+            [
+                Variable("a", rng.integers(0, 4, (20, 20))),
+                Variable("b", rng.integers(0, 2, (20, 20))),
+            ]
+        )
         ds = DirectSampling(MPSModel(ti, scan_fraction=0.2))
         field = ds([np.arange(8, dtype=float)] * 2, seed=5)
         self.assertTrue(np.all(np.isin(field["a"], [0, 1, 2, 3])))
@@ -1074,10 +1103,16 @@ class TestMultivariateDirectSampling(unittest.TestCase):
 
     def test_per_variable_n_neighbors(self):
         rng = np.random.default_rng(3)
-        ti = TrainingImage([
-            Variable("primary", rng.integers(0, 3, (20, 20)), n_neighbors=8),
-            Variable("secondary", rng.integers(0, 2, (20, 20)), n_neighbors=2),
-        ])
+        ti = TrainingImage(
+            [
+                Variable(
+                    "primary", rng.integers(0, 3, (20, 20)), n_neighbors=8
+                ),
+                Variable(
+                    "secondary", rng.integers(0, 2, (20, 20)), n_neighbors=2
+                ),
+            ]
+        )
         ds = DirectSampling(MPSModel(ti, scan_fraction=0.2))
         field = ds([np.arange(8, dtype=float)] * 2, seed=7)
         self.assertEqual(field["primary"].shape, (8, 8))
@@ -1086,10 +1121,12 @@ class TestMultivariateDirectSampling(unittest.TestCase):
 
     def test_3d_runs(self):
         rng = np.random.default_rng(8)
-        ti = TrainingImage([
-            Variable("a", rng.integers(0, 2, (10, 10, 10))),
-            Variable("b", rng.integers(0, 2, (10, 10, 10))),
-        ])
+        ti = TrainingImage(
+            [
+                Variable("a", rng.integers(0, 2, (10, 10, 10))),
+                Variable("b", rng.integers(0, 2, (10, 10, 10))),
+            ]
+        )
         ds = DirectSampling(MPSModel(ti, scan_fraction=0.2))
         field = ds([np.arange(4, dtype=float)] * 3, seed=0)
         self.assertEqual(field["a"].shape, (4, 4, 4))
@@ -1098,10 +1135,12 @@ class TestMultivariateDirectSampling(unittest.TestCase):
 
     def test_partial_boundary_runs(self):
         rng = np.random.default_rng(11)
-        ti = TrainingImage([
-            Variable("a", rng.integers(0, 2, (20, 20))),
-            Variable("b", rng.integers(0, 2, (20, 20))),
-        ])
+        ti = TrainingImage(
+            [
+                Variable("a", rng.integers(0, 2, (20, 20))),
+                Variable("b", rng.integers(0, 2, (20, 20))),
+            ]
+        )
         ds = DirectSampling(
             MPSModel(ti, scan_fraction=0.3, boundary="partial")
         )
@@ -1112,13 +1151,13 @@ class TestMultivariateDirectSampling(unittest.TestCase):
 
     def test_ds_mode_threshold(self):
         rng = np.random.default_rng(12)
-        ti = TrainingImage([
-            Variable("a", rng.integers(0, 3, (20, 20))),
-            Variable("b", rng.integers(0, 2, (20, 20))),
-        ])
-        ds = DirectSampling(
-            MPSModel(ti, scan_fraction=0.5, threshold=0.3)
+        ti = TrainingImage(
+            [
+                Variable("a", rng.integers(0, 3, (20, 20))),
+                Variable("b", rng.integers(0, 2, (20, 20))),
+            ]
         )
+        ds = DirectSampling(MPSModel(ti, scan_fraction=0.5, threshold=0.3))
         field = ds([np.arange(8, dtype=float)] * 2, seed=4)
         self.assertFalse(np.any(np.isnan(field["a"])))
         self.assertTrue(np.all(np.isin(field["a"], [0, 1, 2])))
@@ -1128,10 +1167,19 @@ class TestMultivariateDirectSampling(unittest.TestCase):
         # A continuous variable with variation distance exercises the
         # mean-shift adjust_value_var path end to end.
         rng = np.random.default_rng(13)
-        ti = TrainingImage([
-            Variable("cont", rng.random((20, 20)) * 10.0, categorical=False, distance="variation"),
-            Variable("cat", rng.integers(0, 2, (20, 20)), categorical=True),
-        ])
+        ti = TrainingImage(
+            [
+                Variable(
+                    "cont",
+                    rng.random((20, 20)) * 10.0,
+                    categorical=False,
+                    distance="variation",
+                ),
+                Variable(
+                    "cat", rng.integers(0, 2, (20, 20)), categorical=True
+                ),
+            ]
+        )
         ds = DirectSampling(MPSModel(ti, scan_fraction=0.3))
         field = ds([np.arange(8, dtype=float)] * 2, seed=6)
         self.assertEqual(field["cont"].shape, (8, 8))
@@ -1145,23 +1193,25 @@ class TestMultivariateDirectSampling(unittest.TestCase):
         # exists at exactly one TI cell.  If both variables at every node trace
         # to one cell, ``b == a + 100`` must hold everywhere.
         ids = np.arange(64).reshape(8, 8)
-        ti = TrainingImage([
-            Variable("a", ids, categorical=True),
-            Variable("b", ids + 100, categorical=True),
-        ])
-        ds = DirectSampling(
-            MPSModel(ti, scan_fraction=1.0, threshold=0.0)
+        ti = TrainingImage(
+            [
+                Variable("a", ids, categorical=True),
+                Variable("b", ids + 100, categorical=True),
+            ]
         )
+        ds = DirectSampling(MPSModel(ti, scan_fraction=1.0, threshold=0.0))
         field = ds([np.arange(6, dtype=float)] * 2, seed=0)
         np.testing.assert_array_equal(field["b"], field["a"] + 100)
 
     def test_equal_treatment_named_fields(self):
         # No privileged primary: all variables are first-class named fields.
         rng = np.random.default_rng(20)
-        ti = TrainingImage([
-            Variable("x", rng.integers(0, 2, (15, 15))),
-            Variable("y", rng.integers(0, 2, (15, 15))),
-        ])
+        ti = TrainingImage(
+            [
+                Variable("x", rng.integers(0, 2, (15, 15))),
+                Variable("y", rng.integers(0, 2, (15, 15))),
+            ]
+        )
         ds = DirectSampling(MPSModel(ti, scan_fraction=0.3))
         field = ds([np.arange(6, dtype=float)] * 2, seed=0)
         self.assertEqual(set(field), {"x", "y"})
@@ -1174,48 +1224,51 @@ class TestMultivariateDirectSampling(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "identifier"):
             Variable("a b", np.zeros((5, 5), dtype=int))
 
-    def test_n_neighbors_dict_requires_multivariate(self):
-        # Passing a dict to the n_neighbors setter on a univariate TI must raise.
-        ti = TrainingImage(np.zeros((10, 10), dtype=int), n_neighbors=4)
-        ds = DirectSampling(MPSModel(ti))
-        with self.assertRaisesRegex(ValueError, "multivariate"):
-            ds.n_neighbors = {"a": 4}
-
-    def test_n_neighbors_dict_unknown_key_raises(self):
-        # Passing a dict with an unknown key to the n_neighbors setter must raise.
-        ti = TrainingImage([
-            Variable("a", np.zeros((10, 10), dtype=int)),
-            Variable("b", np.zeros((10, 10), dtype=int)),
-        ])
-        ds = DirectSampling(MPSModel(ti))
-        with self.assertRaisesRegex(ValueError, "unknown"):
-            ds.n_neighbors = {"ghost": 4}
-
     def test_n_neighbors_getter_scalar(self):
         arr = np.zeros((10, 10), dtype=int)
-        ti = TrainingImage([Variable("a", arr, n_neighbors=8), Variable("b", arr, n_neighbors=8)])
+        ti = TrainingImage(
+            [
+                Variable("a", arr, n_neighbors=8),
+                Variable("b", arr, n_neighbors=8),
+            ]
+        )
         ds = DirectSampling(MPSModel(ti))
         self.assertEqual(ds.n_neighbors, 8)
 
     def test_n_neighbors_getter_dict(self):
         arr = np.zeros((10, 10), dtype=int)
-        ti = TrainingImage([Variable("a", arr, n_neighbors=8), Variable("b", arr, n_neighbors=4)])
+        ti = TrainingImage(
+            [
+                Variable("a", arr, n_neighbors=8),
+                Variable("b", arr, n_neighbors=4),
+            ]
+        )
         ds = DirectSampling(MPSModel(ti))
         self.assertEqual(ds.n_neighbors, {"a": 8, "b": 4})
 
     def test_n_neighbors_setter_broadcast(self):
+        # Configure via Variable directly; getter reflects the change.
         arr = np.zeros((10, 10), dtype=int)
-        ti = TrainingImage([Variable("a", arr), Variable("b", arr)])
+        ti = TrainingImage(
+            [
+                Variable("a", arr, n_neighbors=16),
+                Variable("b", arr, n_neighbors=16),
+            ]
+        )
         ds = DirectSampling(MPSModel(ti))
-        ds.n_neighbors = 16
         self.assertEqual(ds.ti.variable("a").n_neighbors, 16)
         self.assertEqual(ds.ti.variable("b").n_neighbors, 16)
 
     def test_n_neighbors_setter_partial_dict(self):
+        # Configure per-variable at construction; getter reflects the difference.
         arr = np.zeros((10, 10), dtype=int)
-        ti = TrainingImage([Variable("a", arr, n_neighbors=4), Variable("b", arr, n_neighbors=4)])
+        ti = TrainingImage(
+            [
+                Variable("a", arr, n_neighbors=20),
+                Variable("b", arr, n_neighbors=4),
+            ]
+        )
         ds = DirectSampling(MPSModel(ti))
-        ds.n_neighbors = {"a": 20}  # partial dict is fine
         self.assertEqual(ds.ti.variable("a").n_neighbors, 20)
         self.assertEqual(ds.ti.variable("b").n_neighbors, 4)  # unchanged
 
@@ -1225,41 +1278,51 @@ class TestMultivariateDirectSampling(unittest.TestCase):
         self.assertIsNone(ds.max_radius)
 
     def test_max_radius_setter_univariate(self):
-        ti = TrainingImage(np.zeros((10, 10), dtype=int), n_neighbors=4)
+        # Configure max_radius at construction; getter reflects the value.
+        ti = TrainingImage(
+            np.zeros((10, 10), dtype=int), n_neighbors=4, max_radius=5.0
+        )
         ds = DirectSampling(MPSModel(ti, scan_fraction=0.2))
-        ds.max_radius = 5.0
         self.assertAlmostEqual(ds.max_radius, 5.0)
         self.assertAlmostEqual(ds.ti.variable().max_radius, 5.0)
 
     def test_max_radius_setter_broadcast(self):
+        # Configure per-variable at construction; getter reports common value.
         arr = np.zeros((10, 10), dtype=int)
-        ti = TrainingImage([Variable("a", arr), Variable("b", arr)])
+        ti = TrainingImage(
+            [
+                Variable("a", arr, max_radius=10.0),
+                Variable("b", arr, max_radius=10.0),
+            ]
+        )
         ds = DirectSampling(MPSModel(ti))
-        ds.max_radius = 10.0
         self.assertAlmostEqual(ds.ti.variable("a").max_radius, 10.0)
         self.assertAlmostEqual(ds.ti.variable("b").max_radius, 10.0)
 
     def test_max_radius_getter_dict_when_different(self):
         arr = np.zeros((10, 10), dtype=int)
-        ti = TrainingImage([
-            Variable("a", arr, max_radius=20.0),
-            Variable("b", arr, max_radius=10.0),
-        ])
+        ti = TrainingImage(
+            [
+                Variable("a", arr, max_radius=20.0),
+                Variable("b", arr, max_radius=10.0),
+            ]
+        )
         ds = DirectSampling(MPSModel(ti))
         self.assertEqual(ds.max_radius, {"a": 20.0, "b": 10.0})
 
-    def test_max_radius_zero_raises_via_ds(self):
-        ti = TrainingImage(np.zeros((10, 10), dtype=int))
-        ds = DirectSampling(MPSModel(ti))
+    def test_max_radius_zero_raises_via_variable(self):
+        # Validation now lives on Variable constructor.
         with self.assertRaisesRegex(ValueError, "max_radius"):
-            ds.max_radius = 0
+            Variable("x", np.zeros((10, 10), dtype=int), max_radius=0.0)
 
     def test_set_condition_basic(self):
         rng = np.random.default_rng(0)
-        ti = TrainingImage([
-            Variable("a", rng.integers(0, 2, (20, 20))),
-            Variable("b", rng.integers(0, 2, (20, 20))),
-        ])
+        ti = TrainingImage(
+            [
+                Variable("a", rng.integers(0, 2, (20, 20))),
+                Variable("b", rng.integers(0, 2, (20, 20))),
+            ]
+        )
         ds = DirectSampling(MPSModel(ti, scan_fraction=0.3))
         ds.set_condition(
             cond_pos=[[2.0, 5.0], [2.0, 5.0]],
@@ -1275,10 +1338,12 @@ class TestMultivariateDirectSampling(unittest.TestCase):
         # NaN for b at the conditioning point -> b unconstrained there; only a
         # is conditioned, and b is filled by the simulation (not NaN).
         rng = np.random.default_rng(1)
-        ti = TrainingImage([
-            Variable("a", rng.integers(0, 2, (20, 20))),
-            Variable("b", rng.integers(0, 2, (20, 20))),
-        ])
+        ti = TrainingImage(
+            [
+                Variable("a", rng.integers(0, 2, (20, 20))),
+                Variable("b", rng.integers(0, 2, (20, 20))),
+            ]
+        )
         ds = DirectSampling(MPSModel(ti, scan_fraction=0.3))
         ds.set_condition(
             cond_pos=[[3.0], [3.0]],
@@ -1292,10 +1357,12 @@ class TestMultivariateDirectSampling(unittest.TestCase):
         # Both points snap to node (4, 4); (4.1, 4.1) is closer than (4.4, 4.4)
         # -> the closer point's values win for all variables.
         rng = np.random.default_rng(2)
-        ti = TrainingImage([
-            Variable("a", rng.integers(0, 2, (20, 20))),
-            Variable("b", rng.integers(0, 2, (20, 20))),
-        ])
+        ti = TrainingImage(
+            [
+                Variable("a", rng.integers(0, 2, (20, 20))),
+                Variable("b", rng.integers(0, 2, (20, 20))),
+            ]
+        )
         ds = DirectSampling(MPSModel(ti, scan_fraction=0.3))
         ds.set_condition(
             cond_pos=[[4.4, 4.1], [4.4, 4.1]],
@@ -1315,9 +1382,7 @@ class TestMultivariateDirectSampling(unittest.TestCase):
         nb = np.arange(36).reshape(6, 6)
         na = (nb * 7) % 5
         ti = TrainingImage([Variable("a", na), Variable("b", nb)])
-        ds = DirectSampling(
-            MPSModel(ti, scan_fraction=1.0, threshold=0.0)
-        )
+        ds = DirectSampling(MPSModel(ti, scan_fraction=1.0, threshold=0.0))
         ds.set_condition(
             cond_pos=[[0.0], [0.0]],
             cond_val={"a": np.array([np.nan]), "b": np.array([20])},
@@ -1336,10 +1401,12 @@ class TestMultivariateDirectSampling(unittest.TestCase):
         self.assertEqual(field[5, 5], 2)
 
     def test_set_condition_length_mismatch(self):
-        ti = TrainingImage([
-            Variable("a", np.zeros((10, 10), dtype=int)),
-            Variable("b", np.zeros((10, 10), dtype=int)),
-        ])
+        ti = TrainingImage(
+            [
+                Variable("a", np.zeros((10, 10), dtype=int)),
+                Variable("b", np.zeros((10, 10), dtype=int)),
+            ]
+        )
         ds = DirectSampling(MPSModel(ti, scan_fraction=0.3))
         # cond_pos has 1 point but cond_val has 2 -> length mismatch
         with self.assertRaisesRegex(ValueError, "mismatch"):
@@ -1356,10 +1423,12 @@ class TestMultivariateDirectSampling(unittest.TestCase):
 
     def test_parallel_valid_values(self):
         rng = np.random.default_rng(4)
-        ti = TrainingImage([
-            Variable("a", rng.integers(0, 3, (20, 20))),
-            Variable("b", rng.integers(0, 2, (20, 20))),
-        ])
+        ti = TrainingImage(
+            [
+                Variable("a", rng.integers(0, 3, (20, 20))),
+                Variable("b", rng.integers(0, 2, (20, 20))),
+            ]
+        )
         ds = DirectSampling(MPSModel(ti, scan_fraction=0.2))
         ds.num_threads = 2
         field = ds([np.arange(8, dtype=float)] * 2, seed=0)
@@ -1370,10 +1439,12 @@ class TestMultivariateDirectSampling(unittest.TestCase):
         # The node-vertex DAG commits every per-variable neighbour before a node
         # runs, so num_threads > 1 is bit-identical to serial.
         rng = np.random.default_rng(5)
-        ti = TrainingImage([
-            Variable("a", rng.integers(0, 3, (20, 20))),
-            Variable("b", rng.integers(0, 2, (20, 20))),
-        ])
+        ti = TrainingImage(
+            [
+                Variable("a", rng.integers(0, 3, (20, 20))),
+                Variable("b", rng.integers(0, 2, (20, 20))),
+            ]
+        )
         pos = [np.arange(8, dtype=float)] * 2
         ds_s = DirectSampling(MPSModel(ti, scan_fraction=0.2))
         ds_s.num_threads = 1
@@ -1388,15 +1459,17 @@ class TestMultivariateDirectSampling(unittest.TestCase):
         # Highest-risk DAG path: partial (NaN) conditioning + threads must stay
         # bit-identical to serial.
         rng = np.random.default_rng(17)
-        ti = TrainingImage([
-            Variable("a", rng.integers(0, 3, (20, 20))),
-            Variable("b", rng.integers(0, 2, (20, 20))),
-        ])
+        ti = TrainingImage(
+            [
+                Variable("a", rng.integers(0, 3, (20, 20))),
+                Variable("b", rng.integers(0, 2, (20, 20))),
+            ]
+        )
         pos = [np.arange(8, dtype=float)] * 2
         cond_pos = [np.array([1.0, 4.0, 6.0]), np.array([2.0, 5.0, 7.0])]
         cond_val = {
-            "a": np.array([1.0, np.nan, 2.0]),   # b unconstrained at point 0
-            "b": np.array([np.nan, 1.0, 0.0]),   # a unconstrained at point 1
+            "a": np.array([1.0, np.nan, 2.0]),  # b unconstrained at point 0
+            "b": np.array([np.nan, 1.0, 0.0]),  # a unconstrained at point 1
         }
         ds_s = DirectSampling(MPSModel(ti, scan_fraction=0.3))
         ds_s.num_threads = 1
@@ -1411,10 +1484,12 @@ class TestMultivariateDirectSampling(unittest.TestCase):
 
     def test_parallel_conditioning_preserved(self):
         rng = np.random.default_rng(6)
-        ti = TrainingImage([
-            Variable("a", rng.integers(0, 2, (20, 20))),
-            Variable("b", rng.integers(0, 2, (20, 20))),
-        ])
+        ti = TrainingImage(
+            [
+                Variable("a", rng.integers(0, 2, (20, 20))),
+                Variable("b", rng.integers(0, 2, (20, 20))),
+            ]
+        )
         ds = DirectSampling(MPSModel(ti, scan_fraction=0.3))
         ds.num_threads = 2
         ds.set_condition(
@@ -1426,28 +1501,34 @@ class TestMultivariateDirectSampling(unittest.TestCase):
         self.assertEqual(field["b"][3, 3], 0)
 
     def test_set_condition_array_on_multivariate_raises(self):
-        ti = TrainingImage([
-            Variable("a", np.zeros((10, 10), dtype=int)),
-            Variable("b", np.zeros((10, 10), dtype=int)),
-        ])
+        ti = TrainingImage(
+            [
+                Variable("a", np.zeros((10, 10), dtype=int)),
+                Variable("b", np.zeros((10, 10), dtype=int)),
+            ]
+        )
         ds = DirectSampling(MPSModel(ti, scan_fraction=0.3))
         with self.assertRaisesRegex(ValueError, "dict"):
             ds.set_condition([[3.0], [3.0]], np.array([1]))
 
     def test_set_condition_empty_dict_raises(self):
-        ti = TrainingImage([
-            Variable("a", np.zeros((10, 10), dtype=int)),
-            Variable("b", np.zeros((10, 10), dtype=int)),
-        ])
+        ti = TrainingImage(
+            [
+                Variable("a", np.zeros((10, 10), dtype=int)),
+                Variable("b", np.zeros((10, 10), dtype=int)),
+            ]
+        )
         ds = DirectSampling(MPSModel(ti, scan_fraction=0.3))
         with self.assertRaisesRegex(ValueError, "empty"):
             ds.set_condition([[3.0], [3.0]], {})
 
     def test_set_condition_unknown_variable_raises(self):
-        ti = TrainingImage([
-            Variable("a", np.zeros((10, 10), dtype=int)),
-            Variable("b", np.zeros((10, 10), dtype=int)),
-        ])
+        ti = TrainingImage(
+            [
+                Variable("a", np.zeros((10, 10), dtype=int)),
+                Variable("b", np.zeros((10, 10), dtype=int)),
+            ]
+        )
         ds = DirectSampling(MPSModel(ti, scan_fraction=0.3))
         with self.assertRaisesRegex(ValueError, "unknown variable"):
             ds.set_condition(
@@ -1460,10 +1541,12 @@ class TestMultivariateDirectSampling(unittest.TestCase):
         # variable a; the farther point {a:0, b:0} still fills variable b, which
         # the closer point left NaN (per-variable collision resolution, C1).
         rng = np.random.default_rng(7)
-        ti = TrainingImage([
-            Variable("a", rng.integers(0, 2, (20, 20))),
-            Variable("b", rng.integers(0, 2, (20, 20))),
-        ])
+        ti = TrainingImage(
+            [
+                Variable("a", rng.integers(0, 2, (20, 20))),
+                Variable("b", rng.integers(0, 2, (20, 20))),
+            ]
+        )
         ds = DirectSampling(MPSModel(ti, scan_fraction=0.3))
         ds.set_condition(
             # point 0 at (4.4,4.4) {a:0,b:0}; point 1 at (4.1,4.1) {a:1,b:nan}
@@ -1478,10 +1561,20 @@ class TestMultivariateDirectSampling(unittest.TestCase):
     def test_distance_power_multivariate(self):
         # distance_power > 0 exercises the per-variable lag-norm weighting path.
         rng = np.random.default_rng(8)
-        ti = TrainingImage([
-            Variable("cont", rng.random((20, 20)) * 10.0, categorical=False, distance="l2"),
-            Variable("cat", rng.integers(0, 2, (20, 20)), categorical=True),
-        ], distance_power=1.0)
+        ti = TrainingImage(
+            [
+                Variable(
+                    "cont",
+                    rng.random((20, 20)) * 10.0,
+                    categorical=False,
+                    distance="l2",
+                ),
+                Variable(
+                    "cat", rng.integers(0, 2, (20, 20)), categorical=True
+                ),
+            ],
+            distance_power=1.0,
+        )
         ds = DirectSampling(MPSModel(ti, scan_fraction=0.3))
         field = ds([np.arange(8, dtype=float)] * 2, seed=3)
         self.assertEqual(field["cont"].shape, (8, 8))
@@ -1507,15 +1600,15 @@ class TestMultivariateDirectSampling(unittest.TestCase):
         # it falls back to a random TI cell — both variables must be drawn from
         # the same cell (b == a + 100 for that node too).
         ids = np.arange(64).reshape(8, 8)
-        ti = TrainingImage([
-            Variable("a", ids, categorical=True),
-            Variable("b", ids + 100, categorical=True),
-        ])
+        ti = TrainingImage(
+            [
+                Variable("a", ids, categorical=True),
+                Variable("b", ids + 100, categorical=True),
+            ]
+        )
         # scan_fraction=1.0, threshold=0.01: very strict but must still complete
         # without NaN and must reproduce the joint relationship everywhere.
-        ds = DirectSampling(
-            MPSModel(ti, scan_fraction=1.0, threshold=0.01)
-        )
+        ds = DirectSampling(MPSModel(ti, scan_fraction=1.0, threshold=0.01))
         field = ds([np.arange(6, dtype=float)] * 2, seed=0)
         self.assertFalse(np.any(np.isnan(field["a"])))
         self.assertFalse(np.any(np.isnan(field["b"])))
@@ -1525,10 +1618,12 @@ class TestMultivariateDirectSampling(unittest.TestCase):
         # Finding #6: a custom store name has no single field to bind to for a
         # multivariate run; reject it instead of silently dropping it.
         rng = np.random.default_rng(0)
-        ti = TrainingImage([
-            Variable("a", rng.integers(0, 2, (20, 20))),
-            Variable("b", rng.integers(0, 2, (20, 20))),
-        ])
+        ti = TrainingImage(
+            [
+                Variable("a", rng.integers(0, 2, (20, 20))),
+                Variable("b", rng.integers(0, 2, (20, 20))),
+            ]
+        )
         ds = DirectSampling(MPSModel(ti, scan_fraction=0.3))
         with self.assertRaisesRegex(ValueError, "custom store name"):
             ds([np.arange(6, dtype=float)] * 2, seed=0, store="myrun")
@@ -1536,10 +1631,12 @@ class TestMultivariateDirectSampling(unittest.TestCase):
     def test_mv_store_false_not_stored(self):
         # store=False must still work for MV (no fields persisted on the model).
         rng = np.random.default_rng(0)
-        ti = TrainingImage([
-            Variable("a", rng.integers(0, 2, (20, 20))),
-            Variable("b", rng.integers(0, 2, (20, 20))),
-        ])
+        ti = TrainingImage(
+            [
+                Variable("a", rng.integers(0, 2, (20, 20))),
+                Variable("b", rng.integers(0, 2, (20, 20))),
+            ]
+        )
         ds = DirectSampling(MPSModel(ti, scan_fraction=0.3))
         out = ds([np.arange(6, dtype=float)] * 2, seed=0, store=False)
         self.assertEqual(set(out), {"a", "b"})
@@ -1548,10 +1645,12 @@ class TestMultivariateDirectSampling(unittest.TestCase):
     def test_mv_run_does_not_set_self_field(self):
         # Equal-treatment MV: no single self.field; per-variable named fields only.
         rng = np.random.default_rng(0)
-        ti = TrainingImage([
-            Variable("a", rng.integers(0, 2, (15, 15))),
-            Variable("b", rng.integers(0, 2, (15, 15))),
-        ])
+        ti = TrainingImage(
+            [
+                Variable("a", rng.integers(0, 2, (15, 15))),
+                Variable("b", rng.integers(0, 2, (15, 15))),
+            ]
+        )
         ds = DirectSampling(MPSModel(ti, scan_fraction=0.3))
         ds([np.arange(6, dtype=float)] * 2, seed=0)
         self.assertFalse(hasattr(ds, "field"))
@@ -1565,7 +1664,7 @@ class TestNonstationarity(unittest.TestCase):
     def _make_ds(self, ti_shape=(20, 20), **kw):
         rng = np.random.default_rng(0)
         data = rng.integers(0, 3, ti_shape)
-        n_neighbors = kw.pop('n_neighbors', 4)
+        n_neighbors = kw.pop("n_neighbors", 4)
         ti = gs.mps.TrainingImage(data, n_neighbors=n_neighbors)
         defaults = dict(scan_fraction=0.2)
         defaults.update(kw)
@@ -1584,9 +1683,7 @@ class TestNonstationarity(unittest.TestCase):
         pos = [np.arange(10, dtype=float)] * 2
         f_plain = ds_plain(pos, seed=7)
 
-        ds_rot = gs.mps.DirectSampling(
-            MPSModel(ti, scan_fraction=0.2)
-        )
+        ds_rot = gs.mps.DirectSampling(MPSModel(ti, scan_fraction=0.2))
         ds_rot.set_nonstationary(rotation=np.pi / 4)
         f_rot = ds_rot(pos, seed=7)
         self.assertFalse(np.array_equal(f_plain, f_rot))
@@ -1604,9 +1701,7 @@ class TestNonstationarity(unittest.TestCase):
         pos = [np.arange(10, dtype=float)] * 2
         f_plain = ds_plain(pos, seed=3)
 
-        ds_anis = gs.mps.DirectSampling(
-            MPSModel(ti, scan_fraction=0.2)
-        )
+        ds_anis = gs.mps.DirectSampling(MPSModel(ti, scan_fraction=0.2))
         ds_anis.set_nonstationary(anis=0.5)
         f_anis = ds_anis(pos, seed=3)
         self.assertFalse(np.array_equal(f_plain, f_anis))
@@ -1635,9 +1730,7 @@ class TestNonstationarity(unittest.TestCase):
         rng = np.random.default_rng(0)
         data = rng.integers(0, 2, (12, 12, 12))
         ti = gs.mps.TrainingImage(data, n_neighbors=4)
-        ds = gs.mps.DirectSampling(
-            MPSModel(ti, scan_fraction=0.1)
-        )
+        ds = gs.mps.DirectSampling(MPSModel(ti, scan_fraction=0.1))
         ds.set_nonstationary(rotation=np.pi / 4)
         field = ds([np.arange(5, dtype=float)] * 3, seed=0)
         self.assertEqual(field.shape, (5, 5, 5))
@@ -1649,9 +1742,7 @@ class TestNonstationarity(unittest.TestCase):
         rng = np.random.default_rng(0)
         data = rng.integers(0, 2, (4, 4))
         ti = gs.mps.TrainingImage(data)
-        ds = gs.mps.DirectSampling(
-            MPSModel(ti, scan_fraction=1.0)
-        )
+        ds = gs.mps.DirectSampling(MPSModel(ti, scan_fraction=1.0))
         ds.set_nonstationary(rotation=np.pi / 2)
         field = ds([np.arange(6, dtype=float)] * 2, seed=0)
         self.assertTrue(np.all(np.isfinite(field)))
@@ -1663,9 +1754,7 @@ class TestNonstationarity(unittest.TestCase):
         pos = [np.arange(8, dtype=float)] * 2
         f_plain = ds_plain(pos, seed=5)
 
-        ds_id = gs.mps.DirectSampling(
-            MPSModel(ti, scan_fraction=0.2)
-        )
+        ds_id = gs.mps.DirectSampling(MPSModel(ti, scan_fraction=0.2))
         ds_id.set_nonstationary(rotation=0.0, anis=1.0)
         f_id = ds_id(pos, seed=5)
         np.testing.assert_array_equal(f_plain, f_id)
@@ -1674,20 +1763,29 @@ class TestNonstationarity(unittest.TestCase):
         # Exercises the ds_simulate_mv transform path: shape, value subsets,
         # and that rotation changes output vs no rotation (same seed).
         rng = np.random.default_rng(0)
-        ti = gs.mps.TrainingImage([
-            Variable("a", rng.integers(0, 3, (20, 20)), categorical=True, n_neighbors=4),
-            Variable("b", rng.random((20, 20)), categorical=False, distance="l1", n_neighbors=4),
-        ])
+        ti = gs.mps.TrainingImage(
+            [
+                Variable(
+                    "a",
+                    rng.integers(0, 3, (20, 20)),
+                    categorical=True,
+                    n_neighbors=4,
+                ),
+                Variable(
+                    "b",
+                    rng.random((20, 20)),
+                    categorical=False,
+                    distance="l1",
+                    n_neighbors=4,
+                ),
+            ]
+        )
         pos = [np.arange(8, dtype=float)] * 2
 
-        ds_plain = gs.mps.DirectSampling(
-            MPSModel(ti, scan_fraction=0.2)
-        )
+        ds_plain = gs.mps.DirectSampling(MPSModel(ti, scan_fraction=0.2))
         result_plain = ds_plain(pos, seed=9)
 
-        ds_rot = gs.mps.DirectSampling(
-            MPSModel(ti, scan_fraction=0.2)
-        )
+        ds_rot = gs.mps.DirectSampling(MPSModel(ti, scan_fraction=0.2))
         ds_rot.set_nonstationary(rotation=np.pi / 4)
         result_rot = ds_rot(pos, seed=9)
 
@@ -1709,10 +1807,10 @@ class TestNonstationarity(unittest.TestCase):
         # A genuine stationary multi-component value (3 Tait-Bryan angles for a
         # 3-D grid) is still accepted (length == no_of_angles(3) == 3).
         rng = np.random.default_rng(0)
-        ti = gs.mps.TrainingImage(rng.integers(0, 2, (12, 12, 12)), n_neighbors=4)
-        ds = gs.mps.DirectSampling(
-            MPSModel(ti, scan_fraction=0.1)
+        ti = gs.mps.TrainingImage(
+            rng.integers(0, 2, (12, 12, 12)), n_neighbors=4
         )
+        ds = gs.mps.DirectSampling(MPSModel(ti, scan_fraction=0.1))
         ds.set_nonstationary(rotation=np.array([0.1, 0.2, 0.3]))
         field = ds([np.arange(5, dtype=float)] * 3, seed=0)
         self.assertEqual(field.shape, (5, 5, 5))
@@ -1741,19 +1839,19 @@ class TestFullArraySnapshot(unittest.TestCase):
             rng0.integers(0, 3, (20, 20)).astype(float), categorical=True
         )
         rng_mv = np.random.default_rng(7)
-        cls.ti_mv = TrainingImage([
-            Variable("a", rng_mv.integers(0, 3, (20, 20)).astype(float)),
-            Variable("b", rng_mv.integers(0, 2, (20, 20)).astype(float)),
-        ])
+        cls.ti_mv = TrainingImage(
+            [
+                Variable("a", rng_mv.integers(0, 3, (20, 20)).astype(float)),
+                Variable("b", rng_mv.integers(0, 2, (20, 20)).astype(float)),
+            ]
+        )
         cls.x1d = np.arange(10, dtype=float)
         cls.x2d = np.arange(6, dtype=float)
         cls.y2d = np.arange(6, dtype=float)
 
     def test_snapshot(self):
         # --- univariate 1D, seed=42 ---
-        ds = DirectSampling(
-            MPSModel(self.ti1d, scan_fraction=1.0)
-        )
+        ds = DirectSampling(MPSModel(self.ti1d, scan_fraction=1.0))
         f = ds([self.x1d], seed=42)
         np.testing.assert_array_equal(
             f,
@@ -1769,9 +1867,7 @@ class TestFullArraySnapshot(unittest.TestCase):
         )
 
         # --- univariate 2D checkerboard, seed=42 ---
-        ds2 = DirectSampling(
-            MPSModel(self.ti2d, scan_fraction=1.0)
-        )
+        ds2 = DirectSampling(MPSModel(self.ti2d, scan_fraction=1.0))
         f = ds2([self.x2d, self.y2d], seed=42)
         np.testing.assert_array_equal(
             f,
@@ -1801,9 +1897,7 @@ class TestFullArraySnapshot(unittest.TestCase):
         )
 
         # --- univariate 2D random TI, seed=42 ---
-        ds3 = DirectSampling(
-            MPSModel(self.ti2d_rand, scan_fraction=0.5)
-        )
+        ds3 = DirectSampling(MPSModel(self.ti2d_rand, scan_fraction=0.5))
         f = ds3([self.x2d, self.y2d], seed=42)
         np.testing.assert_array_equal(
             f,
@@ -1819,9 +1913,7 @@ class TestFullArraySnapshot(unittest.TestCase):
         )
 
         # --- multivariate 2D, seed=42 ---
-        ds_mv = DirectSampling(
-            MPSModel(self.ti_mv, scan_fraction=0.5)
-        )
+        ds_mv = DirectSampling(MPSModel(self.ti_mv, scan_fraction=0.5))
         res = ds_mv([self.x2d, self.y2d], seed=42)
         np.testing.assert_array_equal(
             res["a"],
@@ -1858,36 +1950,28 @@ class TestDSSeedControl(unittest.TestCase):
 
     def test_fixed_path_seed_different_node_seed(self):
         # Same visit order, different TI search → different output
-        ds = DirectSampling(
-            MPSModel(self.ti, scan_fraction=0.3)
-        )
+        ds = DirectSampling(MPSModel(self.ti, scan_fraction=0.3))
         fa = ds(self.pos, path_seed=1, node_seed=10)
         fb = ds(self.pos, path_seed=1, node_seed=99)
         self.assertFalse(np.array_equal(fa, fb))
 
     def test_fixed_node_seed_different_path_seed(self):
         # Same TI search, different visit order → different output
-        ds = DirectSampling(
-            MPSModel(self.ti, scan_fraction=0.3)
-        )
+        ds = DirectSampling(MPSModel(self.ti, scan_fraction=0.3))
         fa = ds(self.pos, path_seed=1, node_seed=10)
         fb = ds(self.pos, path_seed=99, node_seed=10)
         self.assertFalse(np.array_equal(fa, fb))
 
     def test_both_seeds_fixed_reproducible(self):
         # Explicit seeds on both → fully reproducible across calls
-        ds = DirectSampling(
-            MPSModel(self.ti, scan_fraction=0.3)
-        )
+        ds = DirectSampling(MPSModel(self.ti, scan_fraction=0.3))
         fa = ds(self.pos, path_seed=7, node_seed=42)
         fb = ds(self.pos, path_seed=7, node_seed=42)
         self.assertTrue(np.array_equal(fa, fb))
 
     def test_default_still_reproducible(self):
         # No explicit seeds → same seed= value still reproducible
-        ds = DirectSampling(
-            MPSModel(self.ti, scan_fraction=0.3)
-        )
+        ds = DirectSampling(MPSModel(self.ti, scan_fraction=0.3))
         fa = ds(self.pos, seed=5)
         fb = ds(self.pos, seed=5)
         self.assertTrue(np.array_equal(fa, fb))
@@ -1960,9 +2044,7 @@ class TestReduceToFit(unittest.TestCase):
         # retained, so output stays valid and finite (no crash, no NaN).
         rng = np.random.default_rng(0)
         ti = gs.mps.TrainingImage(rng.integers(0, 2, (6, 6)))
-        ds = gs.mps.DirectSampling(
-            MPSModel(ti, scan_fraction=1.0)
-        )
+        ds = gs.mps.DirectSampling(MPSModel(ti, scan_fraction=1.0))
         ds.set_nonstationary(anis=0.1)
         field = ds([np.arange(8, dtype=float)] * 2, seed=0)
         self.assertTrue(np.all(np.isfinite(field)))
@@ -1972,44 +2054,74 @@ class TestReduceToFit(unittest.TestCase):
 class TestVariationNNeighbors(unittest.TestCase):
     def test_variation_n1_raises_at_variable_construction(self):
         with self.assertRaisesRegex(ValueError, "variation"):
-            Variable("x", np.linspace(0.0, 1.0, 20),
-                     categorical=False, distance="variation", n_neighbors=1)
+            Variable(
+                "x",
+                np.linspace(0.0, 1.0, 20),
+                categorical=False,
+                distance="variation",
+                n_neighbors=1,
+            )
 
     def test_variation_n2_ok(self):
-        v = Variable("x", np.linspace(0.0, 1.0, 20),
-                     categorical=False, distance="variation", n_neighbors=2)
+        v = Variable(
+            "x",
+            np.linspace(0.0, 1.0, 20),
+            categorical=False,
+            distance="variation",
+            n_neighbors=2,
+        )
         ti = TrainingImage([v])
         ds = DirectSampling(MPSModel(ti, scan_fraction=0.5))
         self.assertEqual(ds.n_neighbors, 2)
 
     def test_variation_n_neighbors_setter_rejects_1(self):
-        v = Variable("x", np.linspace(0.0, 1.0, 20),
-                     categorical=False, distance="variation", n_neighbors=3)
+        v = Variable(
+            "x",
+            np.linspace(0.0, 1.0, 20),
+            categorical=False,
+            distance="variation",
+            n_neighbors=3,
+        )
         with self.assertRaisesRegex(ValueError, "variation"):
             v.n_neighbors = 1
 
     def test_non_variation_n1_ok(self):
-        v = Variable("x", np.linspace(0.0, 1.0, 20),
-                     categorical=False, distance="l2", n_neighbors=1)
+        v = Variable(
+            "x",
+            np.linspace(0.0, 1.0, 20),
+            categorical=False,
+            distance="l2",
+            n_neighbors=1,
+        )
         ti = TrainingImage([v])
         ds = DirectSampling(MPSModel(ti, scan_fraction=0.5))
         self.assertEqual(ds.n_neighbors, 1)
 
     def test_variation_guard_not_bypassable_via_ds(self):
-        v = Variable("x", np.linspace(0.0, 1.0, 20),
-                     categorical=False, distance="variation", n_neighbors=3)
-        ti = TrainingImage([v])
-        ds = DirectSampling(MPSModel(ti, scan_fraction=0.5))
+        # The guard lives on Variable.n_neighbors setter; DS is a read-only view.
+        v = Variable(
+            "x",
+            np.linspace(0.0, 1.0, 20),
+            categorical=False,
+            distance="variation",
+            n_neighbors=3,
+        )
         with self.assertRaisesRegex(ValueError, "variation"):
-            ds.n_neighbors = 1
+            v.n_neighbors = 1
 
     def test_variation_guard_is_atomic(self):
-        v = Variable("x", np.linspace(0.0, 1.0, 20),
-                     categorical=False, distance="variation", n_neighbors=3)
+        # Variation guard raises on the Variable; the value stays at 3.
+        v = Variable(
+            "x",
+            np.linspace(0.0, 1.0, 20),
+            categorical=False,
+            distance="variation",
+            n_neighbors=3,
+        )
         ti = TrainingImage([v])
         ds = DirectSampling(MPSModel(ti, scan_fraction=0.5))
         with self.assertRaises(ValueError):
-            ds.n_neighbors = 1
+            v.n_neighbors = 1
         self.assertEqual(ds.n_neighbors, 3)  # unchanged
 
 
@@ -2216,7 +2328,9 @@ class TestStatisticalValidity(unittest.TestCase):
         """Simulated mean and std must be within 0.25 / 0.30 of the TI values."""
         rng = np.random.default_rng(0)
         data = rng.standard_normal((100, 100))
-        ti = TrainingImage(data, categorical=False, distance="l2", n_neighbors=8)
+        ti = TrainingImage(
+            data, categorical=False, distance="l2", n_neighbors=8
+        )
         ti_mean = float(data.mean())
         ti_std = float(data.std())
 
@@ -2254,17 +2368,17 @@ class TestMVTransformsAndReporting(unittest.TestCase):
             "a": rng.integers(0, 3, (20, 20)).astype(float),
             "b": rng.integers(0, 2, (20, 20)).astype(float),
         }
-        cls.mv_ti = TrainingImage([
-            Variable("a", cls.mv_data["a"], n_neighbors=4),
-            Variable("b", cls.mv_data["b"], n_neighbors=4),
-        ])
+        cls.mv_ti = TrainingImage(
+            [
+                Variable("a", cls.mv_data["a"], n_neighbors=4),
+                Variable("b", cls.mv_data["b"], n_neighbors=4),
+            ]
+        )
         cls.pos = [np.arange(6, dtype=float)] * 2
 
     def test_set_mv_transforms_mean_applied(self):
         """set_mv_transforms(mean={'a': 100.0}) must shift variable 'a' by 100."""
-        ds = DirectSampling(
-            MPSModel(self.mv_ti, scan_fraction=0.3)
-        )
+        ds = DirectSampling(MPSModel(self.mv_ti, scan_fraction=0.3))
         ds.set_mv_transforms(mean={"a": 100.0})
 
         field_pp = ds(self.pos, seed=5)
@@ -2285,9 +2399,7 @@ class TestMVTransformsAndReporting(unittest.TestCase):
 
     def test_post_process_false_returns_raw(self):
         """post_process=False must return values that are a subset of TI categories."""
-        ds = DirectSampling(
-            MPSModel(self.mv_ti, scan_fraction=0.3)
-        )
+        ds = DirectSampling(MPSModel(self.mv_ti, scan_fraction=0.3))
         ds.set_mv_transforms(mean={"a": 100.0})
         field_raw = ds(self.pos, seed=7, post_process=False)
 
@@ -2332,15 +2444,11 @@ class TestMVTransformsAndReporting(unittest.TestCase):
         cond_pos = [[4.0], [4.0]]
         cond_val = [2]
 
-        ds1 = DirectSampling(
-            MPSModel(ti, scan_fraction=0.3, cond_weight=1.0)
-        )
+        ds1 = DirectSampling(MPSModel(ti, scan_fraction=0.3, cond_weight=1.0))
         ds1.set_condition(cond_pos, cond_val)
         f1 = ds1(pos, seed=0)
 
-        ds5 = DirectSampling(
-            MPSModel(ti, scan_fraction=0.3, cond_weight=5.0)
-        )
+        ds5 = DirectSampling(MPSModel(ti, scan_fraction=0.3, cond_weight=5.0))
         ds5.set_condition(cond_pos, cond_val)
         f5 = ds5(pos, seed=0)
 
@@ -2366,14 +2474,26 @@ class TestReturnTypeContract(unittest.TestCase):
         # Small categorical 2-D TI — fast to simulate.
         rng = np.random.default_rng(55)
         cls.ti_uni = TrainingImage(
-            rng.integers(0, 3, (15, 15)).astype(float), categorical=True, n_neighbors=4
+            rng.integers(0, 3, (15, 15)).astype(float),
+            categorical=True,
+            n_neighbors=4,
         )
         # Small 2-variable MV TI.
         rng2 = np.random.default_rng(56)
-        cls.ti_mv = TrainingImage([
-            Variable("alpha", rng2.integers(0, 2, (15, 15)).astype(float), n_neighbors=4),
-            Variable("beta", rng2.integers(0, 3, (15, 15)).astype(float), n_neighbors=4),
-        ])
+        cls.ti_mv = TrainingImage(
+            [
+                Variable(
+                    "alpha",
+                    rng2.integers(0, 2, (15, 15)).astype(float),
+                    n_neighbors=4,
+                ),
+                Variable(
+                    "beta",
+                    rng2.integers(0, 3, (15, 15)).astype(float),
+                    n_neighbors=4,
+                ),
+            ]
+        )
         cls.pos = [np.arange(5, dtype=float)] * 2
         cls.sim_shape = (5, 5)
 
@@ -2383,9 +2503,7 @@ class TestReturnTypeContract(unittest.TestCase):
 
     def test_univariate_returns_ndarray(self):
         """DirectSampling on a univariate TI must return a bare numpy.ndarray."""
-        ds = DirectSampling(
-            MPSModel(self.ti_uni, scan_fraction=0.5)
-        )
+        ds = DirectSampling(MPSModel(self.ti_uni, scan_fraction=0.5))
         out = ds(self.pos, seed=101)
         self.assertIsInstance(
             out,
@@ -2398,9 +2516,7 @@ class TestReturnTypeContract(unittest.TestCase):
 
     def test_univariate_correct_shape(self):
         """Univariate output shape must equal the simulation grid shape."""
-        ds = DirectSampling(
-            MPSModel(self.ti_uni, scan_fraction=0.5)
-        )
+        ds = DirectSampling(MPSModel(self.ti_uni, scan_fraction=0.5))
         out = ds(self.pos, seed=102)
         self.assertEqual(
             out.shape,
@@ -2413,9 +2529,7 @@ class TestReturnTypeContract(unittest.TestCase):
 
     def test_univariate_dtype_numeric(self):
         """Univariate output must have a numeric (floating or integer) dtype."""
-        ds = DirectSampling(
-            MPSModel(self.ti_uni, scan_fraction=0.5)
-        )
+        ds = DirectSampling(MPSModel(self.ti_uni, scan_fraction=0.5))
         out = ds(self.pos, seed=103)
         self.assertTrue(
             np.issubdtype(out.dtype, np.number),
@@ -2424,9 +2538,7 @@ class TestReturnTypeContract(unittest.TestCase):
 
     def test_univariate_values_subset_of_ti(self):
         """Univariate output values must be drawn from the TI — no new values."""
-        ds = DirectSampling(
-            MPSModel(self.ti_uni, scan_fraction=0.5)
-        )
+        ds = DirectSampling(MPSModel(self.ti_uni, scan_fraction=0.5))
         out = ds(self.pos, seed=104)
         ti_vals = set(np.unique(self.ti_uni.data))
         sim_vals = set(np.unique(out))
@@ -2444,9 +2556,7 @@ class TestReturnTypeContract(unittest.TestCase):
 
     def test_multivariate_returns_dict(self):
         """DirectSampling on a multivariate TI must return a dict."""
-        ds = DirectSampling(
-            MPSModel(self.ti_mv, scan_fraction=0.5)
-        )
+        ds = DirectSampling(MPSModel(self.ti_mv, scan_fraction=0.5))
         out = ds(self.pos, seed=105)
         self.assertIsInstance(
             out,
@@ -2459,9 +2569,7 @@ class TestReturnTypeContract(unittest.TestCase):
 
     def test_multivariate_keys_match_ti_variables(self):
         """MV output dict keys must exactly match the TI variable names."""
-        ds = DirectSampling(
-            MPSModel(self.ti_mv, scan_fraction=0.5)
-        )
+        ds = DirectSampling(MPSModel(self.ti_mv, scan_fraction=0.5))
         out = ds(self.pos, seed=106)
         expected_keys = {v.name for v in self.ti_mv.variables}
         actual_keys = set(out.keys())
@@ -2476,9 +2584,7 @@ class TestReturnTypeContract(unittest.TestCase):
 
     def test_multivariate_each_value_is_ndarray(self):
         """Every value in the MV output dict must be a numpy.ndarray."""
-        ds = DirectSampling(
-            MPSModel(self.ti_mv, scan_fraction=0.5)
-        )
+        ds = DirectSampling(MPSModel(self.ti_mv, scan_fraction=0.5))
         out = ds(self.pos, seed=107)
         for var, arr in out.items():
             self.assertIsInstance(
@@ -2492,9 +2598,7 @@ class TestReturnTypeContract(unittest.TestCase):
 
     def test_multivariate_each_value_has_sim_shape(self):
         """Every array in the MV output dict must have the simulation grid shape."""
-        ds = DirectSampling(
-            MPSModel(self.ti_mv, scan_fraction=0.5)
-        )
+        ds = DirectSampling(MPSModel(self.ti_mv, scan_fraction=0.5))
         out = ds(self.pos, seed=108)
         for var, arr in out.items():
             self.assertEqual(
@@ -2508,9 +2612,7 @@ class TestReturnTypeContract(unittest.TestCase):
 
     def test_multivariate_values_subset_of_ti(self):
         """Every MV output variable must draw values only from the TI."""
-        ds = DirectSampling(
-            MPSModel(self.ti_mv, scan_fraction=0.5)
-        )
+        ds = DirectSampling(MPSModel(self.ti_mv, scan_fraction=0.5))
         out = ds(self.pos, seed=109)
         for v in self.ti_mv.variables:
             ti_vals = set(np.unique(v.data))
@@ -2553,7 +2655,9 @@ class TestReturnTypeContract(unittest.TestCase):
 class TestSimulationPath(unittest.TestCase):
     """Tests for the pluggable path= parameter in DirectSampling / ds_simulate."""
 
-    def _make_ds(self, seed_data=0, shape=(20, 20), n_vals=3, scan_fraction=0.5):
+    def _make_ds(
+        self, seed_data=0, shape=(20, 20), n_vals=3, scan_fraction=0.5
+    ):
         rng = np.random.default_rng(seed_data)
         data = rng.integers(0, n_vals, shape).astype(float)
         ti = TrainingImage(data, categorical=True, n_neighbors=4)
@@ -2585,7 +2689,9 @@ class TestSimulationPath(unittest.TestCase):
         finally:
             sim_mod._DirectSamplingEngine = orig_cls
 
-        expected = np.argwhere(np.ones(sim_shape, dtype=bool))  # all nodes, raster
+        expected = np.argwhere(
+            np.ones(sim_shape, dtype=bool)
+        )  # all nodes, raster
         np.testing.assert_array_equal(captured["path"], expected)
 
     def test_sequential_deterministic_without_path_seed(self):
@@ -2650,7 +2756,9 @@ class TestSimulationPath(unittest.TestCase):
         sim_shape = (6, 6)
         # All nodes except the conditioned one
         unknown_mask = np.ones(sim_shape, dtype=bool)
-        unknown_mask[2, 4] = False  # conditioned node excluded from unknown set
+        unknown_mask[2, 4] = (
+            False  # conditioned node excluded from unknown set
+        )
         base = np.argwhere(unknown_mask)
         np.testing.assert_array_equal(
             base, np.argwhere(unknown_mask)
@@ -2750,16 +2858,18 @@ class TestSimulationPath(unittest.TestCase):
         ti = TrainingImage(data, categorical=True)
         ds = DirectSampling(MPSModel(ti, scan_fraction=0.5))
         field = ds([np.arange(8, dtype=float)] * 2, seed=42)
-        expected = np.array([
-            [0., 1., 1., 2., 2., 0., 2., 1.],
-            [2., 0., 0., 2., 1., 0., 0., 1.],
-            [0., 2., 1., 2., 2., 2., 0., 2.],
-            [2., 2., 0., 2., 2., 0., 1., 1.],
-            [1., 2., 1., 1., 2., 1., 2., 0.],
-            [2., 2., 2., 2., 2., 0., 0., 0.],
-            [2., 1., 0., 1., 2., 1., 2., 1.],
-            [1., 1., 1., 0., 2., 2., 0., 2.],
-        ])
+        expected = np.array(
+            [
+                [0.0, 1.0, 1.0, 2.0, 2.0, 0.0, 2.0, 1.0],
+                [2.0, 0.0, 0.0, 2.0, 1.0, 0.0, 0.0, 1.0],
+                [0.0, 2.0, 1.0, 2.0, 2.0, 2.0, 0.0, 2.0],
+                [2.0, 2.0, 0.0, 2.0, 2.0, 0.0, 1.0, 1.0],
+                [1.0, 2.0, 1.0, 1.0, 2.0, 1.0, 2.0, 0.0],
+                [2.0, 2.0, 2.0, 2.0, 2.0, 0.0, 0.0, 0.0],
+                [2.0, 1.0, 0.0, 1.0, 2.0, 1.0, 2.0, 1.0],
+                [1.0, 1.0, 1.0, 0.0, 2.0, 2.0, 0.0, 2.0],
+            ]
+        )
         np.testing.assert_array_equal(field, expected)
 
     def test_path_seed_inert_for_sequential(self):
@@ -2773,6 +2883,7 @@ class TestSimulationPath(unittest.TestCase):
     def test_ds_simulate_direct_sequential(self):
         """ds_simulate path='sequential' passes through correctly."""
         from gstools.random.rng import RNG
+
         arr1d = np.tile([0, 1], 10).astype(float)
         ti = TrainingImage(arr1d, categorical=True, n_neighbors=4)
         rng = RNG(7)
@@ -2819,55 +2930,166 @@ class TestSimulationPath(unittest.TestCase):
 
 
 class TestCondWeightOverride(unittest.TestCase):
-    """Finding #6: cond_weight override must not mutate the shared MPSModel."""
+    """cond_weight lives on MPSModel; DirectSampling is a read-only view."""
 
     def setUp(self):
         rng = np.random.default_rng(42)
         self.ti_data = rng.integers(0, 3, (20, 20))
 
-    def test_shared_model_not_mutated(self):
-        """set_condition(cond_weight=…) on ds1 must not change ds2.cond_weight."""
+    def test_shared_model_both_see_same_cond_weight(self):
+        """Two DirectSampling from the same MPSModel both read the same cond_weight."""
         ti = TrainingImage(self.ti_data, n_neighbors=4)
         model = MPSModel(ti, scan_fraction=0.5, cond_weight=1.0)
         ds1 = DirectSampling(model)
         ds2 = DirectSampling(model)
 
-        cpos = [np.array([5.0, 10.0]), np.array([5.0, 10.0])]
-        cval = np.array([1.0, 2.0])
-        ds1.set_condition(cpos, cval, cond_weight=2.0)
-
-        # ds1 sees the override
-        self.assertAlmostEqual(ds1.cond_weight, 2.0)
-        # ds2 must still see the model default
+        # Both read from the shared model — no override mechanism.
+        self.assertAlmostEqual(ds1.cond_weight, 1.0)
         self.assertAlmostEqual(ds2.cond_weight, 1.0)
-        # The shared model itself is unchanged
         self.assertAlmostEqual(model.cond_weight, 1.0)
 
-    def test_override_honored_in_simulation(self):
-        """ds1 with set_condition(cond_weight=2) must equal direct construction with cond_weight=2."""
+    def test_cond_weight_on_model_is_honored(self):
+        """Two DS with identical MPSModel(cond_weight=2) produce the same output."""
         ti1 = TrainingImage(self.ti_data, n_neighbors=4)
-        ds_override = DirectSampling(MPSModel(ti1, scan_fraction=0.5, cond_weight=1.0))
+        ds1 = DirectSampling(MPSModel(ti1, scan_fraction=0.5, cond_weight=2.0))
         cpos = [np.array([5.0, 10.0]), np.array([5.0, 10.0])]
         cval = np.array([1.0, 2.0])
-        ds_override.set_condition(cpos, cval, cond_weight=2.0)
-        out_override = ds_override([np.arange(15, dtype=float)] * 2, seed=7)
+        ds1.set_condition(cpos, cval)
+        out1 = ds1([np.arange(15, dtype=float)] * 2, seed=7)
 
         ti2 = TrainingImage(self.ti_data, n_neighbors=4)
-        ds_direct = DirectSampling(MPSModel(ti2, scan_fraction=0.5, cond_weight=2.0))
-        ds_direct.set_condition(cpos, cval)
-        out_direct = ds_direct([np.arange(15, dtype=float)] * 2, seed=7)
+        ds2 = DirectSampling(MPSModel(ti2, scan_fraction=0.5, cond_weight=2.0))
+        ds2.set_condition(cpos, cval)
+        out2 = ds2([np.arange(15, dtype=float)] * 2, seed=7)
 
-        np.testing.assert_array_equal(out_override, out_direct)
+        np.testing.assert_array_equal(out1, out2)
 
-    def test_setter_uses_override_not_model(self):
-        """The cond_weight setter must not mutate the shared MPSModel."""
+    def test_cond_weight_setter_raises(self):
+        """DirectSampling.cond_weight is read-only; assignment raises AttributeError."""
         ti = TrainingImage(self.ti_data, n_neighbors=4)
         model = MPSModel(ti, scan_fraction=0.5, cond_weight=1.0)
         ds = DirectSampling(model)
-        ds.cond_weight = 3.5
+        with self.assertRaises(AttributeError):
+            ds.cond_weight = 3.5
 
-        self.assertAlmostEqual(ds.cond_weight, 3.5)
-        self.assertAlmostEqual(model.cond_weight, 1.0)
+
+class TestDataEvent(unittest.TestCase):
+    def _make(self, k=3, dim=2):
+        lags_sg = np.arange(k * dim, dtype=np.float64).reshape(k, dim)
+        values = np.arange(k, dtype=np.float64)
+        cond_mask = np.array([True, False, False][:k], dtype=bool)
+        lag_norms = np.linalg.norm(lags_sg, axis=1)
+        return DataEvent(lags_sg, values, cond_mask, lag_norms)
+
+    def test_len_is_lag_count(self):
+        de = self._make(k=3)
+        self.assertEqual(len(de), 3)
+
+    def test_lags_ti_defaults_none(self):
+        de = self._make()
+        self.assertIsNone(de.lags_ti)
+
+    def test_with_lags_ti_sets_field_and_keeps_sg(self):
+        de = self._make(k=3)
+        ti = de.lags_sg * 2
+        de2 = de.with_lags_ti(ti)
+        np.testing.assert_array_equal(de2.lags_ti, ti)
+        np.testing.assert_array_equal(de2.lags_sg, de.lags_sg)
+        self.assertIsNone(de.lags_ti)  # original unchanged
+
+    def test_truncate_slices_all_arrays(self):
+        de = self._make(k=3).with_lags_ti(np.arange(6.0).reshape(3, 2))
+        t = de.truncate(2)
+        self.assertEqual(len(t), 2)
+        np.testing.assert_array_equal(t.lags_sg, de.lags_sg[:2])
+        np.testing.assert_array_equal(t.values, de.values[:2])
+        np.testing.assert_array_equal(t.cond_mask, de.cond_mask[:2])
+        np.testing.assert_array_equal(t.lag_norms, de.lag_norms[:2])
+        np.testing.assert_array_equal(t.lags_ti, de.lags_ti[:2])
+
+    def test_truncate_does_not_mutate_lags_sg_via_lags_ti(self):
+        # Aliasing invariant: truncating must not let lags_ti writes hit lags_sg.
+        de = self._make(k=3)
+        de = de.with_lags_ti(
+            de.lags_sg.copy()
+        )  # caller must copy for independence
+        t = de.truncate(2)
+        t.lags_ti[:] = -999.0  # mutate the truncated TI-frame copy
+        # original SG lags must be untouched
+        self.assertFalse(np.any(de.lags_sg == -999.0))
+
+    def test_truncate_preserves_none_lags_ti(self):
+        de = self._make(k=3)
+        self.assertIsNone(de.truncate(2).lags_ti)
+
+
+class TestPerVariableSetterDedup(unittest.TestCase):
+    def _mv(self, n_neighbors=32, max_radius=None):
+        a = Variable(
+            "a",
+            np.zeros((8, 8), dtype=int),
+            categorical=True,
+            n_neighbors=n_neighbors,
+            max_radius=max_radius,
+        )
+        b = Variable(
+            "b",
+            np.zeros((8, 8), dtype=int),
+            categorical=True,
+            n_neighbors=n_neighbors,
+            max_radius=max_radius,
+        )
+        return DirectSampling(
+            MPSModel(TrainingImage([a, b]), scan_fraction=0.2)
+        )
+
+    def _uni(self, n_neighbors=32, max_radius=None):
+        ti = TrainingImage(
+            np.zeros((8, 8), dtype=int),
+            categorical=True,
+            n_neighbors=n_neighbors,
+            max_radius=max_radius,
+        )
+        return DirectSampling(MPSModel(ti, scan_fraction=0.2))
+
+    def test_n_neighbors_scalar_sets_all(self):
+        # Configure all variables at construction; getter collapses to scalar.
+        ds = self._mv(n_neighbors=7)
+        self.assertEqual(ds.n_neighbors, 7)
+
+    def test_n_neighbors_dict_sets_per_var(self):
+        # Configure per-variable at construction; getter returns dict.
+        a = Variable("a", np.zeros((8, 8), dtype=int), n_neighbors=4)
+        b = Variable("b", np.zeros((8, 8), dtype=int), n_neighbors=6)
+        ds = DirectSampling(MPSModel(TrainingImage([a, b]), scan_fraction=0.2))
+        self.assertEqual(ds.n_neighbors, {"a": 4, "b": 6})
+
+    def test_n_neighbors_variable_setter_works(self):
+        # After construction the Variable.n_neighbors setter is still mutable.
+        ds = self._mv(n_neighbors=5)
+        ds.ti.variable("a").n_neighbors = 7
+        self.assertEqual(ds.ti.variable("a").n_neighbors, 7)
+        self.assertEqual(ds.n_neighbors, {"a": 7, "b": 5})
+
+    def test_max_radius_none_default(self):
+        # Default is None; getter collapses to scalar.
+        ds = self._mv()
+        self.assertIsNone(ds.max_radius)
+
+    def test_max_radius_nonpositive_raises_at_construction(self):
+        # max_radius validation lives on Variable constructor.
+        with self.assertRaisesRegex(ValueError, "max_radius"):
+            Variable("a", np.zeros((8, 8), dtype=int), max_radius=-1.0)
+
+    def test_max_radius_scalar_at_construction(self):
+        # Configure max_radius at construction; getter reflects it.
+        ds = self._mv(max_radius=5.0)
+        self.assertEqual(ds.max_radius, 5.0)
+
+    def test_max_radius_scalar_nonpositive_raises(self):
+        # Positivity enforced at Variable construction.
+        with self.assertRaisesRegex(ValueError, "max_radius"):
+            Variable("x", np.zeros((8, 8), dtype=int), max_radius=-1.0)
 
 
 if __name__ == "__main__":

@@ -41,12 +41,12 @@ except Exception as err:
     ti_arr = ((np.sin(gx / 6.0) + np.sin((gx + gy) / 10.0)) > 0).astype(float)
     source = "synthetic fallback"
 
-ti = gs.TrainingImage(ti_arr, categorical=True, n_neighbors=30)
+ti = gs.TrainingImage(ti_arr, categorical=True, n_neighbors=32)
 print(f"TI {ti.shape} ({source}), sand fraction = {ti_arr.mean():.3f}")
 
 # The paper used a 1000x1000 grid. To avoid grid crowding where the thick TI
 # channels collide near the center, we increase the size to 500x500.
-sg_size = 250
+sg_size = 900
 xs = np.arange(sg_size, dtype=float)
 ys = np.arange(sg_size, dtype=float)
 gx, gy = np.meshgrid(xs, ys, indexing="ij")
@@ -63,7 +63,7 @@ rotation = np.arctan2(gx - center_x, gy - center_y)
 # In GSTools, anis < 1 correctly makes the feature thinner.
 radius = np.sqrt((gx - center_x) ** 2 + (gy - center_y) ** 2)
 max_radius = np.sqrt(center_x**2 + center_y**2)
-anis = 1.0 - 0.8 * (radius / max_radius)
+anis = 1.0 - 0.65 * (radius / max_radius)
 
 # 3. Spiral simulation path: visit nodes outward from the center.
 # Sorting by the Archimedean spiral parameter (r + θ·pitch/2π) ensures the
@@ -82,13 +82,13 @@ spiral_path = np.column_stack(
 # We use scan_fraction=0.25 and a relaxed threshold=0.05. Perfect matches
 # under continuous rotation/scaling are very rare, so a relaxed threshold
 # prevents the algorithm from picking bad fallbacks.
-ds = gs.DirectSampling(gs.MPSModel(ti, scan_fraction=0.25, threshold=0.05))
+ds = gs.DirectSampling(gs.MPSModel(ti, scan_fraction=0.35, threshold=0))
 ds.set_nonstationary(rotation=rotation, anis=anis)
 
 print(
     f"Simulating non-stationary field ({sg_size}x{sg_size}) with spiral path..."
 )
-field = ds([xs, ys], seed=5, num_threads=1, path="random")
+field = ds([xs, ys], seed=5, num_threads=8, path="random")
 
 # Plotting the reproduction of Mariethoz Figure 7
 fig, axes = plt.subplots(2, 2, figsize=(10, 10))

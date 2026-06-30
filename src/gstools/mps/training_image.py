@@ -309,8 +309,16 @@ class TrainingImage:
 
         if isinstance(data, list):
             self._init_from_variables(data)
+        elif isinstance(data, Variable):
+            # Univariate sugar: caller supplies a pre-configured Variable
+            self._multivariate = False
+            self._variables = [data]
+            self._var_map = {data.name: data}
+            self._shape = data.data.shape
+            self._has_nan = data.has_nan
+            self._normalized_weights = None
         else:
-            # Univariate sugar: build one anonymous Variable
+            # Univariate sugar: bare array → anonymous Variable (name=None)
             self._multivariate = False
             var = Variable(
                 None,
@@ -469,59 +477,6 @@ class TrainingImage:
     # Distance
     # ------------------------------------------------------------------
 
-    # Registry: metric-key -> kernel callable with signature
-    #   kernel(de_sim, all_de_ti, w, d_max, extra, has_nan) -> ndarray
-    # ``extra`` carries the metric-specific scalar (p_norm for lp, vp_norm for
-    # variation); it is None for categorical/l1/l2 which don't need it.
-    # Dispatch order mirrors the original if/elif chain exactly:
-    #   "categorical" > "l1" > "l2" > "lp" > "variation"
-    # The l1/l2 fast-paths are explicit registry entries (not collapsed into lp)
-    # so the specialised BLAS-friendly kernels are always selected for p∈{1,2}.
-    _METRIC_REGISTRY = {
-        "categorical": (
-            lambda de, ti, w, dm, ex, hn: vec_categorical_dist(
-                de, ti, w, has_nan=hn
-            )
-        ),
-        "l1": (
-            lambda de, ti, w, dm, ex, hn: vec_l1_dist(
-                de, ti, w, dm, has_nan=hn
-            )
-        ),
-        "l2": (
-            lambda de, ti, w, dm, ex, hn: vec_l2_dist(
-                de, ti, w, dm, has_nan=hn
-            )
-        ),
-        "lp": (
-            lambda de, ti, w, dm, ex, hn: vec_lp_dist(
-                de, ti, w, dm, ex, has_nan=hn
-            )
-        ),
-        "variation": (
-            lambda de, ti, w, dm, ex, hn: vec_variation_dist(
-                de, ti, w, dm, ex, has_nan=hn
-            )
-        ),
-    }
-
-    @staticmethod
-    def _metric_key(categorical, p_norm, vp_norm):
-        """Return the registry key for a variable's metric configuration.
-
-        Preserves the original dispatch precedence exactly:
-        categorical → l1 (p==1) → l2 (p==2) → lp (p≠None) → variation.
-        """
-        if categorical:
-            return "categorical", None
-        if p_norm == 1.0:
-            return "l1", None
-        if p_norm == 2.0:
-            return "l2", None
-        if p_norm is not None:
-            return "lp", p_norm
-        return "variation", vp_norm
-
     def _dispatch_metric(
         self,
         categorical,
@@ -553,9 +508,21 @@ class TrainingImage:
         numpy.ndarray, shape (max_scan,)
             Distance in [0, 1] for each candidate.
         """
-        key, extra = self._metric_key(categorical, p_norm, vp_norm)
-        return self._METRIC_REGISTRY[key](
-            de_sim, all_de_ti, w, d_max, extra, has_nan
+        # Dispatch order: categorical > l1 (p==1) > l2 (p==2) > lp > variation.
+        # l1/l2 are explicit fast-paths (not folded into lp) so the specialised
+        # BLAS-friendly kernels are always selected for p in {1, 2}.
+        if categorical:
+            return vec_categorical_dist(de_sim, all_de_ti, w, has_nan=has_nan)
+        if p_norm == 1.0:
+            return vec_l1_dist(de_sim, all_de_ti, w, d_max, has_nan=has_nan)
+        if p_norm == 2.0:
+            return vec_l2_dist(de_sim, all_de_ti, w, d_max, has_nan=has_nan)
+        if p_norm is not None:
+            return vec_lp_dist(
+                de_sim, all_de_ti, w, d_max, p_norm, has_nan=has_nan
+            )
+        return vec_variation_dist(
+            de_sim, all_de_ti, w, d_max, vp_norm, has_nan=has_nan
         )
 
     def adjust_value(self, ti_val, data_event_sim, data_event_ti, var=None):

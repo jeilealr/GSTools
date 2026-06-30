@@ -149,17 +149,17 @@ def _select_neighbors(
         if len(hits) > need:
             hits = hits[:need]
 
-        for h in hits:
-            found_coords.append(cands[h])
-            found_vidx.append(vi[h])
+        if len(hits):
+            found_coords.append(cands[hits])
+            found_vidx.append(vi[hits])
         n_found += len(hits)
 
         b0 += len(chunk)  # advance by the (possibly truncated) chunk size
 
     if found_coords:
         return (
-            np.array(found_coords, dtype=offset_arr.dtype),
-            np.array(found_vidx, dtype=path_pos_map.dtype),
+            np.concatenate(found_coords).astype(offset_arr.dtype, copy=False),
+            np.concatenate(found_vidx).astype(path_pos_map.dtype, copy=False),
         )
     return (
         np.empty((0, dim), dtype=offset_arr.dtype),
