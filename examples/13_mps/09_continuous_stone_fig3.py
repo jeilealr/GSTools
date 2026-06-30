@@ -23,7 +23,7 @@ ti_data = ti_data[:200, :200]
 
 # Continuous variable using Distance 4 (Mariethoz Eq. 4, which is "l2" in GSTools)
 ti = gs.TrainingImage(
-    ti_data, categorical=False, distance="l3", n_neighbors=70
+    ti_data, categorical=False, distance="l4", n_neighbors=75
 )
 
 # 2. Setup Conditioning Data
@@ -43,7 +43,7 @@ cond_val = ti_data[rand_ti_x, rand_ti_y]
 
 # 3. Setup MPS Model
 # From caption: n = 80, t = 0.01. We use scan_fraction=0.5
-model = gs.MPSModel(ti, scan_fraction=0.3, threshold=0.01, cond_weight=2)
+model = gs.MPSModel(ti, scan_fraction=0.4, threshold=0.01, cond_weight=2)
 
 # 4. Run Simulation
 ds = gs.DirectSampling(model)

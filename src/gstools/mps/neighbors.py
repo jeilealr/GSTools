@@ -85,38 +85,77 @@ def _select_neighbors(
     path_idx : numpy.ndarray, shape (m,)
         Path index of each neighbour (``-1`` for conditioning data).
     """
-    # ``offset_arr`` is distance-sorted, so the closest ``n_neighbors`` valid
-    # candidates are the first ``n_neighbors`` survivors and we can stop the
-    # moment we have them.  Iterating with an early break avoids masking the
-    # whole offset array for every node (O(N**2) on large grids without a
-    # ``max_radius`` cap).  Tradeoff: when fewer than ``n_neighbors`` valid
-    # candidates exist (sparse early-path nodes), the scan still walks the full
-    # ``offset_arr`` in Python; this affects only the first few nodes and is
-    # bounded by the ``max_radius`` ball when one is set.
+    # Chunked vectorized scan: process offsets in blocks to amortize Python
+    # overhead while preserving distance-sorted order and early-stop.
+    # offset_arr is distance-sorted (ascending dist_sq), so the scan processes
+    # shells in order.  When max_radius is set, dist_sq is monotone-increasing
+    # and we break the moment the first offset in a chunk exceeds the radius.
+    # The informed ravel is looked up via flat_safe = np.where(inbounds,flat,0)
+    # which is safe because the inbounds mask gates every use of that value.
+    _CHUNK = 256
     dim = offset_arr.shape[1]
     r_sq = max_radius * max_radius if max_radius is not None else None
     # C-order strides: stride[d] = prod(sim_shape[d+1:])
     strides = np.array(
         [int(np.prod(sim_shape[d + 1 :])) for d in range(dim)], dtype=np.intp
     )
+    # Precompute ravel of informed for vectorized lookup when informed is not None.
+    informed_flat = informed.ravel() if informed is not None else None
+
     found_coords = []
     found_vidx = []
-    for off in offset_arr:
-        # Distance-sorted: the first offset beyond the radius ends the scan.
-        if r_sq is not None and float(off @ off) > r_sq:
-            break
-        cand = x_i + off
-        if np.any(cand < 0) or np.any(cand >= sim_shape_arr):
-            continue
-        vi = path_pos_map[int(cand @ strides)]
-        if not (vi < curr_idx or vi == -1):
-            continue
-        if informed is not None and not informed[tuple(cand)]:
-            continue
-        found_coords.append(cand)
-        found_vidx.append(vi)
-        if len(found_coords) >= n_neighbors:
-            break
+    n_found = 0
+
+    n_off = len(offset_arr)
+    b0 = 0
+    while b0 < n_off and n_found < n_neighbors:
+        chunk = offset_arr[b0 : b0 + _CHUNK]  # shape (C, dim)
+
+        # Early-stop on radius: dist_sq is monotone-increasing; if the first
+        # offset in this chunk already exceeds r_sq, all subsequent ones do too.
+        if r_sq is not None:
+            chunk_dsq = np.einsum("ij,ij->i", chunk, chunk)
+            first_over = np.searchsorted(chunk_dsq, r_sq, side="right")
+            if first_over == 0:
+                break  # entire remaining offset_arr is beyond radius
+            chunk = chunk[:first_over]
+            chunk_dsq = chunk_dsq[:first_over]
+
+        cands = x_i + chunk  # (C, dim)
+
+        # In-bounds mask
+        inbounds = np.all((cands >= 0) & (cands < sim_shape_arr), axis=1)
+
+        # Flat indices — use flat_safe (clamp to 0 for out-of-bounds rows) so
+        # array indexing is always valid; only results where inbounds=True are used.
+        flat = cands @ strides  # (C,)
+        flat_safe = np.where(inbounds, flat, 0)
+        vi = path_pos_map[flat_safe]  # (C,)
+
+        # Path-order / conditioning filter
+        idx_ok = (vi < curr_idx) | (vi == -1)
+
+        # Informed filter: when informed is None every in-bounds earlier-path
+        # cell is available (DAG mode); otherwise check the boolean flat.
+        if informed_flat is not None:
+            inf_ok = informed_flat[flat_safe]
+        else:
+            inf_ok = np.ones(len(chunk), dtype=bool)
+
+        valid = inbounds & idx_ok & inf_ok
+        hits = np.flatnonzero(valid)  # distance-sorted order preserved
+
+        need = n_neighbors - n_found
+        if len(hits) > need:
+            hits = hits[:need]
+
+        for h in hits:
+            found_coords.append(cands[h])
+            found_vidx.append(vi[h])
+        n_found += len(hits)
+
+        b0 += len(chunk)  # advance by the (possibly truncated) chunk size
+
     if found_coords:
         return (
             np.array(found_coords, dtype=offset_arr.dtype),

@@ -7,6 +7,7 @@ simulation by calling the stateless `neighbors`, `scan`, and `runner` modules.
 """
 
 from concurrent.futures import ThreadPoolExecutor
+from math import prod
 
 import numpy as np
 
@@ -156,6 +157,23 @@ class _DirectSamplingEngine:
 
         self.n_k = {v.name: v.n_neighbors for v in training_image.variables}
         self.ti_vars = {v.name: v.data for v in training_image.variables}
+
+        # Precompute flat TI arrays and C-order strides for O(1) index arithmetic
+        # in _dist_block.  Invariant: every y + lag is in-bounds by window construction,
+        # so the flat take never needs bounds checking.
+        ti_shape_tuple = tuple(int(s) for s in training_image.shape)
+        _dim = len(ti_shape_tuple)
+        self.ti_strides = {
+            v.name: np.array(
+                [prod(ti_shape_tuple[d + 1 :]) for d in range(_dim)],
+                dtype=np.intp,
+            )
+            for v in training_image.variables
+        }
+        self.ti_flat = {
+            v.name: np.ascontiguousarray(v.data).ravel()
+            for v in training_image.variables
+        }
 
         self.sg = {v: np.full(sim_shape, np.nan) for v in self.variables}
         self.informed = {
@@ -497,6 +515,8 @@ class _DirectSamplingEngine:
             variables=self.variables,
             weights=self.weights,
             ti_vars=self.ti_vars,
+            ti_flat=self.ti_flat,
+            ti_strides=self.ti_strides,
             ti_shape=self.ti_shape,
             scan_fraction=self.scan_fraction,
             threshold=self.threshold,

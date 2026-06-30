@@ -95,6 +95,8 @@ def _scan_for_match(
     variables,
     weights,
     ti_vars,
+    ti_flat,
+    ti_strides,
     ti_shape,
     scan_fraction,
     threshold,
@@ -128,13 +130,17 @@ def _scan_for_match(
         )
         for v in active_vars
     }
+    # Precompute flat lag offsets for each variable: flat_il[v] = int_lags[v] @ strides.
+    # Combined with base = y_blk @ strides, all_de_ti = ti_flat[v][base[:,None] + flat_il[v][None,:]].
+    # In-bounds invariant: every y + lag is guaranteed in-bounds by window construction
+    # (_intersect_search_windows), so this flat take needs no bounds checking.
+    flat_il = {v: int_lags[v] @ ti_strides[v] for v in active_vars}
 
     def _dist_block(y_blk):
         d = np.zeros(len(y_blk))
         for v in active_vars:
-            il = int_lags[v]
-            coords = y_blk[:, None, :] + il[None, :, :]
-            all_de_ti = ti_vars[v][tuple(coords.transpose(2, 0, 1))]
+            base = y_blk @ ti_strides[v]  # shape (B,)
+            all_de_ti = ti_flat[v][base[:, None] + flat_il[v][None, :]]
             d += weights[v] * vec_distance_var(
                 v,
                 de_v[v],
