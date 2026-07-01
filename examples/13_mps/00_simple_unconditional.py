@@ -13,8 +13,8 @@ At the beginning there are no known neighbors, so DS starts from TI values.
 As the random simulation path advances, previously simulated cells become the
 known neighbors used as the next data event.
 
-We will use a small, synthetic *channelized* training image generated with NumPy, so
-the example is fast and needs no downloads. Let's start with loading the required packages.
+We use a small, synthetic *channelized* training image generated with NumPy, so
+the example is fast and needs no downloads.
 """
 
 import matplotlib.pyplot as plt
@@ -36,7 +36,7 @@ ti_data = ((np.sin(gx / 5.0) + np.sin((gx + gy) / 8.0)) > 0).astype(int)
 # that the values are facies labels, not continuous numbers. When DS compares
 # two neighborhoods, it counts how many facies labels match or mismatch.
 
-ti = gs.TrainingImage(ti_data, categorical=True)
+ti = gs.TrainingImage(ti_data, categorical=True, n_neighbors=12)
 print(ti)
 
 ###############################################################################
@@ -44,12 +44,13 @@ print(ti)
 # No measured values are supplied here; this is an unconditional simulation.
 # The data events are built from values simulated earlier in the random path.
 #
-# * ``n_neighbors`` — how many already-known cells define each data event.
+# * ``n_neighbors`` — how many already-known cells define each data event
+#   (set on the :any:`TrainingImage`).
 # * ``scan_fraction`` — fraction of the TI search window scanned per cell.
 #   (smaller is faster, slightly noisier).
 # * ``threshold=0.0`` — the recommended DSBC mode: always take the best match.
 
-ds = gs.DirectSampling(ti, n_neighbors=12, scan_fraction=0.3, threshold=0.0)
+ds = gs.DirectSampling(gs.MPSModel(ti, scan_fraction=0.3, threshold=0.0))
 grid = [np.arange(40, dtype=float), np.arange(40, dtype=float)]
 field = ds(grid, seed=20250616)
 

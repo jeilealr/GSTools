@@ -1,67 +1,69 @@
 r"""
 Continuous conditioning with a bundled texture
----------------------------------------------
+----------------------------------------------
 
-The last example combines the pieces from the previous pages in a compact
-continuous workflow. A smooth texture is derived from the bundled Strebelle
-asset, random hard data are sampled from that texture, and the conditional
-simulation is compared with the TI through both maps and histograms.
+This compact workflow combines hard conditioning with a continuous texture. It
+uses the ``stone`` continuous training image from GAIA-UNIL, samples random
+hard data from that texture, and compares the conditional simulation with the
+TI through both maps and histograms.
+
+.. note::
+
+    This example loads the bundled derived texture
+    ``input/gaia_unil_stone_texture.npz``. It was prepared from
+    ``stone.tiff`` in the GAIA-UNIL training-image collection, distributed
+    under **GPL-3.0**. Full source and redistribution notices are documented in
+    ``input/LICENSE.txt``.
 """
 
 from pathlib import Path
 
-import numpy as np
 import matplotlib.pyplot as plt
-from scipy.ndimage import uniform_filter
+import numpy as np
 
 import gstools as gs
 
 ###############################################################################
-# Prepare a continuous training image from the bundled Strebelle asset.
+# Load the prepared continuous training image. The bundled file contains the
+# 200x200 upstream image used by the gallery example.
 
-# Load the bundled Strebelle training image and smooth it into a continuous
-# texture so the example stays self-contained.
-if "__file__" in globals():
-    data_path = Path(__file__).resolve().with_name("mps_strebelle.npz")
-else:
-    data_path = Path("mps_strebelle.npz")
+example_dir = (
+    Path(__file__).resolve().parent if "__file__" in globals() else Path(".")
+)
+data_path = example_dir / "input" / "gaia_unil_stone_texture.npz"
 
 if not data_path.exists():
     raise FileNotFoundError(
         f"Missing bundled training image: {data_path}. "
-        "Run this example from examples/13_mps or restore mps_strebelle.npz."
+        "Run this example from examples/13_mps or restore the input assets."
     )
 
 with np.load(data_path) as data:
-    ti_data = data["array1"].astype(float)
+    ti_full = data["texture"].astype(float)
 
-ti_data = uniform_filter(ti_data, size=9, mode="reflect")
-ti_data = (ti_data - ti_data.min()) / (ti_data.max() - ti_data.min())
-
-# Use a 200x200 crop to keep the gallery runtime manageable.
-ti_data = ti_data[:200, :200]
+grid_size = ti_full.shape[0]
+ti_data = ti_full
 
 ###############################################################################
 # Build a continuous TI using the ``"l2"`` distance.
 
-ti = gs.TrainingImage(ti_data, categorical=False, distance="l2", n_neighbors=80)
+ti = gs.TrainingImage(ti_data, categorical=False, distance="l2", n_neighbors=24)
 
 ###############################################################################
 # Create hard conditioning values by sampling from the TI distribution.
 
-np.random.seed(42)
-n_cond = 100
-grid_size = 200
-cond_x = np.random.uniform(0, grid_size, n_cond)
-cond_y = np.random.uniform(0, grid_size, n_cond)
-rand_ti_x = np.random.randint(0, grid_size, n_cond)
-rand_ti_y = np.random.randint(0, grid_size, n_cond)
+rng = np.random.default_rng(42)
+n_cond = 35
+cond_x = rng.uniform(0, grid_size, n_cond)
+cond_y = rng.uniform(0, grid_size, n_cond)
+rand_ti_x = rng.integers(0, grid_size, n_cond)
+rand_ti_y = rng.integers(0, grid_size, n_cond)
 cond_val = ti_data[rand_ti_x, rand_ti_y]
 
 ###############################################################################
 # Set up the MPS model and conditioning data.
 
-model = gs.MPSModel(ti, scan_fraction=0.5, threshold=0.01)
+model = gs.MPSModel(ti, scan_fraction=0.2, threshold=0.03)
 
 ds = gs.DirectSampling(model)
 ds.set_condition([cond_x, cond_y], cond_val)
@@ -78,10 +80,15 @@ theta_grid = np.arctan2(rows_g - center, cols_g - center) % (2 * np.pi)
 pitch = 3.0
 spiral_t = r_grid + theta_grid * (pitch / (2 * np.pi))
 spiral_path = np.column_stack(
-    np.unravel_index(np.argsort(spiral_t.ravel(), kind="stable"), (grid_size, grid_size))
+    np.unravel_index(
+        np.argsort(spiral_t.ravel(), kind="stable"), (grid_size, grid_size)
+    )
 )
 
-print(f"Simulating continuous field ({grid_size}x{grid_size}) with 100 cond points...")
+print(
+    f"Simulating continuous field ({grid_size}x{grid_size}) "
+    f"with {n_cond} conditioning points..."
+)
 field = ds([x, y], seed=123, num_threads=1, path=spiral_path)
 
 ###############################################################################
@@ -114,7 +121,7 @@ ax2.set_title("b) Simulation")
 plt.colorbar(im_b, ax=ax2, fraction=0.046, pad=0.04)
 
 # c) Histogram comparison
-hist_ti, bins = np.histogram(ti_data.flatten(), bins=50, density=True)
+hist_ti, bins = np.histogram(ti_data.flatten(), bins=30, density=True)
 hist_sim, _ = np.histogram(field.flatten(), bins=bins, density=True)
 bin_centers = 0.5 * (bins[:-1] + bins[1:])
 

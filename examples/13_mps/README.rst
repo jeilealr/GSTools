@@ -23,9 +23,11 @@ GSTools implements the **Direct Sampling (DS)** algorithm
 (`Mariethoz et al., 2010 <https://doi.org/10.1029/2008WR007621>`_) with the
 **Direct Sampling Best Candidate (DSBC)** parametrization recommended by
 `Juda et al. (2022) <https://doi.org/10.1016/j.acags.2022.100091>`_.
-The two main classes mirror the usual GSTools model/generator pattern:
+The API follows the usual GSTools model/generator pattern:
 
-* :any:`TrainingImage` stores the TI and the distance used to compare patterns.
+* :any:`TrainingImage` stores one TI, or a list of named :any:`Variable`
+  objects for multivariate simulation.
+* :any:`MPSModel` stores the Direct Sampling parameters.
 * :any:`DirectSampling` generates a realization on a structured grid.
 
 At each unsimulated grid node, DS gathers the already known neighboring values
@@ -36,38 +38,45 @@ center is copied into the simulation grid. In an unconditional simulation,
 these known neighbors are values simulated earlier in the random path; hard
 data simply add measured values that must be honored.
 
-Three parameters control the quality/runtime tradeoff:
+Three parameters control the quality and runtime tradeoff:
 
 * ``n_neighbors`` (``n``): the maximum number of known neighbors in each data
   event. Larger values preserve richer patterns but cost more.
-* ``scan_fraction`` (``f``): the fraction of the TI search window examined for
-  each simulated node. Larger values search harder but run slower.
+* ``scan_fraction`` (``f``): the fraction of the TI search examined for each
+  simulated node, subject to the valid candidate positions for the current data
+  event. Larger values search harder but run slower.
 * ``threshold`` (``t``): an early-acceptance distance. Start with
   ``threshold=0.0`` (DSBC), which scans the requested fraction and takes the
-  best candidate found. Tune positive thresholds only when this is not
-  sufficient.
+  best candidate found; exact matches are still accepted immediately. Tune
+  positive thresholds only when this is not sufficient.
 
-The examples are ordered as a learning path. The first pages introduce one
-concept at a time: ``00`` starts with an unconditional categorical simulation,
-``01`` adds hard conditioning data, and ``02`` switches to continuous variables
-so the role of the distance metric is visible before the examples become more
-specialized.
+The gallery is ordered as a learning path. Start with **A first Direct Sampling
+simulation**, then add field measurements in **Conditioning to hard data**, and
+switch from facies labels to continuous values in **Continuous variables and
+distance metrics**.
 
-Examples ``03`` to ``05`` then move from synthetic images to the bundled
-Strebelle channel TI. Example ``03`` repeats the conditional workflow on a real
-channel image. Example ``04`` changes the local search geometry with smooth
-rotation and anisotropy maps. Example ``05`` pushes the same idea further with
-a radial geometry and an explicit spiral simulation path, showing how the order
-of simulated nodes can support a desired large-scale pattern.
+The next pages move from small synthetic images to the bundled Strebelle
+channel TI stored in ``input/strebelle_channel_ti.npz``. **A real training
+image: the Strebelle channels** repeats the conditional workflow on a classic
+MPS benchmark. **Nonstationary geometry with the Strebelle channels** and
+**Radial nonstationarity** keep the same TI but change the local data-event
+geometry with rotation and anisotropy maps.
 
-The final examples broaden the data model. Example ``06`` introduces a
-multivariate TI where a continuous context variable guides a categorical
-channel simulation. Example ``07`` returns to continuous variables and shows
-why the ``"variation"`` distance is useful when conditioning values have a
-different absolute level than the TI. Example ``08`` simulates categorical and
-continuous variables jointly, and ``09`` closes with a compact continuous
-conditioning workflow that compares the simulated and training-image
+The remaining 2D examples broaden the data model. **Multivariate channels with
+a context variable** uses an exhaustive continuous context field to guide a
+categorical channel simulation. **Variation distance for continuous
+conditioning** then returns to continuous conditioning and shows why comparing
+local variation can be useful when hard data have a different absolute level
+than the TI. **Bivariate joint simulation from a channel TI** simulates
+categorical and continuous variables jointly from a Strebelle-derived bivariate
+TI. **Continuous conditioning with a bundled texture** uses the GAIA-UNIL
+``stone`` training image and compares the simulated and training-image
 histograms.
+
+Finally, **3D categorical simulation with voxel and slice plots** changes the
+dimensionality rather than the variable type. It keeps the volume small for the
+documentation build while showing that the same Direct Sampling workflow
+applies to structured 3D arrays.
 
 Examples
 --------

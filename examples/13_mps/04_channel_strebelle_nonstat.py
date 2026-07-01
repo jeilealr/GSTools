@@ -2,10 +2,17 @@ r"""
 Nonstationary geometry with the Strebelle channels
 --------------------------------------------------
 
-The previous example used the Strebelle training image with stationary search
-geometry. Here the same TI is simulated with spatially varying rotation and
-anisotropy maps, so the local data-event geometry changes across the simulation
-grid while the training image itself stays fixed.
+The Strebelle channel page used stationary search geometry. Here the same TI is
+simulated with spatially varying rotation and anisotropy maps, so the local
+data-event geometry changes across the simulation grid while the training image
+itself stays fixed.
+
+.. note::
+
+    This example reuses the bundled Strebelle TI stored in
+    ``input/strebelle_channel_ti.npz``. The data source and license are documented in
+    :ref:`sphx_glr_examples_13_mps_03_channel_strebelle.py` and
+    ``input/LICENSE.txt``.
 """
 
 from pathlib import Path
@@ -18,19 +25,19 @@ import gstools as gs
 
 ###############################################################################
 # Load the bundled Strebelle training image.
-if "__file__" in globals():
-    data_path = Path(__file__).resolve().with_name("mps_strebelle.npz")
-else:
-    data_path = Path("mps_strebelle.npz")
+example_dir = (
+    Path(__file__).resolve().parent if "__file__" in globals() else Path(".")
+)
+data_path = example_dir / "input" / "strebelle_channel_ti.npz"
 
 if not data_path.exists():
     raise FileNotFoundError(
         f"Missing bundled training image: {data_path}. "
-        "Run this example from examples/13_mps or restore mps_strebelle.npz."
+        "Run this example from examples/13_mps or restore the input directory."
     )
 
 with np.load(data_path) as data:
-    ti_arr = data["array1"].astype(float)
+    ti_arr = data["array1"].astype(int)
 source = "Strebelle (2002) via bundled GeoDataSets asset"
 
 ti = gs.TrainingImage(ti_arr, categorical=True, n_neighbors=30)
@@ -52,7 +59,8 @@ rotation = (gy / sg_size) * (np.pi / 4.0)
 anis = 0.8 + (gx / sg_size) * 0.4
 
 ###############################################################################
-# Simulate with the nonstationary maps attached to the generator.
+# Simulate with the nonstationary maps attached to the generator. The maps
+# reorient and rescale local data-event matching; they do not change the TI.
 
 ds = gs.DirectSampling(
     gs.MPSModel(ti, scan_fraction=0.1, threshold=0.0)

@@ -134,4 +134,6 @@ docs/source/sg_execution_times.rst
 *.vtk
 
 *.npz
-!examples/13_mps/mps_strebelle.npz
+!examples/13_mps/input/
+!examples/13_mps/input/*.npz
+!examples/13_mps/input/*.txt

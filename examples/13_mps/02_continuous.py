@@ -2,8 +2,9 @@ r"""
 Continuous variables and distance metrics
 -----------------------------------------
 
-Direct Sampling is not limited to categorical facies: with ``categorical=False``
-it simulates continuous variables (permeability, porosity, elevation, among other continuous properties).
+Direct Sampling is not limited to categorical facies. With
+``categorical=False`` it simulates continuous variables such as permeability,
+porosity, or elevation.
 The distance metric then selects how two continuous neighborhoods are compared:
 
 * ``"l1"``: Manhattan distance on the raw values.
@@ -16,10 +17,9 @@ scans the requested fraction of the training image and takes the best candidate
 found. That keeps this first continuous example focused on the metric choice
 instead of threshold tuning.
 
-No conditioning data are used here. Example ``01`` already introduced hard
-conditioning, so this page isolates one new concept: how continuous data events
-are compared. Example ``03`` combines the workflow with conditioning again on a
-real training image.
+No conditioning data are used here. The goal is to isolate one new concept:
+how continuous data events are compared. The Strebelle channel page combines
+conditioning again with a real training image.
 """
 
 import matplotlib.pyplot as plt
@@ -44,9 +44,14 @@ metrics = [
 ]
 fields = {}
 for distance, label in metrics:
-    ti = gs.TrainingImage(ti_data, categorical=False, distance=distance)
+    ti = gs.TrainingImage(
+        ti_data,
+        categorical=False,
+        distance=distance,
+        n_neighbors=12,
+    )
     ds = gs.DirectSampling(
-        ti, n_neighbors=12, scan_fraction=0.3, threshold=0.0
+        gs.MPSModel(ti, scan_fraction=0.3, threshold=0.0)
     )
     fields[label] = ds(grid, seed=3)
 

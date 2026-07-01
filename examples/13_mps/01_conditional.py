@@ -7,9 +7,9 @@ Sampling supports this through :meth:`~gstools.DirectSampling.set_condition`:
 conditioning values are pinned into the grid before simulation and preserved
 exactly, while the rest of the field is filled in around them.
 
-This example adds one idea to the previous one: keep the same TI-based pattern
-reproduction, but now force selected grid cells to match hard data exactly.
-We start by loading the same packages as before.
+This page adds one idea to the first Direct Sampling simulation: keep the same
+TI-based pattern reproduction, but force selected grid cells to match hard data
+exactly.
 """
 
 import matplotlib.pyplot as plt
@@ -19,11 +19,11 @@ from matplotlib.colors import ListedColormap
 import gstools as gs
 
 ###############################################################################
-# We reuse the synthetic channel training image from the first example.
+# Recreate the same synthetic channel training image used in the first page.
 
 gx, gy = np.meshgrid(np.arange(60), np.arange(60), indexing="ij")
 ti_data = ((np.sin(gx / 5.0) + np.sin((gx + gy) / 8.0)) > 0).astype(int)
-ti = gs.TrainingImage(ti_data, categorical=True)
+ti = gs.TrainingImage(ti_data, categorical=True, n_neighbors=12)
 
 ###############################################################################
 # Draw 40 unique "hard data" points on the simulation grid and read their
@@ -42,7 +42,7 @@ cond_val = ti_data[cond_x_idx, cond_y_idx]
 # the nearest grid node; because our points already lie on grid nodes, the
 # values are honoured exactly at those cells.
 
-ds = gs.DirectSampling(ti, n_neighbors=12, scan_fraction=0.3, threshold=0.0)
+ds = gs.DirectSampling(gs.MPSModel(ti, scan_fraction=0.3, threshold=0.0))
 ds.set_condition([cond_x, cond_y], cond_val)
 grid = [np.arange(40, dtype=float), np.arange(40, dtype=float)]
 field = ds(grid, seed=7)

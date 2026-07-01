@@ -2,18 +2,20 @@ r"""
 A real training image: the Strebelle channels
 ----------------------------------------------
 
-The previous examples used tiny synthetic training images. Here we use the
-classic **Strebelle (2002) channelized fluvial training image**, a widely used
+The first pages used tiny synthetic training images. Here we use the classic
+**Strebelle (2002) channelized fluvial training image**, a widely used
 reference example for MPS, and condition the simulation on random hard data.
 
 .. note::
 
-    **Data source / license.** The bundled training image comes from
+    **Data source / license.** The bundled training image is stored in
+    ``input/strebelle_channel_ti.npz`` and comes from
     `GeoDataSets <https://github.com/GeostatsGuy/GeoDataSets>`_ by Michael
     Pyrcz (GeostatsGuy), distributed under the **MIT license**. The underlying
     channel TI is due to Strebelle, S. (2002), *Conditional simulation of
     complex geological structures using multiple-point statistics*,
-    Mathematical Geology, 34(1), 1-21.
+    Mathematical Geology, 34(1), 1-21. Full redistribution notices are in
+    ``input/LICENSE.txt``.
 """
 
 from pathlib import Path
@@ -27,15 +29,15 @@ import gstools as gs
 ###############################################################################
 # Load the Strebelle TI bundled next to this example.
 
-if "__file__" in globals():
-    data_path = Path(__file__).resolve().with_name("mps_strebelle.npz")
-else:
-    data_path = Path("mps_strebelle.npz")
+example_dir = (
+    Path(__file__).resolve().parent if "__file__" in globals() else Path(".")
+)
+data_path = example_dir / "input" / "strebelle_channel_ti.npz"
 
 if not data_path.exists():
     raise FileNotFoundError(
         f"Missing bundled training image: {data_path}. "
-        "Run this example from examples/13_mps or restore mps_strebelle.npz."
+        "Run this example from examples/13_mps or restore the input directory."
     )
 
 with np.load(data_path) as data:

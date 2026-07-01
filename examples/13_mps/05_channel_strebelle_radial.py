@@ -1,16 +1,20 @@
 r"""
-Radial nonstationarity with a spiral path
------------------------------------------
+Radial nonstationarity
+----------------------
 
 This example follows the geometric nonstationarity idea from Mariethoz et al.
 (2010), Figure 7. The Strebelle channel TI is simulated with a radial rotation
-map and a distance-based anisotropy map, producing channels that radiate away
-from the centre and become thinner toward the edges.
+map and a distance-based anisotropy map. These maps reorient and rescale local
+data-event matching so the channel patterns tend to follow the radial geometry.
+The paper uses a much larger simulation grid; this gallery example keeps the
+grid smaller so it can run as part of the documentation build.
 
-In addition to the nonstationary maps, we supply an explicit outward
-**spiral simulation path**: nodes are visited in Archimedean spiral order from
-the centre outward. This lets each new node use already simulated inner
-neighbours, reinforcing coherent channel propagation toward the edges.
+.. note::
+
+    This example reuses the bundled Strebelle TI stored in
+    ``input/strebelle_channel_ti.npz``. The data source and license are documented in
+    :ref:`sphx_glr_examples_13_mps_03_channel_strebelle.py` and
+    ``input/LICENSE.txt``.
 """
 
 from pathlib import Path
@@ -23,29 +27,30 @@ import gstools as gs
 
 ###############################################################################
 # Load the bundled Strebelle training image.
-if "__file__" in globals():
-    data_path = Path(__file__).resolve().with_name("mps_strebelle.npz")
-else:
-    data_path = Path("mps_strebelle.npz")
+example_dir = (
+    Path(__file__).resolve().parent if "__file__" in globals() else Path(".")
+)
+data_path = example_dir / "input" / "strebelle_channel_ti.npz"
 
 if not data_path.exists():
     raise FileNotFoundError(
         f"Missing bundled training image: {data_path}. "
-        "Run this example from examples/13_mps or restore mps_strebelle.npz."
+        "Run this example from examples/13_mps or restore the input directory."
     )
 
 with np.load(data_path) as data:
-    ti_arr = data["array1"].astype(float)
+    ti_arr = data["array1"].astype(int)
 source = "Strebelle (2002) via bundled GeoDataSets asset"
 
-ti = gs.TrainingImage(ti_arr, categorical=True, n_neighbors=30)
+ti = gs.TrainingImage(ti_arr, categorical=True, n_neighbors=24)
 print(f"TI {ti.shape} ({source}), sand fraction = {ti_arr.mean():.3f}")
 
 ###############################################################################
-# The paper used a larger simulation grid. This gallery version keeps the grid
-# smaller so the documentation build remains practical.
+# The paper used a 1000x1000 simulation grid. This gallery version keeps the
+# grid smaller so the documentation build remains practical. Increase
+# ``sg_size`` for a higher-resolution figure outside the gallery build.
 
-sg_size = 250
+sg_size = 200
 xs = np.arange(sg_size, dtype=float)
 ys = np.arange(sg_size, dtype=float)
 gx, gy = np.meshgrid(xs, ys, indexing="ij")
@@ -58,61 +63,77 @@ center_y = sg_size / 2.0
 rotation = np.arctan2(gx - center_x, gy - center_y)
 
 # The anisotropy map scales the search geometry based on distance from the
-# centre. Values decrease toward the corners, making the channels thinner.
+# centre. The paper's affinity ratio ranges from 1.0 in the centre to about 0.4
+# near the corners.
 radius = np.sqrt((gx - center_x) ** 2 + (gy - center_y) ** 2)
 max_radius = np.sqrt(center_x**2 + center_y**2)
-anis = 1.0 - 0.8 * (radius / max_radius)
+anis = 1.0 - 0.6 * (radius / max_radius)
 
 ###############################################################################
-# Build a spiral simulation path that visits nodes outward from the centre.
-
-theta_grid = np.arctan2(gx - center_x, gy - center_y) % (2 * np.pi)
-pitch = 3.0  # radial gap between successive spiral arms (pixels)
-spiral_t = radius + theta_grid * (pitch / (2 * np.pi))
-spiral_order = np.argsort(spiral_t.ravel(), kind="stable")
-spiral_path = np.column_stack(
-    np.unravel_index(spiral_order, (sg_size, sg_size))
-)
-
-###############################################################################
-# Configure the MPS model. A positive threshold allows approximate matches,
-# which is useful because exact matches under continuous rotation and scaling
-# are rare.
+# Configure the MPS model. ``threshold=0.0`` uses the DSBC setting: scan the
+# requested fraction of the search window and take the best candidate found.
 
 ds = gs.DirectSampling(
-    gs.MPSModel(ti, scan_fraction=0.25, threshold=0.05)
+    gs.MPSModel(ti, scan_fraction=0.08, threshold=0.0)
 )
 ds.set_nonstationary(rotation=rotation, anis=anis)
 
-print(f"Simulating nonstationary field ({sg_size}x{sg_size}) with spiral path...")
-field = ds([xs, ys], seed=53, num_threads=1, path=spiral_path)
+print(f"Simulating radial nonstationary field ({sg_size}x{sg_size})...")
+field = ds([xs, ys], seed=53, num_threads=1)
 
 ###############################################################################
-# Plot the maps, the TI crop, and one realization.
+# Plot the maps, the TI crop, and one realization in an aligned 2x2 layout.
+# The colorbars use their own narrow columns so the image panels keep the same
+# size in both rows.
 
-fig, axes = plt.subplots(2, 2, figsize=(10, 10))
+fig = plt.figure(figsize=(9.5, 8), constrained_layout=True)
+grid_spec = fig.add_gridspec(
+    2,
+    4,
+    width_ratios=[1.0, 0.04, 1.0, 0.04],
+    hspace=0.22,
+    wspace=0.08,
+)
+ax_rot = fig.add_subplot(grid_spec[0, 0])
+cax_rot = fig.add_subplot(grid_spec[0, 1])
+ax_aff = fig.add_subplot(grid_spec[0, 2])
+cax_aff = fig.add_subplot(grid_spec[0, 3])
+ax_ti = fig.add_subplot(grid_spec[1, 0])
+ax_sim = fig.add_subplot(grid_spec[1, 2])
 
 # a) Rotation map
-im_rot = axes[0, 0].imshow(np.rad2deg(rotation), cmap="gray", origin="lower")
-axes[0, 0].set_title("a) Rotation (degrees)")
-plt.colorbar(im_rot, ax=axes[0, 0], fraction=0.046, pad=0.04)
+im_rot = ax_rot.imshow(np.rad2deg(rotation), cmap="gray", origin="lower")
+ax_rot.set_title("a) Rotation (degrees)")
+fig.colorbar(im_rot, cax=cax_rot)
 
 # b) Affinity map
-im_aff = axes[0, 1].imshow(
-    anis, cmap="gray", origin="lower", vmin=0.1, vmax=1.0
+im_aff = ax_aff.imshow(
+    anis, cmap="gray", origin="lower", vmin=0.4, vmax=1.0
 )
-axes[0, 1].set_title("b) Affinity ratio")
-plt.colorbar(im_aff, ax=axes[0, 1], fraction=0.046, pad=0.04)
+ax_aff.set_title("b) Affinity ratio")
+fig.colorbar(im_aff, cax=cax_aff)
 
-# c) TI
+# c) Channel facies TI
 cmap = ListedColormap(
     ["#000000", "#FFFFFF"]
 )  # black background, white channels
-axes[1, 0].imshow(ti_arr[:250, :250], cmap=cmap, origin="lower")
-axes[1, 0].set_title("c) TI")
+ax_ti.imshow(
+    ti_arr[:sg_size, :sg_size],
+    cmap=cmap,
+    origin="lower",
+    interpolation="nearest",
+    vmin=0,
+    vmax=1,
+)
+ax_ti.set_title("c) Channel facies TI")
 
 # d) Simulation
-axes[1, 1].imshow(field, cmap=cmap, origin="lower")
-axes[1, 1].set_title("d) One simulation")
-
-fig.tight_layout()
+ax_sim.imshow(
+    field,
+    cmap=cmap,
+    origin="lower",
+    interpolation="nearest",
+    vmin=0,
+    vmax=1,
+)
+ax_sim.set_title("d) Radial DS realization")
