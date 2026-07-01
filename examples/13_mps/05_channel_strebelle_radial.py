@@ -41,12 +41,24 @@ except Exception as err:
     ti_arr = ((np.sin(gx / 6.0) + np.sin((gx + gy) / 10.0)) > 0).astype(float)
     source = "synthetic fallback"
 
+# GSTools' rotation/anisotropy convention always aligns the *primary*
+# (axis-0, unscaled by `anis`) direction to the `rotation` angle and scales
+# axis 1 by `anis`. The Strebelle TI's channels run along its axis 1, not
+# axis 0 (verified via structure-tensor analysis of the raw TI) -- left
+# as-is, this makes `rotation` point the channels' *short* axis radially
+# (channels end up tangential, forming concentric circles) and makes `anis`
+# compress the channels' *length* instead of their width (no visible
+# thinning). Transposing the TI swaps which array axis carries the channel
+# direction, so both the orientation and the thinning effect come out
+# right with a plain radial `rotation` and `anis` map.
+ti_arr = ti_arr.T
+
 ti = gs.TrainingImage(ti_arr, categorical=True, n_neighbors=32)
 print(f"TI {ti.shape} ({source}), sand fraction = {ti_arr.mean():.3f}")
 
 # The paper used a 1000x1000 grid. To avoid grid crowding where the thick TI
 # channels collide near the center, we increase the size to 500x500.
-sg_size = 900
+sg_size = 1000
 xs = np.arange(sg_size, dtype=float)
 ys = np.arange(sg_size, dtype=float)
 gx, gy = np.meshgrid(xs, ys, indexing="ij")
@@ -56,7 +68,8 @@ center_y = sg_size / 2.0
 
 # 1. Rotation Map: Angle from the center, creating a radial pattern.
 # Note: GSTools rotation is in radians.
-rotation = np.arctan2(gx - center_x, gy - center_y)
+# We measure the angle from index 0 (y) towards index 1 (x) to match GSTools' assumption.
+rotation = np.arctan2(gy - center_y, gx - center_x)
 
 # 2. Affinity Map: Scales the channels based on distance from center.
 # The paper goes from 1.0 at the center down to ~0.4 at the corners.
@@ -70,7 +83,7 @@ anis = 1.0 - 0.65 * (radius / max_radius)
 # engine fills the center first and propagates outward, so each newly
 # simulated node can use already-simulated inner neighbours as conditioning —
 # coherent with the radial non-stationarity applied above.
-theta_grid = np.arctan2(gx - center_x, gy - center_y) % (2 * np.pi)
+theta_grid = np.arctan2(gy - center_y, gx - center_x) % (2 * np.pi)
 pitch = 3.0  # radial gap between successive spiral arms (pixels)
 spiral_t = radius + theta_grid * (pitch / (2 * np.pi))
 spiral_order = np.argsort(spiral_t.ravel(), kind="stable")
@@ -88,7 +101,7 @@ ds.set_nonstationary(rotation=rotation, anis=anis)
 print(
     f"Simulating non-stationary field ({sg_size}x{sg_size}) with spiral path..."
 )
-field = ds([xs, ys], seed=5, num_threads=8, path="random")
+field = ds([xs, ys], seed=1, num_threads=8, path="random")
 
 # Plotting the reproduction of Mariethoz Figure 7
 fig, axes = plt.subplots(2, 2, figsize=(10, 10))
@@ -109,7 +122,7 @@ plt.colorbar(im_aff, ax=axes[0, 1], fraction=0.046, pad=0.04)
 cmap = ListedColormap(
     ["#000000", "#FFFFFF"]
 )  # black background, white channels
-axes[1, 0].imshow(ti_arr[:250, :250], cmap=cmap, origin="lower")
+axes[1, 0].imshow(ti_arr.T[:250, :250], cmap=cmap, origin="lower")
 axes[1, 0].set_title("c) TI")
 
 # d) Simulation
