@@ -171,6 +171,9 @@ class Variable:
         # set via setter so the variation guard runs on construction too
         self._n_neighbors = 32
         self.n_neighbors = n_neighbors
+        # Mark the data array read-only: the engine reads it directly and
+        # nothing downstream should ever write through .data.
+        self._data.flags.writeable = False
 
     # --- read-only properties ---
 
@@ -181,7 +184,12 @@ class Variable:
 
     @property
     def data(self):
-        """:class:`numpy.ndarray`: Training image data array (defensive copy)."""
+        """:class:`numpy.ndarray`: Training image data array (shared internal reference).
+
+        The returned array is the live internal buffer and must **not** be
+        mutated by the caller.  The array is marked read-only (``flags.writeable
+        == False``) at construction time to enforce this at the NumPy level.
+        """
         return self._data
 
     @property
@@ -301,8 +309,16 @@ class TrainingImage:
 
         if isinstance(data, list):
             self._init_from_variables(data)
+        elif isinstance(data, Variable):
+            # Univariate sugar: caller supplies a pre-configured Variable
+            self._multivariate = False
+            self._variables = [data]
+            self._var_map = {data.name: data}
+            self._shape = data.data.shape
+            self._has_nan = data.has_nan
+            self._normalized_weights = None
         else:
-            # Univariate sugar: build one anonymous Variable
+            # Univariate sugar: bare array → anonymous Variable (name=None)
             self._multivariate = False
             var = Variable(
                 None,
@@ -492,6 +508,9 @@ class TrainingImage:
         numpy.ndarray, shape (max_scan,)
             Distance in [0, 1] for each candidate.
         """
+        # Dispatch order: categorical > l1 (p==1) > l2 (p==2) > lp > variation.
+        # l1/l2 are explicit fast-paths (not folded into lp) so the specialised
+        # BLAS-friendly kernels are always selected for p in {1, 2}.
         if categorical:
             return vec_categorical_dist(de_sim, all_de_ti, w, has_nan=has_nan)
         if p_norm == 1.0:
@@ -580,8 +599,14 @@ class TrainingImage:
             Distance in [0, 1] for each candidate.
         """
         v = self._var_map[var]  # var is a str or None (univariate internal)
-        de_sim = np.asarray(de_sim, dtype=np.float64)
-        all_de_ti = np.asarray(all_de_ti, dtype=np.float64)
+        # Categorical distance only uses !=, which is dtype-agnostic; skip the
+        # float64 allocation on the categorical path and keep it for continuous.
+        if v.categorical:
+            de_sim = np.asarray(de_sim)
+            all_de_ti = np.asarray(all_de_ti)
+        else:
+            de_sim = np.asarray(de_sim, dtype=np.float64)
+            all_de_ti = np.asarray(all_de_ti, dtype=np.float64)
         n = len(de_sim)
         if n == 0:
             return np.zeros(len(all_de_ti))

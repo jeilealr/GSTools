@@ -7,6 +7,12 @@ uses the ``stone`` continuous training image from GAIA-UNIL, samples random
 hard data from that texture, and compares the conditional simulation with the
 TI through both maps and histograms.
 
+The bundled figure uses a 200x200 grid, ``distance="l4"``,
+``n_neighbors=75``, ``scan_fraction=0.4``, ``threshold=0.01``,
+``cond_weight=2``, seed 1, four threads, and a sequential path. For a more
+expensive DSBC-style experiment, try ``threshold=0.0`` and a larger
+neighborhood in the regeneration settings.
+
 .. note::
 
     This example loads the bundled derived texture
@@ -23,15 +29,74 @@ import numpy as np
 
 import gstools as gs
 
-###############################################################################
-# Load the prepared continuous training image. The bundled file contains the
-# 200x200 upstream image used by the gallery example.
-
 example_dir = (
     Path(__file__).resolve().parent if "__file__" in globals() else Path(".")
 )
 data_path = example_dir / "input" / "gaia_unil_stone_texture.npz"
+output_dir = example_dir / "output"
+output_path = output_dir / "continuous_stone_conditioning.png"
 
+###############################################################################
+# **Small display and plotting helpers.**
+#
+# Functions to display the saved figure and plot a regenerated result.
+def show_saved_figure(path):
+    """Display a precomputed PNG in the gallery."""
+    if not path.exists():
+        raise FileNotFoundError(
+            f"Missing precomputed figure: {path}. "
+            "Set generate_output = True to create it."
+        )
+    image = plt.imread(path)
+    fig, ax = plt.subplots(figsize=(12, 10))
+    ax.imshow(image)
+    ax.axis("off")
+    fig.tight_layout(pad=0)
+
+
+def plot_continuous_result(ti_data, field, cond_x, cond_y, cond_val):
+    """Plot the TI, conditional simulation, and marginal histograms."""
+    fig = plt.figure(figsize=(12, 10))
+    ax1 = plt.subplot(221)
+    ax2 = plt.subplot(222)
+    ax3 = plt.subplot(212)
+
+    ax1.imshow(ti_data.T, cmap="gray", origin="lower", vmin=0, vmax=1.0)
+    ax1.set_title("a) Training image")
+
+    im_b = ax2.imshow(field.T, cmap="gray", origin="lower", vmin=0, vmax=1.0)
+    ax2.scatter(
+        cond_x,
+        cond_y,
+        c=cond_val,
+        cmap="gray",
+        vmin=0,
+        vmax=1.0,
+        edgecolors="k",
+        s=40,
+        linewidths=0.5,
+    )
+    ax2.set_title("b) Simulation")
+    plt.colorbar(im_b, ax=ax2, fraction=0.046, pad=0.04)
+
+    hist_ti, bins = np.histogram(ti_data.flatten(), bins=50, density=True)
+    hist_sim, _ = np.histogram(field.flatten(), bins=bins, density=True)
+    bin_centers = 0.5 * (bins[:-1] + bins[1:])
+
+    ax3.plot(bin_centers, hist_sim, "k-", label="Simulation")
+    ax3.plot(bin_centers, hist_ti, "k--", label="Training image")
+    ax3.set_title("c) Comparison of histograms")
+    ax3.legend()
+
+    fig.tight_layout()
+    return fig
+
+
+###############################################################################
+# **Load the bundled continuous training image.**
+#
+# The texture is stored locally so the example does not download data during
+# normal execution or regeneration.
 if not data_path.exists():
     raise FileNotFoundError(
         f"Missing bundled training image: {data_path}. "
@@ -39,31 +104,36 @@ if not data_path.exists():
     )
 
 with np.load(data_path) as data:
-    ti_full = data["texture"].astype(float)
+    ti_data = data["texture"].astype(float)
 
-grid_size = ti_full.shape[0]
-ti_data = ti_full
-
-###############################################################################
-# Build a continuous TI using the ``"l2"`` distance.
-
-ti = gs.TrainingImage(ti_data, categorical=False, distance="l2", n_neighbors=24)
+grid_size = ti_data.shape[0]
 
 ###############################################################################
-# Create hard conditioning values by sampling from the TI distribution.
+# **Build the continuous training image.**
+#
+# ``distance="l4"`` compares continuous data events using the fourth-power
+# distance used for this texture example.
+ti = gs.TrainingImage(
+    ti_data,
+    categorical=False,
+    distance="l4",
+    n_neighbors=75,
+)
 
-rng = np.random.default_rng(42)
-n_cond = 35
+###############################################################################
+# **Sample hard conditioning values.**
+#
+# Conditioning locations are random in the simulation grid, while values are
+# sampled from the training image marginal distribution.
+rng = np.random.RandomState(3)
+n_cond = 10
 cond_x = rng.uniform(0, grid_size, n_cond)
 cond_y = rng.uniform(0, grid_size, n_cond)
-rand_ti_x = rng.integers(0, grid_size, n_cond)
-rand_ti_y = rng.integers(0, grid_size, n_cond)
+rand_ti_x = rng.randint(0, grid_size, n_cond)
+rand_ti_y = rng.randint(0, grid_size, n_cond)
 cond_val = ti_data[rand_ti_x, rand_ti_y]
 
-###############################################################################
-# Set up the MPS model and conditioning data.
-
-model = gs.MPSModel(ti, scan_fraction=0.2, threshold=0.03)
+model = gs.MPSModel(ti, scan_fraction=0.4, threshold=0.01, cond_weight=2)
 
 ds = gs.DirectSampling(model)
 ds.set_condition([cond_x, cond_y], cond_val)
@@ -71,63 +141,28 @@ ds.set_condition([cond_x, cond_y], cond_val)
 x = y = np.arange(grid_size, dtype=float)
 
 ###############################################################################
-# Use a spiral simulation path so the field grows outward from the centre.
-
-center = grid_size / 2.0
-rows_g, cols_g = np.indices((grid_size, grid_size))
-r_grid = np.sqrt((rows_g - center) ** 2 + (cols_g - center) ** 2)
-theta_grid = np.arctan2(rows_g - center, cols_g - center) % (2 * np.pi)
-pitch = 3.0
-spiral_t = r_grid + theta_grid * (pitch / (2 * np.pi))
-spiral_path = np.column_stack(
-    np.unravel_index(
-        np.argsort(spiral_t.ravel(), kind="stable"), (grid_size, grid_size)
+# **Run Direct Sampling, or reuse the saved result.**
+#
+# The setup above always runs so the example remains readable. The expensive
+# simulation runs only when ``generate_output`` is set to ``True``. The default
+# is ``False`` so normal execution displays the saved figure.
+generate_output = False
+if generate_output:
+    output_dir.mkdir(exist_ok=True)
+    print(
+        f"Simulating continuous field ({grid_size}x{grid_size}) "
+        f"with {n_cond} conditioning points..."
     )
-)
+    field = ds([x, y], seed=1, num_threads=4, path="sequential")
 
-print(
-    f"Simulating continuous field ({grid_size}x{grid_size}) "
-    f"with {n_cond} conditioning points..."
-)
-field = ds([x, y], seed=123, num_threads=1, path=spiral_path)
+    fig = plot_continuous_result(ti_data, field, cond_x, cond_y, cond_val)
+    fig.savefig(output_path, dpi=180, bbox_inches="tight")
+    print(f"Saved {output_path}.")
+    plt.close(fig)
 
 ###############################################################################
-# Plot the TI, the conditional simulation, and their marginal distributions.
-
-fig = plt.figure(figsize=(12, 10))
-ax1 = plt.subplot(221)
-ax2 = plt.subplot(222)
-ax3 = plt.subplot(212)
-
-# a) TI
-im_a = ax1.imshow(ti_data.T, cmap="gray", origin="lower", vmin=0, vmax=1.0)
-ax1.set_title("a) Training image")
-
-# b) Simulation
-im_b = ax2.imshow(field.T, cmap="gray", origin="lower", vmin=0, vmax=1.0)
-# Overlay conditioning points (circles whose color indicates the value)
-ax2.scatter(
-    cond_x,
-    cond_y,
-    c=cond_val,
-    cmap="gray",
-    vmin=0,
-    vmax=1.0,
-    edgecolors="k",
-    s=40,
-    linewidths=0.5,
-)
-ax2.set_title("b) Simulation")
-plt.colorbar(im_b, ax=ax2, fraction=0.046, pad=0.04)
-
-# c) Histogram comparison
-hist_ti, bins = np.histogram(ti_data.flatten(), bins=30, density=True)
-hist_sim, _ = np.histogram(field.flatten(), bins=bins, density=True)
-bin_centers = 0.5 * (bins[:-1] + bins[1:])
-
-ax3.plot(bin_centers, hist_sim, "k-", label="Simulation")
-ax3.plot(bin_centers, hist_ti, "k--", label="Training image")
-ax3.set_title("c) Comparison of histograms")
-ax3.legend()
-
-fig.tight_layout()
+# **Display the saved continuous result.**
+#
+# In normal use this loads the bundled PNG. When regeneration is enabled, it
+# displays the PNG that was just refreshed.
+show_saved_figure(output_path)

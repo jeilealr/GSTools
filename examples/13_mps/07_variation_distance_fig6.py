@@ -2,17 +2,19 @@ r"""
 Variation distance for continuous conditioning
 ----------------------------------------------
 
-The continuous distance page compared metrics without conditioning. Here we
-return to conditioning and focus on the ``"variation"`` distance: the TI has
-local fluctuations around zero, while the conditioning data include a
-large-scale trend. Comparing local variation rather than absolute level makes
-that mismatch meaningful instead of less suitable for matching.
+The **Continuous variables and distance metrics** example compared continuous
+distances without conditioning. Here we return to conditioning and focus on the
+``"variation"`` distance: the TI has local fluctuations around zero, while the
+conditioning data include a large-scale trend. Comparing local variation rather
+than absolute level makes that mismatch meaningful instead of less suitable for
+matching.
 """
 
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.colors import Normalize
 
 import gstools as gs
 
@@ -45,23 +47,24 @@ ti = gs.TrainingImage(
     ti_data,
     categorical=False,
     distance="variation",
-    n_neighbors=12,
+    n_neighbors=20,
 )
 
 ###############################################################################
 # Create conditioning data with a spatial trend and a different absolute level
 # than the TI.
 
-rng = np.random.default_rng(42)
-n_cond = 50
+rng = np.random.RandomState(42)
+n_cond = 100
 cond_x = rng.uniform(0, grid_size, n_cond)
 cond_y = rng.uniform(0, grid_size, n_cond)
 cond_val = 100 + 10 * (cond_x / grid_size) + rng.normal(0, 1.5, n_cond)
 
 ###############################################################################
-# Simulate with the continuous variation distance.
-
-model = gs.MPSModel(ti, scan_fraction=0.2, threshold=0.03)
+# Simulate with the continuous variation distance. A moderate neighborhood and
+# a half-TI scan make the realization less noisy while keeping this page
+# runnable as a normal gallery example.
+model = gs.MPSModel(ti, scan_fraction=0.5, threshold=0.01)
 
 ds = gs.DirectSampling(model)
 ds.set_condition([cond_x, cond_y], cond_val)
@@ -73,46 +76,69 @@ print(
 field = ds([x, y], seed=42, num_threads=1)
 
 ###############################################################################
-# Plot the TI, the conditioning data, and one conditional realization.
+# Plot the TI, the conditioning data, and one conditional realization. The
+# training image uses the same blue-yellow palette as the conditioned values,
+# while the conditioning and simulation panels share the lower-row colorbar.
 
-fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+fig = plt.figure(figsize=(11, 9), constrained_layout=True)
+grid = fig.add_gridspec(
+    2,
+    3,
+    width_ratios=[1, 1, 0.045],
+    height_ratios=[1, 1],
+)
+ax_ti = fig.add_subplot(grid[0, 0:2])
+cax_ti = fig.add_subplot(grid[0, 2])
+ax_cond = fig.add_subplot(grid[1, 0])
+ax_sim = fig.add_subplot(grid[1, 1])
+cax_val = fig.add_subplot(grid[1, 2])
+
+ti_norm = Normalize(vmin=-3, vmax=3)
+value_norm = Normalize(vmin=98, vmax=112)
 
 # a) TI
-im_a = axes[0].imshow(
+im_a = ax_ti.imshow(
     ti_data.T,
-    cmap="gray",
+    cmap="cividis",
     origin="lower",
     extent=[0, grid_size, 0, grid_size],
-    vmin=-3,
-    vmax=3,
+    norm=ti_norm,
 )
-axes[0].set_title("a) Training image")
-plt.colorbar(im_a, ax=axes[0], fraction=0.046, pad=0.04)
+ax_ti.set_title("a) Training image")
+fig.colorbar(im_a, cax=cax_ti, label="Training value")
 
 # b) Conditioning data
-im_b = axes[1].scatter(
-    cond_x, cond_y, c=cond_val, cmap="gray", vmin=98, vmax=112, s=20
+im_b = ax_cond.scatter(
+    cond_x,
+    cond_y,
+    c=cond_val,
+    cmap="cividis",
+    norm=value_norm,
+    s=22,
+    edgecolors="white",
+    linewidths=0.35,
 )
-axes[1].set_xlim(0, grid_size)
-axes[1].set_ylim(0, grid_size)
-axes[1].set_aspect("equal")
-axes[1].set_title("b) Conditioning data")
-plt.colorbar(im_b, ax=axes[1], fraction=0.046, pad=0.04)
+ax_cond.set_xlim(0, grid_size)
+ax_cond.set_ylim(0, grid_size)
+ax_cond.set_aspect("equal")
+ax_cond.set_title("b) Conditioning data")
 
 # c) Simulation
-im_c = axes[2].imshow(
+im_c = ax_sim.imshow(
     field.T,
-    cmap="gray",
+    cmap="cividis",
     origin="lower",
     extent=[0, grid_size, 0, grid_size],
-    vmin=98,
-    vmax=112,
+    norm=value_norm,
 )
 # Overlay conditioning points as open circles
-axes[2].scatter(
-    cond_x, cond_y, facecolors="none", edgecolors="k", s=40, linewidths=1
+ax_sim.scatter(
+    cond_x,
+    cond_y,
+    facecolors="none",
+    edgecolors="white",
+    s=26,
+    linewidths=0.8,
 )
-axes[2].set_title("c) One simulation")
-plt.colorbar(im_c, ax=axes[2], fraction=0.046, pad=0.04)
-
-fig.tight_layout()
+ax_sim.set_title("c) One conditional simulation")
+fig.colorbar(im_c, cax=cax_val, label="Conditioned value")

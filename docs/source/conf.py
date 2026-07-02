@@ -38,22 +38,22 @@ warnings.filterwarnings(
 from gstools import __version__ as ver
 
 
-def _mps_input_assets():
-    """Return bundled MPS input assets that should travel with examples."""
-    input_dir = (
-        Path(__file__).resolve().parents[2] / "examples" / "13_mps" / "input"
+def _mps_assets(subdir, suffixes):
+    """Return bundled MPS assets that should travel with examples."""
+    asset_dir = (
+        Path(__file__).resolve().parents[2] / "examples" / "13_mps" / subdir
     )
-    if not input_dir.exists():
+    if not asset_dir.exists():
         return []
     return sorted(
         path
-        for path in input_dir.iterdir()
-        if path.is_file() and path.suffix in {".npz", ".txt"}
+        for path in asset_dir.iterdir()
+        if path.is_file() and path.suffix in suffixes
     )
 
 
 def _patch_mps_gallery_zipfiles():
-    """Include bundled MPS inputs in per-example Sphinx-Gallery zip files."""
+    """Include bundled MPS assets in per-example Sphinx-Gallery zip files."""
     try:
         from sphinx_gallery import gen_rst
     except Exception:
@@ -72,13 +72,17 @@ def _patch_mps_gallery_zipfiles():
             and zip_path.suffix == ".zip"
             and relative_dir.name == "13_mps"
         ):
-            target_input_dir = relative_dir / "input"
-            target_input_dir.mkdir(exist_ok=True)
             copied_assets = []
-            for src in _mps_input_assets():
-                dst = target_input_dir / src.name
-                shutil.copy2(src, dst)
-                copied_assets.append(str(dst))
+            for subdir, suffixes in {
+                "input": {".npz", ".txt"},
+                "output": {".png", ".txt"},
+            }.items():
+                target_asset_dir = relative_dir / subdir
+                target_asset_dir.mkdir(exist_ok=True)
+                for src in _mps_assets(subdir, suffixes):
+                    dst = target_asset_dir / src.name
+                    shutil.copy2(src, dst)
+                    copied_assets.append(str(dst))
             file_list = [*file_list, *copied_assets]
 
         return original_zip_files(file_list, zipname, relative_to, extension)

@@ -6,9 +6,35 @@ distance.py; receives TI arrays and the vectorized distance callable as
 parameters (does not own a TrainingImage).
 """
 
+from dataclasses import dataclass
+
 import numpy as np
 
 from gstools.mps.distance import compute_node_weights
+
+
+@dataclass(frozen=True)
+class _ScanConfig:
+    """Run-constant inputs to :func:`_scan_for_match`, built once per simulation.
+
+    Every field is invariant across the whole node path; only the per-node
+    geometry (``lo``, ``win_shape``, lags, data events, scan-entry offset,
+    targets) is passed positionally to :func:`_scan_for_match`.
+    """
+
+    variables: tuple
+    weights: dict
+    ti_vars: dict
+    ti_flat: dict
+    ti_strides: dict
+    ti_shape: object
+    scan_fraction: float
+    threshold: float
+    cond_weight: float
+    distance_power: float
+    vec_distance_var: object
+    ti_has_nan: bool
+
 
 # DS-mode scan block size.  Large enough that per-call NumPy overhead is
 # negligible (essentially full vectorization speed), small enough that the
@@ -91,17 +117,7 @@ def _scan_for_match(
     ln_v,
     u_start_i,
     scan_targets,
-    *,
-    variables,
-    weights,
-    ti_vars,
-    ti_shape,
-    scan_fraction,
-    threshold,
-    cond_weight,
-    distance_power,
-    vec_distance_var,
-    ti_has_nan,
+    cfg,
 ):
     """Joint multivariate DS scan over a TI search window.
 
@@ -114,36 +130,40 @@ def _scan_for_match(
     TI — caller falls back to a random defined cell).
     """
     win_size = int(np.prod(win_shape))
-    ti_size = int(np.prod(ti_shape))
+    ti_size = int(np.prod(cfg.ti_shape))
     # Scan fraction is of the TI (Mariethoz2010 ¶24, Juda2022 §2), capped at
     # the valid search window so we never wrap around and re-scan anchors.
-    max_scan = max(1, min(win_size, int(scan_fraction * ti_size)))
+    max_scan = max(1, min(win_size, int(cfg.scan_fraction * ti_size)))
     start = int(u_start_i * win_size)
 
-    active_vars = [v for v in variables if v in int_lags]
-    active_w_total = sum(weights[v] for v in active_vars)
+    active_vars = [v for v in cfg.variables if v in int_lags]
+    active_w_total = sum(cfg.weights[v] for v in active_vars)
     precomp_w = {
         v: compute_node_weights(
-            len(de_v[v]), ln_v[v], distance_power, cm_v[v], cond_weight
+            len(de_v[v]), ln_v[v], cfg.distance_power, cm_v[v], cfg.cond_weight
         )
         for v in active_vars
     }
+    # Precompute flat lag offsets for each variable: flat_il[v] = int_lags[v] @ strides.
+    # Combined with base = y_blk @ strides, all_de_ti = ti_flat[v][base[:,None] + flat_il[v][None,:]].
+    # In-bounds invariant: every y + lag is guaranteed in-bounds by window construction
+    # (_intersect_search_windows), so this flat take needs no bounds checking.
+    flat_il = {v: int_lags[v] @ cfg.ti_strides[v] for v in active_vars}
 
     def _dist_block(y_blk):
         d = np.zeros(len(y_blk))
         for v in active_vars:
-            il = int_lags[v]
-            coords = y_blk[:, None, :] + il[None, :, :]
-            all_de_ti = ti_vars[v][tuple(coords.transpose(2, 0, 1))]
-            d += weights[v] * vec_distance_var(
+            base = y_blk @ cfg.ti_strides[v]  # shape (B,)
+            all_de_ti = cfg.ti_flat[v][base[:, None] + flat_il[v][None, :]]
+            d += cfg.weights[v] * cfg.vec_distance_var(
                 v,
                 de_v[v],
                 all_de_ti,
                 cm_v[v],
-                cond_weight,
+                cfg.cond_weight,
                 ln_v[v],
                 weights=precomp_w[v],
-                has_nan=ti_has_nan,
+                has_nan=cfg.ti_has_nan,
             )
         # Renormalize so the joint distance stays in [0, 1] even when
         # some variables have no data event and are excluded from int_lags.
@@ -151,16 +171,18 @@ def _scan_for_match(
         # accepts matches that should be rejected.
         if 0.0 < active_w_total < 1.0:
             d /= active_w_total
-        if ti_has_nan:
+        if cfg.ti_has_nan:
             # Never select an anchor whose pasted value would be undefined:
             # the matched cell must be defined in every target variable.
             center_ok = np.ones(len(y_blk), dtype=bool)
             ys = tuple(y_blk.T)
             for v in scan_targets:
-                cv = ti_vars[v][ys]
+                cv = cfg.ti_vars[v][ys]
                 if np.issubdtype(cv.dtype, np.floating):
                     center_ok &= np.isfinite(cv)
             d = np.where(center_ok, d, np.inf)
         return d
 
-    return _scan_window(lo, win_shape, start, max_scan, threshold, _dist_block)
+    return _scan_window(
+        lo, win_shape, start, max_scan, cfg.threshold, _dist_block
+    )

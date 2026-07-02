@@ -29,6 +29,12 @@ def _build_dag_base(
     indegree : dict of {key: numpy.ndarray of int32, shape (N,)}
     out_edges : list of list of (int, key)
         ``out_edges[j]`` → ``(i, key)`` pairs to process when node ``j`` completes.
+    coord_cache : list of dict of {key: numpy.ndarray, shape (m, dim)}
+        ``coord_cache[i][key]`` are the neighbour coordinates selected for node
+        ``i`` and variable ``key`` during the DAG pass.  These are the
+        bit-identical coordinates that ``_gather_neighborhood`` would select for
+        the same node when all dependencies are informed, so the parallel engine
+        can reuse them directly without a second ``_select_neighbors`` call.
 
     Notes
     -----
@@ -42,10 +48,11 @@ def _build_dag_base(
 
     indegree = {k: np.zeros(N, dtype=np.int32) for k in vmap_dict}
     out_edges = [[] for _ in range(N)]
+    coord_cache = [{} for _ in range(N)]
     for i in range(N):
         x_i = path[i]
         for key, vmap in vmap_dict.items():
-            _, vidx = _select_neighbors(
+            coords, vidx = _select_neighbors(
                 x_i,
                 offset_arr,
                 sim_shape_arr,
@@ -56,10 +63,11 @@ def _build_dag_base(
                 max_radius,
                 n_k_dict[key],
             )
+            coord_cache[i][key] = coords
             for j in vidx[vidx >= 0]:
                 indegree[key][i] += 1
                 out_edges[int(j)].append((i, key))
-    return indegree, out_edges
+    return indegree, out_edges, coord_cache
 
 
 def _make_progress(progress, total, desc):
@@ -68,14 +76,14 @@ def _make_progress(progress, total, desc):
     Parameters
     ----------
     progress : bool or callable or None
-        ``None``/``False`` disables it. ``True`` shows a :mod:`tqdm` bar when
-        ``tqdm`` is importable, otherwise prints the percentage at 5 % steps on
-        a single overwritten line. A callable is invoked as
-        ``progress(n_done, total)`` once per completed simulation node.
+        ``None``/``False`` disables it. ``True`` prints the percentage at 5 %
+        steps on a single overwritten line (no third-party dependency). A
+        callable is invoked as ``progress(n_done, total)`` once per completed
+        simulation node.
     total : int
         Number of nodes that will be simulated (``len(path)``).
     desc : str
-        Short label for the bar (e.g. ``"DS"``).
+        Short label for the progress line (e.g. ``"DS"``).
 
     Returns
     -------
@@ -94,14 +102,7 @@ def _make_progress(progress, total, desc):
             progress(state["done"], total)
 
         return update, (lambda: None)
-    try:
-        from tqdm import tqdm
-    except ImportError:
-        tqdm = None
-    if tqdm is not None:
-        bar = tqdm(total=total, desc=desc, unit="node")
-        return (lambda: bar.update(1)), bar.close
-    # Dependency-free fallback: overwrite a single line at 5 % steps.
+    # Dependency-free progress: overwrite a single line at 5 % steps.
     state = {"done": 0, "last": -1}
 
     def update():
@@ -134,6 +135,7 @@ def _run_path(
     n_k,
     sim_shape,
     max_radius,
+    on_cache_ready=None,
 ):
     """Dispatch the node simulation path: serial or parallel DAG.
 
@@ -166,6 +168,15 @@ def _run_path(
         Simulation grid shape.
     max_radius : float or None
         Euclidean cap on neighbour selection; ``None`` → unlimited.
+    on_cache_ready : callable or None, optional
+        When not ``None`` and ``executor`` is not ``None``, called once as
+        ``on_cache_ready(coord_cache)`` immediately after :func:`_build_dag_base`
+        returns and before any futures are submitted.  ``coord_cache[i][key]``
+        are the pre-selected neighbour coordinates for node ``i`` and variable
+        ``key`` from the DAG pass.  The engine stores this as
+        ``self._neighbor_cache`` so :meth:`_gather_neighborhood` can skip the
+        redundant ``_select_neighbors`` call on the parallel path.  ``None`` in
+        serial mode (no DAG built, no cache).
 
     Notes
     -----
@@ -177,9 +188,11 @@ def _run_path(
     variables = list(vmap)
 
     if executor is not None:
-        indegree, out_edges = _build_dag_base(
+        indegree, out_edges, coord_cache = _build_dag_base(
             path, sim_shape, offset_arr, vmap, n_k, max_radius
         )
+        if on_cache_ready is not None:
+            on_cache_ready(coord_cache)
         remaining = {v: indegree[v].copy() for v in variables}
         submitted = np.zeros(len(path), dtype=bool)
         done_q = queue.Queue()

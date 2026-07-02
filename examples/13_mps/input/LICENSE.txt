@@ -32,8 +32,7 @@ strebelle_facies_resistivity_ti.npz
 
     Preparation: contains a 250x250 Strebelle facies subset and a continuous
     secondary variable prepared by smoothing the facies field and adding seeded
-    uniform noise. The examples crop this input at runtime to keep gallery
-    execution below the documentation runtime budget.
+    uniform noise.
 
 gaia_unil_stone_texture.npz
     Source: stone.tiff from the GAIA-UNIL TrainingImagesTIFF repository
@@ -55,14 +54,14 @@ Generated documentation inputs
 synthetic_channel_context_ti.npz
     License: GSTools documentation/example license.
 
-    Preparation: generated from deterministic formulas for a categorical
-    channel field and a continuous context field. The context variable is the
-    normalized x-coordinate.
+    Preparation: generated as a 250x250 input from deterministic formulas for
+    a categorical channel field and a continuous context field. The context
+    variable is the normalized x-coordinate.
 
 synthetic_variation_ti.npz
     License: GSTools documentation/example license.
 
-    Preparation: generated once as a continuous multi-Gaussian field with
+    Preparation: generated once as a 250x250 continuous multi-Gaussian field with
     anisotropic spatial correlation, using an exponential covariance model with
     ``len_scale=[35, 25]`` and ``seed=123``.
 

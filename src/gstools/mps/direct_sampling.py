@@ -206,9 +206,9 @@ class DirectSampling(Field):
             or store it under a custom name (string).
             Default: :any:`True`
         progress : :class:`bool` or callable or None, optional
-            Show simulation progress. ``True`` displays a :mod:`tqdm` bar (or a
-            plain percentage line if ``tqdm`` is not installed); a callable is
-            invoked as ``progress(n_done, n_total)`` once per completed node.
+            Show simulation progress. ``True`` prints a plain percentage line
+            (no third-party dependency); a callable is invoked as
+            ``progress(n_done, n_total)`` once per completed node.
             ``None``/``False`` (default) disables it.
 
         Returns
@@ -385,8 +385,10 @@ class DirectSampling(Field):
         )
         return idx, dist_sq
 
-    def set_condition(self, cond_pos, cond_val, cond_weight=None):
+    def set_condition(self, cond_pos, cond_val):
         """Set the conditioning data for the simulation.
+
+        Conditioning weight is configured on the :class:`MPSModel` (``cond_weight=``).
 
         Parameters
         ----------
@@ -396,12 +398,7 @@ class DirectSampling(Field):
             Univariate: values at the conditioning positions. Multivariate: a
             ``{variable: numpy.ndarray}`` mapping (use ``numpy.nan`` for a
             variable that is not conditioned at a given point).
-        cond_weight : :class:`float`, optional
-            Conditioning weight delta. If given, overrides the ``cond_weight`` set
-            at construction. Default: :any:`None` (keep existing weight)
         """
-        if cond_weight is not None:
-            self._mps_model.cond_weight = float(cond_weight)
         if self._ti.multivariate and isinstance(cond_val, dict):
             if not cond_val:
                 raise ValueError("DirectSampling: cond_val must not be empty")
@@ -516,118 +513,54 @@ class DirectSampling(Field):
         """:any:`TrainingImage`: The training image model."""
         return self._ti
 
-    @property
-    def n_neighbors(self):
-        """:class:`int` or :class:`dict`: n_neighbors per variable (scalar if all equal)."""
+    def _collapse_per_var(self, attr):
+        """Read ``attr`` from every TI Variable; scalar if all equal, else a dict.
+
+        Read-only view over the variables' values. Used by the
+        :attr:`n_neighbors` and :attr:`max_radius` getters.
+        """
         vars_ = self._ti.variables
-        vals = [v.n_neighbors for v in vars_]
+        vals = [getattr(v, attr) for v in vars_]
         if len(set(vals)) == 1:
             return vals[0]
-        return {v.name: v.n_neighbors for v in vars_}
+        return {v.name: getattr(v, attr) for v in vars_}
 
-    @n_neighbors.setter
-    def n_neighbors(self, value):
-        if isinstance(value, dict):
-            if not self._ti.multivariate:
-                raise ValueError(
-                    "DirectSampling: dict n_neighbors requires a multivariate TrainingImage."
-                )
-            known = {v.name for v in self._ti.variables}
-            unknown = set(value) - known
-            if unknown:
-                raise ValueError(
-                    f"DirectSampling: n_neighbors dict contains unknown variable(s): "
-                    f"{sorted(str(k) for k in unknown)}. "
-                    f"TI variables: {sorted(known)}."
-                )
-            for name, n in value.items():
-                self._ti.variable(name).n_neighbors = n
-        else:
-            for v in self._ti.variables:
-                v.n_neighbors = int(value)
+    @property
+    def n_neighbors(self):
+        """:class:`int` or :class:`dict`: n_neighbors per variable (scalar if all equal).
+
+        Read-only. Configure on the :class:`Variable` (``ti.variable(name).n_neighbors = …``)
+        or at :class:`TrainingImage` construction.
+        """
+        return self._collapse_per_var("n_neighbors")
 
     @property
     def scan_fraction(self):
-        """:class:`float`: Fraction of the TI to scan per node (capped at the search window)."""
+        """:class:`float`: Fraction of the TI scanned per node. Read-only; set on the MPSModel."""
         return self._mps_model.scan_fraction
-
-    @scan_fraction.setter
-    def scan_fraction(self, value):
-        self._mps_model.scan_fraction = value
 
     @property
     def threshold(self):
-        """:class:`float`: Distance threshold (0.0 → DSBC mode)."""
+        """:class:`float`: Distance threshold (0.0 → DSBC mode). Read-only; set on the MPSModel."""
         return self._mps_model.threshold
-
-    @threshold.setter
-    def threshold(self, value):
-        self._mps_model.threshold = value
 
     @property
     def cond_weight(self):
-        """:class:`float`: Weight for conditioning nodes in distance."""
+        """:class:`float`: Conditioning-node weight. Read-only; set on the MPSModel."""
         return self._mps_model.cond_weight
-
-    @cond_weight.setter
-    def cond_weight(self, value):
-        self._mps_model.cond_weight = value
 
     @property
     def boundary(self):
-        """:class:`str`: Search-window strategy (``"strict"`` or ``"partial"``)."""
+        """:class:`str`: Search-window strategy. Read-only; set on the MPSModel."""
         return self._mps_model.boundary
-
-    @boundary.setter
-    def boundary(self, value):
-        self._mps_model.boundary = value
 
     @property
     def max_radius(self):
-        """:class:`float` or :any:`None`: Euclidean cap on SG neighbour selection.
+        """:class:`float` or :any:`None` or :class:`dict`: Euclidean neighbour cap (scalar if all equal).
 
-        Values in ``(0, 1)`` disable all neighbours (nearest grid cell is
-        at distance 1.0), causing every node to fall back to a random TI
-        sample.
+        Read-only. Configure at :class:`Variable`/:class:`TrainingImage` construction.
         """
-        if self._ti.multivariate:
-            vals = [v.max_radius for v in self._ti.variables]
-            if len(set(vals)) == 1:
-                return vals[0]
-            return {v.name: v.max_radius for v in self._ti.variables}
-        return self._ti.variable().max_radius
-
-    @max_radius.setter
-    def max_radius(self, value):
-        if isinstance(value, dict):
-            if not self._ti.multivariate:
-                raise ValueError(
-                    "DirectSampling: dict max_radius requires a multivariate TrainingImage."
-                )
-            known = {v.name for v in self._ti.variables}
-            unknown = set(value) - known
-            if unknown:
-                raise ValueError(
-                    f"DirectSampling: max_radius dict contains unknown variable(s): "
-                    f"{sorted(str(k) for k in unknown)}. "
-                    f"TI variables: {sorted(known)}."
-                )
-            for name, r in value.items():
-                if r is not None and float(r) <= 0:
-                    raise ValueError(
-                        f"DirectSampling: max_radius must be positive or None, got {r!r}."
-                    )
-                self._ti.variable(name)._max_radius = (
-                    None if r is None else float(r)
-                )
-        else:
-            if value is not None and float(value) <= 0:
-                raise ValueError(
-                    f"DirectSampling: max_radius must be positive or None, got {value!r}."
-                )
-            norm = None if value is None else float(value)
-            for v in self._ti.variables:
-                v._max_radius = norm
+        return self._collapse_per_var("max_radius")
 
     @property
     def num_threads(self):

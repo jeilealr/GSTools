@@ -4,17 +4,25 @@ Usage:
     cd /path/to/MPS-Tools/GSTools
     # See benchmarks/README.md for ASV and optional cProfile setup.
     asv machine --yes
+    # Benchmark the current HEAD commit (your feature branch):
+    asv run 'HEAD^!' --bench benchmark_mps
+    # Or benchmark a specific branch:
+    asv run 'feature/mps-direct-sampling^!' --bench benchmark_mps
     asv run --quick --show-stderr --bench benchmark_mps
-    asv run main^! --bench benchmark_mps
     asv run
     asv publish
     asv preview
-    asv compare main~1 main
+    asv compare main~1 HEAD
 
 MPS runs pure Python — there is no compiled backend yet. When a Rust (or
 Cython) backend is added, introduce BACKENDS and THREAD_COUNTS parameters
 following the pattern in benchmark_two_point_statistics.py and add a backend
 context manager to each benchmark method.
+
+Benchmarks that run against a gstools commit that does not include
+gstools.mps (e.g. the main branch before MPS was merged) are automatically
+skipped rather than failing, so this file can live in the repo before MPS
+lands on main.
 
 The cProfile helper at benchmarks/tools/profile_mps_workflows.py identifies
 which Python functions take the most time — the primary hot-path candidates
@@ -38,7 +46,26 @@ from __future__ import annotations
 
 import numpy as np
 
-import gstools as gs
+# MPS classes are imported directly from gstools.mps so this benchmark file
+# works regardless of whether they are re-exported from the top-level gstools
+# package.  The try/except allows ASV to skip gracefully when benchmarking a
+# commit that predates the MPS module (e.g. historical main).
+try:
+    from gstools.mps import DirectSampling, MPSModel, TrainingImage, Variable
+
+    _MPS_AVAILABLE = True
+except (ImportError, ModuleNotFoundError):
+    _MPS_AVAILABLE = False
+    DirectSampling = MPSModel = TrainingImage = Variable = None  # type: ignore[assignment,misc]
+
+
+def _check_mps_available():
+    """Raise NotImplementedError when gstools.mps is absent (pre-MPS commit)."""
+    if not _MPS_AVAILABLE:
+        raise NotImplementedError(
+            "gstools.mps is not available in this gstools version; "
+            "benchmark skipped for pre-MPS commits."
+        )
 
 # ---------------------------------------------------------------------------
 # Case definitions
@@ -220,6 +247,10 @@ class TrainingImageBenchmarks:
             "multivar_60x60": (ti_cat_60, _make_continuous_ti((60, 60))),
         }
 
+    def setup(self, data, case):
+        """Skip when benchmarking a gstools commit that predates gstools.mps."""
+        _check_mps_available()
+
     def time_training_image_construct(self, data, case):
         """Construct a TrainingImage from raw arrays."""
         self._build(data, case)
@@ -231,14 +262,14 @@ class TrainingImageBenchmarks:
     def _build(self, data, case):
         raw = data[case]
         if case in ("cat_60x60", "cat_150x150"):
-            gs.TrainingImage(raw, categorical=True)
+            TrainingImage(raw, categorical=True)
         elif case == "cont_60x60":
-            gs.TrainingImage(raw, categorical=False, distance="l1")
+            TrainingImage(raw, categorical=False, distance="l1")
         elif case == "multivar_60x60":
             ti_cat, ti_cont = raw
-            v0 = gs.Variable("facies", ti_cat, categorical=True)
-            v1 = gs.Variable("porosity", ti_cont, categorical=False, distance="l1")
-            gs.TrainingImage([v0, v1])
+            v0 = Variable("facies", ti_cat, categorical=True)
+            v1 = Variable("porosity", ti_cont, categorical=False, distance="l1")
+            TrainingImage([v0, v1])
         else:
             raise ValueError(f"Unknown TI case: {case!r}")
 
@@ -317,20 +348,22 @@ class DirectSamplingBenchmarks:
 
         Called by ASV before each timing/memory measurement.  Object construction
         is excluded from the timed region; only the simulation call is measured.
+        Skips when benchmarking a gstools commit that predates gstools.mps.
         """
+        _check_mps_available()
         spec = _DS_SPECS[case]
-        ti = gs.TrainingImage(
+        ti = TrainingImage(
             data[case]["ti_data"],
             categorical=spec["categorical"],
             distance=spec["distance"],
             n_neighbors=spec["n_neighbors"],
         )
-        model = gs.MPSModel(
+        model = MPSModel(
             ti,
             scan_fraction=spec["scan_fraction"],
             threshold=spec["threshold"],
         )
-        self.ds = gs.DirectSampling(model)
+        self.ds = DirectSampling(model)
         self.grid = [np.arange(s, dtype=float) for s in spec["sg_shape"]]
         self.seed = _DS_SEEDS[case]
 

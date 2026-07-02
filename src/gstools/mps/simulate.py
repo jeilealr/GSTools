@@ -7,10 +7,12 @@ simulation by calling the stateless `neighbors`, `scan`, and `runner` modules.
 """
 
 from concurrent.futures import ThreadPoolExecutor
+from math import prod
 
 import numpy as np
 
 from gstools import config
+from gstools.mps.data_event import DataEvent
 from gstools.mps.neighbors import (
     _lag_transform_matrix,
     _precompute_offsets,
@@ -20,7 +22,7 @@ from gstools.mps.neighbors import (
     _window_bounds,
 )
 from gstools.mps.runner import _make_progress, _run_path
-from gstools.mps.scan import _scan_for_match
+from gstools.mps.scan import _scan_for_match, _ScanConfig
 
 
 def _build_path(unknown, path, rng_path, sim_shape):
@@ -157,6 +159,23 @@ class _DirectSamplingEngine:
         self.n_k = {v.name: v.n_neighbors for v in training_image.variables}
         self.ti_vars = {v.name: v.data for v in training_image.variables}
 
+        # Precompute flat TI arrays and C-order strides for O(1) index arithmetic
+        # in _dist_block.  Invariant: every y + lag is in-bounds by window construction,
+        # so the flat take never needs bounds checking.
+        ti_shape_tuple = tuple(int(s) for s in training_image.shape)
+        _dim = len(ti_shape_tuple)
+        self.ti_strides = {
+            v.name: np.array(
+                [prod(ti_shape_tuple[d + 1 :]) for d in range(_dim)],
+                dtype=np.intp,
+            )
+            for v in training_image.variables
+        }
+        self.ti_flat = {
+            v.name: np.ascontiguousarray(v.data).ravel()
+            for v in training_image.variables
+        }
+
         self.sg = {v: np.full(sim_shape, np.nan) for v in self.variables}
         self.informed = {
             v: np.zeros(sim_shape, dtype=bool) for v in self.variables
@@ -231,6 +250,21 @@ class _DirectSamplingEngine:
         else:
             self.finite_flat = None
 
+        self._scan_config = _ScanConfig(
+            variables=self.variables,
+            weights=self.weights,
+            ti_vars=self.ti_vars,
+            ti_flat=self.ti_flat,
+            ti_strides=self.ti_strides,
+            ti_shape=self.ti_shape,
+            scan_fraction=self.scan_fraction,
+            threshold=self.threshold,
+            cond_weight=self.cond_weight,
+            distance_power=self.training_image.distance_power,
+            vec_distance_var=self.training_image.vec_distance_var,
+            ti_has_nan=self.ti_has_nan,
+        )
+
     def _rand_fallback(self, targets, u_fb_i):
         # Single random TI cell supplies the whole node-vector (preserves the
         # joint relationship); never an independent draw per variable. On a
@@ -269,28 +303,29 @@ class _DirectSamplingEngine:
 
         Returns
         -------
-        lags_v : dict[str, ndarray shape (k, dim)]
-            Lag vectors in SG frame (float64).
-        de_v : dict[str, ndarray shape (k,)]
-            Data-event values from the simulation grid.
-        cm_v : dict[str, ndarray shape (k,)]
-            Boolean conditioning mask (True = conditioning data).
-        ln_v : dict[str, ndarray shape (k,)]
-            Euclidean norms of the lag vectors.
+        events : dict[str, DataEvent]
+            One per variable, ``lags_ti`` unset (``None``).
         """
-        lags_v, de_v, cm_v, ln_v = {}, {}, {}, {}
+        events = {}
         for var in self.variables:
-            coords, _ = _select_neighbors(
-                x_i,
-                self.offset_arr,
-                self.sim_shape_arr,
-                self.sim_shape,
-                self.vmap[var],
-                curr_idx,
-                self.informed[var],
-                self.max_radius_per_var[var],
-                self.n_k[var],
-            )
+            # Parallel path: the DAG pass already computed the identical
+            # _select_neighbors result (same call, informed=None, all earlier-
+            # path deps guaranteed informed by DAG ordering). Reuse those coords
+            # instead of recomputing.  Serial path (cache absent): compute normally.
+            if self._neighbor_cache is not None:
+                coords = self._neighbor_cache[curr_idx][var]
+            else:
+                coords, _ = _select_neighbors(
+                    x_i,
+                    self.offset_arr,
+                    self.sim_shape_arr,
+                    self.sim_shape,
+                    self.vmap[var],
+                    curr_idx,
+                    self.informed[var],
+                    self.max_radius_per_var[var],
+                    self.n_k[var],
+                )
             if len(coords):
                 lv = (coords - x_i).astype(np.float64)
                 dv = self.sg[var][tuple(coords.T)]
@@ -309,10 +344,10 @@ class _DirectSamplingEngine:
                 dv = np.concatenate([[self.sg[var][x_i_t]], dv])
                 cv = np.concatenate([[self.is_cond[var][x_i_t]], cv])
                 lnv = np.concatenate([[0.0], lnv])
-            lags_v[var], de_v[var], cm_v[var], ln_v[var] = lv, dv, cv, lnv
-        return lags_v, de_v, cm_v, ln_v
+            events[var] = DataEvent(lv, dv, cv, lnv)
+        return events
 
-    def _transform_and_reduce_lags(self, x_i, lags_v, de_v, cm_v, ln_v):
+    def _transform_and_reduce_lags(self, x_i, events):
         """Seam 2 — map SG lags into TI frame (non-stationary) or copy (stationary).
 
         When ``rotation_map`` or ``anis_map`` is set, applies the per-node
@@ -320,164 +355,132 @@ class _DirectSamplingEngine:
         (:func:`_transform_lags`), and globally drops lags that cannot fit the
         TI (:func:`_reduce_to_fit`, Mariethoz2010 para [43]).
 
-        The stationary fast-path ``lags_ti_v = dict(lags_v)`` is a deliberate
-        **shallow copy**: it creates a separate dict so that per-variable
-        partial-mode truncation in seam 3 (``_intersect_search_windows``) never
-        aliases back into ``lags_v`` itself.  Both the copy and the in-place
-        mutation of ``lags_v`` / ``de_v`` / ``cm_v`` / ``ln_v`` on the
-        non-stationary path must be preserved exactly.
+        The stationary fast-path sets ``lags_ti`` to a **copy** of ``lags_sg``
+        so partial-mode truncation in seam 3 can never alias back into the SG
+        lags.
 
         Parameters
         ----------
         x_i : numpy.ndarray, shape (dim,)
             Current node coordinates (used to index per-node maps).
-        lags_v, de_v, cm_v, ln_v : dict
-            Outputs of :meth:`_gather_neighborhood`; ``lags_v`` may be mutated
-            in-place on the non-stationary path (dedup / reduce-to-fit).
+        events : dict[str, DataEvent]
+            Output of :meth:`_gather_neighborhood` (``lags_ti is None``).
 
         Returns
         -------
-        lags_ti_v : dict[str, ndarray]
-            TI-frame lag vectors (separate dict from ``lags_v``).
-        lags_v, de_v, cm_v, ln_v : dict
-            Parallel arrays, possibly trimmed to match ``lags_ti_v``.
+        dict[str, DataEvent]
+            New events with ``lags_ti`` populated and SG arrays possibly trimmed
+            (non-stationary dedup / reduce-to-fit).
         """
-        # Geometric transform: map all per-variable SG lags into TI frame.
-        # de_v / cm_v / ln_v stay on original SG geometry for SG-side ops.
-        # dict(lags_v) creates a shallow-copy dict so partial-mode truncation
-        # of lags_ti_v does not alias back into lags_v.
         if self.rotation_map is not None or self.anis_map is not None:
             M = _lag_transform_matrix(
                 self.dim, self.rotation_map, self.anis_map, x_i
             )
-            lags_ti_v = {}
+            out = {}
             for v in self.variables:
-                lv_ti, lags_v[v], de_v[v], cm_v[v], ln_v[v] = _transform_lags(
-                    lags_v[v], M, lags_v[v], de_v[v], cm_v[v], ln_v[v]
+                de = events[v]
+                lv_ti, lags_sg, values, cond_mask, lag_norms = _transform_lags(
+                    de.lags_sg,
+                    M,
+                    de.lags_sg,
+                    de.values,
+                    de.cond_mask,
+                    de.lag_norms,
                 )
                 # M10 para [43]: globally reduce an over-large transformed event
                 # to fit the TI, dropping the most-outside node first (by TI
                 # extent, regardless of SG rank). One reduction per simulation
                 # node, independent of the TI scan position.
-                lv_ti, lags_v[v], de_v[v], cm_v[v], ln_v[v] = _reduce_to_fit(
-                    lv_ti, self.ti_shape, lags_v[v], de_v[v], cm_v[v], ln_v[v]
+                lv_ti, lags_sg, values, cond_mask, lag_norms = _reduce_to_fit(
+                    lv_ti, self.ti_shape, lags_sg, values, cond_mask, lag_norms
                 )
-                lags_ti_v[v] = lv_ti
-        else:
-            lags_ti_v = dict(lags_v)
-        return lags_ti_v, lags_v, de_v, cm_v, ln_v
+                out[v] = DataEvent(
+                    lags_sg, values, cond_mask, lag_norms, lv_ti
+                )
+            return out
+        # Stationary: TI frame == SG frame. Copy so truncation stays independent.
+        return {
+            v: events[v].with_lags_ti(events[v].lags_sg.copy())
+            for v in self.variables
+        }
 
-    def _intersect_search_windows(self, lags_ti_v, lags_v, de_v, cm_v, ln_v):
+    def _intersect_search_windows(self, events):
         """Seam 3 — compute and intersect per-variable TI search windows.
 
-        Calls :func:`_window_bounds` for every variable, applies partial-mode
-        truncation of all five per-variable arrays when fewer lags fit, and
-        intersects the per-variable windows into a single ``(win_lo, win_hi)``
-        pair.
+        Calls :func:`_window_bounds` for every variable, truncates the event to
+        the fitting lag count in partial mode, and intersects the per-variable
+        windows into a single ``(win_lo, win_hi)`` pair.
 
-        Because two conditions make the current node unfeasible for a scan
-        (an infeasible single-variable window, or an empty intersection), this
-        method signals those cases via a sentinel return rather than calling
-        ``_rand_fallback`` directly — the caller (``_simulate_node``) holds the
-        ``targets`` and ``u_fallback_i`` needed for the fallback and checks
-        ``win_lo is None``.
+        Returns ``win_lo is None`` (sentinel) when any single-variable window is
+        infeasible or the intersection is empty; the caller draws a random
+        fallback.
 
         Parameters
         ----------
-        lags_ti_v : dict[str, ndarray]
-            TI-frame lag vectors (output of :meth:`_transform_and_reduce_lags`).
-        lags_v, de_v, cm_v, ln_v : dict
-            Parallel arrays in SG frame; may be truncated in-place here.
+        events : dict[str, DataEvent]
+            TI-frame events from :meth:`_transform_and_reduce_lags`.
 
         Returns
         -------
         win_lo : numpy.ndarray or None
-            Lower corner of the intersected window, or ``None`` when infeasible.
         win_hi : numpy.ndarray or None
-            Upper corner of the intersected window, or ``None`` when infeasible.
-        lags_ti_v, lags_v, de_v, cm_v, ln_v : dict
-            Arrays after any partial-mode truncation (only mutated when
-            ``win_lo`` is not ``None``).
+        events : dict[str, DataEvent]
+            Possibly truncated (only when ``win_lo`` is not ``None``).
         """
-        # Per-variable search window computed via _window_bounds, then intersected.
-        # h=0 lags are excluded inside _window_bounds — they map to y itself and
-        # never constrain the window.
         win_lo = np.zeros(self.dim, dtype=int)
         win_hi = self.ti_shape - 1
         for var in self.variables:
-            lv_ti = lags_ti_v[var]
+            de = events[var]
             lo, hi, valid_count = _window_bounds(
-                lv_ti, self.ti_shape, self.boundary
+                de.lags_ti, self.ti_shape, self.boundary
             )
             if valid_count == -1:
                 # Infeasible: no subset of this variable's lags fits the TI.
-                return None, None, lags_ti_v, lags_v, de_v, cm_v, ln_v
-            if valid_count < len(lv_ti):
-                # Truncate TI-frame and original arrays to the same keep count.
-                # lags_ti_v uses a separate dict so this does not affect lags_v.
-                lags_ti_v[var] = lv_ti[:valid_count]
-                lags_v[var] = lags_v[var][:valid_count]
-                de_v[var] = de_v[var][:valid_count]
-                cm_v[var] = cm_v[var][:valid_count]
-                ln_v[var] = ln_v[var][:valid_count]
+                return None, None, events
+            if valid_count < len(de):
+                # Truncate TI-frame and SG arrays to the same keep count.
+                events[var] = de.truncate(valid_count)
             win_lo = np.maximum(win_lo, lo)
             win_hi = np.minimum(win_hi, hi)
 
         if np.any(win_lo > win_hi):
             # Infeasible: the per-variable windows do not intersect.
-            return None, None, lags_ti_v, lags_v, de_v, cm_v, ln_v
+            return None, None, events
 
-        return win_lo, win_hi, lags_ti_v, lags_v, de_v, cm_v, ln_v
+        return win_lo, win_hi, events
 
     def _scan_and_retrieve(
-        self,
-        win_lo,
-        win_hi,
-        lags_ti_v,
-        de_v,
-        cm_v,
-        ln_v,
-        targets,
-        u_start_i,
-        u_fallback_i,
+        self, win_lo, win_hi, events, targets, u_start_i, u_fallback_i
     ):
         """Seam 4 — scan the TI window and copy the matched cell to targets.
 
-        Calls :func:`_scan_for_match` with the intersected window.  On a
-        masked TI where every candidate has distance ``NaN``, the scan returns
-        ``None`` and this method falls back to a random draw.  Otherwise,
-        gathers the target values from the matched TI cell, applies
-        ``adjust_value`` (mean-shift for variation distance), and returns the
-        result dict.
+        See module docstring for the scan semantics.  Unpacks ``events`` into
+        the per-variable dicts the stateless :func:`_scan_for_match` kernel
+        expects (its signature is unchanged).
 
         Parameters
         ----------
         win_lo, win_hi : numpy.ndarray, shape (dim,)
-            Intersected window corners (output of
-            :meth:`_intersect_search_windows`).
-        lags_ti_v : dict[str, ndarray]
-            TI-frame lag vectors after truncation.
-        de_v, cm_v, ln_v : dict
-            SG-frame parallel arrays after truncation.
+        events : dict[str, DataEvent]
+            TI-frame events after truncation.
         targets : list[str]
-            Variables that are uninformed at this node and need values.
         u_start_i : float
-            Random scan entry point.
         u_fallback_i : numpy.ndarray, shape (dim,)
-            Random coordinates for the fallback draw.
 
         Returns
         -------
         dict[str, float]
-            ``{variable: value}`` for every target variable.
         """
         # Integer lags per variable (already exact integers as float64, incl.
         # the 0.0 h=0 row); reused for the scan and the mean-shift gather.
         int_lags = {
-            v: lags_ti_v[v].astype(int)
+            v: events[v].lags_ti.astype(int)
             for v in self.variables
-            if len(lags_ti_v[v])
+            if len(events[v])
         }
+        de_v = {v: events[v].values for v in self.variables}
+        cm_v = {v: events[v].cond_mask for v in self.variables}
+        ln_v = {v: events[v].lag_norms for v in self.variables}
         y = _scan_for_match(
             win_lo,
             tuple(win_hi - win_lo + 1),
@@ -487,25 +490,13 @@ class _DirectSamplingEngine:
             ln_v,
             u_start_i,
             targets,
-            variables=self.variables,
-            weights=self.weights,
-            ti_vars=self.ti_vars,
-            ti_shape=self.ti_shape,
-            scan_fraction=self.scan_fraction,
-            threshold=self.threshold,
-            cond_weight=self.cond_weight,
-            distance_power=self.training_image.distance_power,
-            vec_distance_var=self.training_image.vec_distance_var,
-            ti_has_nan=self.ti_has_nan,
+            self._scan_config,
         )
         if y is None:
             # No candidate in the window was defined (masked TI): treat as the
-            # empty-neighbourhood case and draw a defined TI cell. Avoids the
-            # ``y + lag`` gather below, which an unconstrained cell could send
-            # out of bounds.
+            # empty-neighbourhood case and draw a defined TI cell.
             return self._rand_fallback(targets, u_fallback_i)
         y_t = tuple(int(c) for c in y)
-        # Copy the single matched cell's vector to every uninformed variable.
         result = {}
         for v in targets:
             ti_val = float(self.ti_vars[v][y_t])
@@ -526,38 +517,23 @@ class _DirectSamplingEngine:
         targets = [v for v in self.variables if np.isnan(self.sg[v][x_i_t])]
 
         # Step 1: collect informed neighbours and build per-variable data events.
-        lags_v, de_v, cm_v, ln_v = self._gather_neighborhood(
-            x_i, x_i_t, curr_idx
-        )
+        events = self._gather_neighborhood(x_i, x_i_t, curr_idx)
 
-        # Step 2: map SG lags into TI frame; stationary path is a shallow copy
-        # so that step 3 truncations never alias back into lags_v.
-        lags_ti_v, lags_v, de_v, cm_v, ln_v = self._transform_and_reduce_lags(
-            x_i, lags_v, de_v, cm_v, ln_v
-        )
+        # Step 2: map SG lags into TI frame (stationary path copies so step 3
+        # truncation never aliases back into the SG lags).
+        events = self._transform_and_reduce_lags(x_i, events)
 
-        if all(len(lags_v[v]) == 0 for v in self.variables):
+        if all(len(events[v]) == 0 for v in self.variables):
             return self._rand_fallback(targets, u_fallback_i)
 
         # Step 3: compute and intersect per-variable TI search windows.
-        # win_lo is None when any early-exit condition fires (infeasible window).
-        win_lo, win_hi, lags_ti_v, lags_v, de_v, cm_v, ln_v = (
-            self._intersect_search_windows(lags_ti_v, lags_v, de_v, cm_v, ln_v)
-        )
+        win_lo, win_hi, events = self._intersect_search_windows(events)
         if win_lo is None:
             return self._rand_fallback(targets, u_fallback_i)
 
         # Step 4: scan the TI window and paste the matched cell into targets.
         return self._scan_and_retrieve(
-            win_lo,
-            win_hi,
-            lags_ti_v,
-            de_v,
-            cm_v,
-            ln_v,
-            targets,
-            u_start_i,
-            u_fallback_i,
+            win_lo, win_hi, events, targets, u_start_i, u_fallback_i
         )
 
     def _write_result(self, node, result):
@@ -584,6 +560,17 @@ class _DirectSamplingEngine:
             progress, len(self.path), "DS"
         )
 
+        # Parallel-only neighbour cache: the DAG build already calls
+        # _select_neighbors per node×variable; on_cache_ready is called by
+        # _run_path right after DAG build (before any node futures run) so
+        # _gather_neighborhood can skip the redundant _select_neighbors call.
+        # Serial mode (executor is None) leaves _neighbor_cache as None and
+        # _gather_neighborhood computes normally.
+        self._neighbor_cache = None
+
+        def _on_cache_ready(coord_cache):
+            self._neighbor_cache = coord_cache
+
         try:
             _run_path(
                 self.path,
@@ -600,6 +587,9 @@ class _DirectSamplingEngine:
                 self.n_k,
                 self.sim_shape,
                 self.max_radius,
+                on_cache_ready=_on_cache_ready
+                if executor is not None
+                else None,
             )
         finally:
             close_progress()
@@ -678,9 +668,9 @@ def ds_simulate(
         Per-node anisotropy ratios, shape matching the simulation grid.
         ``None`` → isotropic (stationary). All values must be positive.
     progress : bool or callable or None, optional
-        Show simulation progress. ``True`` displays a :mod:`tqdm` bar (or a
-        plain percentage line if ``tqdm`` is not installed); a callable is
-        invoked as ``progress(n_done, n_total)`` once per completed node.
+        Show simulation progress. ``True`` prints a plain percentage line
+        (no third-party dependency); a callable is invoked as
+        ``progress(n_done, n_total)`` once per completed node.
         ``None``/``False`` (default) disables it.
 
     Returns

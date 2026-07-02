@@ -38,7 +38,6 @@ Classes for Multiple Point Statistics (MPS) simulations
    DirectSampling
    MPSModel
    TrainingImage
-   Variable
 
 Kriging
 ^^^^^^^
@@ -183,7 +182,7 @@ from gstools.covmodel import (
 )
 from gstools.field import PGS, SRF, CondSRF
 from gstools.krige import Krige
-from gstools.mps import DirectSampling, MPSModel, TrainingImage, Variable
+from gstools.mps import DirectSampling, MPSModel, TrainingImage
 from gstools.tools import (
     DEGREE_SCALE,
     EARTH_RADIUS,
@@ -255,7 +254,6 @@ __all__ += [
     "DirectSampling",
     "MPSModel",
     "TrainingImage",
-    "Variable",
     "rotated_main_axes",
     "generate_grid",
     "generate_st_grid",
