@@ -317,8 +317,10 @@ class DirectSamplingBenchmarks:
     # Allow up to 5 minutes per case; the large categorical case can be slow.
     timeout = 300
 
-    params = [DS_CASES]
-    param_names = ["case"]
+    BACKENDS = ("python", "core")
+
+    params = [DS_CASES, BACKENDS]
+    param_names = ["case", "backend"]
 
     def setup_cache(self):
         """Build raw TI arrays and conditioning data once per ASV environment."""
@@ -343,7 +345,7 @@ class DirectSamplingBenchmarks:
             cache[case] = entry
         return cache
 
-    def setup(self, data, case):
+    def setup(self, data, case, backend):
         """Build TrainingImage, MPSModel, and DirectSampling ready for simulation.
 
         Called by ASV before each timing/memory measurement.  Object construction
@@ -351,6 +353,19 @@ class DirectSamplingBenchmarks:
         Skips when benchmarking a gstools commit that predates gstools.mps.
         """
         _check_mps_available()
+        import gstools.config as _cfg
+
+        if backend == "core":
+            try:
+                import gstools_core  # noqa: F401
+            except ImportError:
+                raise NotImplementedError(
+                    "gstools_core not installed; 'core' backend skipped."
+                )
+            _cfg.USE_GSTOOLS_CORE = True
+        else:
+            _cfg.USE_GSTOOLS_CORE = False
+
         spec = _DS_SPECS[case]
         ti = TrainingImage(
             data[case]["ti_data"],
@@ -370,10 +385,10 @@ class DirectSamplingBenchmarks:
         if spec["conditioned"]:
             self.ds.set_condition(data[case]["cond_pos"], data[case]["cond_val"])
 
-    def time_simulate(self, data, case):
+    def time_simulate(self, data, case, backend):
         """Run one Direct Sampling simulation."""
         self.ds(self.grid, seed=self.seed, store=False)
 
-    def peakmem_simulate(self, data, case):
+    def peakmem_simulate(self, data, case, backend):
         """Peak memory for one Direct Sampling simulation."""
         self.ds(self.grid, seed=self.seed, store=False)
