@@ -49,7 +49,7 @@ def show_saved_figure(path):
     fig.tight_layout(pad=0)
 
 
-def plot_radial_result(ti_arr, rotation, anis, field):
+def plot_radial_result(ti_plot, rotation, anis, field):
     """Plot the nonstationary maps, TI crop, and regenerated realization."""
     fig = plt.figure(figsize=(9.5, 8), constrained_layout=True)
     grid_spec = fig.add_gridspec(
@@ -78,7 +78,7 @@ def plot_radial_result(ti_arr, rotation, anis, field):
 
     cmap = ListedColormap(["#000000", "#FFFFFF"])
     ax_ti.imshow(
-        ti_arr[:250, :250],
+        ti_plot[:250, :250],
         cmap=cmap,
         origin="lower",
         interpolation="nearest",
@@ -113,9 +113,18 @@ if not data_path.exists():
 with np.load(data_path) as data:
     ti_arr = data["array1"].astype(float)
 
+ti_plot = ti_arr.copy()
+
+# GSTools' rotation/anisotropy convention aligns the primary, unscaled array
+# axis with the local rotation angle. The Strebelle channels run mainly along
+# the other array axis, so transposing the TI makes the radial rotation and
+# anisotropy maps act on the channel direction intended for this example.
+ti_arr = ti_arr.T
+
 n_neighbors = 32
-sg_size = 900
+sg_size = 1000
 scan_fraction = 0.35
+simulation_seed = 1
 ti = gs.TrainingImage(ti_arr, categorical=True, n_neighbors=n_neighbors)
 
 ###############################################################################
@@ -130,8 +139,9 @@ gx, gy = np.meshgrid(xs, ys, indexing="ij")
 center_x = sg_size / 2.0
 center_y = sg_size / 2.0
 
-# Rotation is the angle from the center, creating a radial pattern.
-rotation = np.arctan2(gx - center_x, gy - center_y)
+# Rotation is the angle from the center, measured in GSTools' array-axis
+# convention after transposing the TI above.
+rotation = np.arctan2(gy - center_y, gx - center_x)
 
 # The anisotropy map scales the search geometry based on distance from the
 # center. The affinity ratio is 1.0 in the center and lower near the corners.
@@ -154,9 +164,9 @@ if generate_output:
     ds.set_nonstationary(rotation=rotation, anis=anis)
 
     print(f"Simulating radial nonstationary field ({sg_size}x{sg_size})...")
-    field = ds([xs, ys], seed=5, num_threads=8, path="random")
+    field = ds([xs, ys], seed=simulation_seed, num_threads=8, path="random")
 
-    fig = plot_radial_result(ti_arr, rotation, anis, field)
+    fig = plot_radial_result(ti_plot, rotation, anis, field)
     fig.savefig(output_path, dpi=180, bbox_inches="tight")
     print(f"Saved {output_path}.")
     plt.close(fig)

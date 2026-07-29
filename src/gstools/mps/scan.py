@@ -12,6 +12,15 @@ import numpy as np
 
 from gstools.mps.distance import compute_node_weights
 
+from gstools import config as _mps_config
+
+if _mps_config._GSTOOLS_CORE_AVAIL:  # pragma: no cover
+    from gstools_core import mps_dist_block_cat as _mps_dist_block_cat_gsc
+    from gstools_core import mps_dist_block_l1 as _mps_dist_block_l1_gsc
+    from gstools_core import mps_dist_block_l2 as _mps_dist_block_l2_gsc
+    from gstools_core import mps_dist_block_lp as _mps_dist_block_lp_gsc
+    from gstools_core import mps_scan_node_cat as _mps_scan_node_cat_gsc
+
 
 @dataclass(frozen=True)
 class _ScanConfig:
@@ -34,6 +43,11 @@ class _ScanConfig:
     distance_power: float
     vec_distance_var: object
     ti_has_nan: bool
+    # New fields for Rust dispatch (populated by _DirectSamplingEngine)
+    var_categorical: dict   # {v: bool}
+    var_p_norm: dict        # {v: float or None}  — None for categorical / variation
+    var_d_max: dict         # {v: float or None}  — None for categorical
+    ti_flat_f64: dict       # {v: ndarray float64} — pre-cast flat TI for Rust
 
 
 # DS-mode scan block size.  Large enough that per-call NumPy overhead is
@@ -147,24 +161,69 @@ def _scan_for_match(
     # Precompute flat lag offsets for each variable: flat_il[v] = int_lags[v] @ strides.
     # Combined with base = y_blk @ strides, all_de_ti = ti_flat[v][base[:,None] + flat_il[v][None,:]].
     # In-bounds invariant: every y + lag is guaranteed in-bounds by window construction
-    # (_intersect_search_windows), so this flat take needs no bounds checking.
+    # (_intersect_search_windows), so the flat take needs no bounds checking.
     flat_il = {v: int_lags[v] @ cfg.ti_strides[v] for v in active_vars}
+
+    _use_rust = (
+        _mps_config.USE_GSTOOLS_CORE
+        and _mps_config._GSTOOLS_CORE_AVAIL
+        and not cfg.ti_has_nan
+    )
+
+    # Fast path: univariate categorical with no NaN — full scan loop in Rust.
+    if _use_rust and len(active_vars) == 1 and cfg.var_categorical[active_vars[0]]:
+        v = active_vars[0]
+        return _mps_scan_node_cat_gsc(
+            np.asarray(lo, dtype=np.int64),
+            np.asarray(win_shape, dtype=np.int64),
+            start,
+            max_scan,
+            cfg.threshold,
+            de_v[v],
+            cfg.ti_flat_f64[v],
+            cfg.ti_strides[v].astype(np.int64),
+            flat_il[v].astype(np.int64),
+            precomp_w[v],
+        )
 
     def _dist_block(y_blk):
         d = np.zeros(len(y_blk))
         for v in active_vars:
-            base = y_blk @ cfg.ti_strides[v]  # shape (B,)
-            all_de_ti = cfg.ti_flat[v][base[:, None] + flat_il[v][None, :]]
-            d += cfg.weights[v] * cfg.vec_distance_var(
-                v,
-                de_v[v],
-                all_de_ti,
-                cm_v[v],
-                cfg.cond_weight,
-                ln_v[v],
-                weights=precomp_w[v],
-                has_nan=cfg.ti_has_nan,
-            )
+            base = (y_blk @ cfg.ti_strides[v]).astype(np.int64)
+            if _use_rust and (cfg.var_categorical[v] or cfg.var_p_norm[v] is not None):
+                lag_i64 = flat_il[v].astype(np.int64)
+                if cfg.var_categorical[v]:
+                    dist_v = _mps_dist_block_cat_gsc(
+                        de_v[v], cfg.ti_flat_f64[v], base, lag_i64, precomp_w[v],
+                    )
+                elif cfg.var_p_norm[v] == 1.0:
+                    dist_v = _mps_dist_block_l1_gsc(
+                        de_v[v], cfg.ti_flat_f64[v], base, lag_i64, precomp_w[v],
+                        cfg.var_d_max[v],
+                    )
+                elif cfg.var_p_norm[v] == 2.0:
+                    dist_v = _mps_dist_block_l2_gsc(
+                        de_v[v], cfg.ti_flat_f64[v], base, lag_i64, precomp_w[v],
+                        cfg.var_d_max[v],
+                    )
+                else:
+                    dist_v = _mps_dist_block_lp_gsc(
+                        de_v[v], cfg.ti_flat_f64[v], base, lag_i64, precomp_w[v],
+                        cfg.var_d_max[v], cfg.var_p_norm[v],
+                    )
+            else:
+                all_de_ti = cfg.ti_flat[v][base[:, None] + flat_il[v][None, :]]
+                dist_v = cfg.vec_distance_var(
+                    v,
+                    de_v[v],
+                    all_de_ti,
+                    cm_v[v],
+                    cfg.cond_weight,
+                    ln_v[v],
+                    weights=precomp_w[v],
+                    has_nan=cfg.ti_has_nan,
+                )
+            d += cfg.weights[v] * dist_v
         # Renormalize so the joint distance stays in [0, 1] even when
         # some variables have no data event and are excluded from int_lags.
         # Without this, the threshold fires on a compressed scale and

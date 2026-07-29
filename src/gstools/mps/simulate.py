@@ -250,6 +250,14 @@ class _DirectSamplingEngine:
         else:
             self.finite_flat = None
 
+        ti_flat_f64 = {
+            v.name: np.asarray(self.ti_flat[v.name], dtype=np.float64)
+            for v in training_image.variables
+        }
+        var_categorical = {v.name: v.categorical for v in training_image.variables}
+        var_p_norm = {v.name: v.p_norm for v in training_image.variables}
+        var_d_max = {v.name: v.d_max for v in training_image.variables}
+
         self._scan_config = _ScanConfig(
             variables=self.variables,
             weights=self.weights,
@@ -263,6 +271,10 @@ class _DirectSamplingEngine:
             distance_power=self.training_image.distance_power,
             vec_distance_var=self.training_image.vec_distance_var,
             ti_has_nan=self.ti_has_nan,
+            var_categorical=var_categorical,
+            var_p_norm=var_p_norm,
+            var_d_max=var_d_max,
+            ti_flat_f64=ti_flat_f64,
         )
 
     def _rand_fallback(self, targets, u_fb_i):

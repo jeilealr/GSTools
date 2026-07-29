@@ -928,6 +928,14 @@ class TestDirectSampling(unittest.TestCase):
             ds.threshold = 0.1
         with self.assertRaises(AttributeError):
             ds.cond_weight = 2.0
+        with self.assertRaises(AttributeError):
+            ds.scan_fraction = 0.5
+        with self.assertRaises(AttributeError):
+            ds.boundary = "partial"
+        with self.assertRaises(AttributeError):
+            ds.n_neighbors = 4
+        with self.assertRaises(AttributeError):
+            ds.max_radius = 5.0
 
 
 class TestMultivariateTrainingImage(unittest.TestCase):
