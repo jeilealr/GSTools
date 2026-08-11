@@ -10,16 +10,40 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from gstools import config as _mps_config
 from gstools.mps.distance import compute_node_weights
 
-from gstools import config as _mps_config
-
 if _mps_config._GSTOOLS_CORE_AVAIL:  # pragma: no cover
-    from gstools_core import mps_dist_block_cat as _mps_dist_block_cat_gsc
-    from gstools_core import mps_dist_block_l1 as _mps_dist_block_l1_gsc
-    from gstools_core import mps_dist_block_l2 as _mps_dist_block_l2_gsc
-    from gstools_core import mps_dist_block_lp as _mps_dist_block_lp_gsc
-    from gstools_core import mps_scan_node_cat as _mps_scan_node_cat_gsc
+    import gstools_core as _gstools_core
+
+    # MPS exports were added incrementally to gstools_core. Capability checks
+    # keep an older installed core from breaking GSTools import: any missing
+    # function simply leaves that particular MPS operation on the Python path.
+    _mps_dist_block_cat_gsc = getattr(
+        _gstools_core, "mps_dist_block_cat", None
+    )
+    _mps_dist_block_cat_masked_gsc = getattr(
+        _gstools_core, "mps_dist_block_cat_masked", None
+    )
+    _mps_dist_block_l1_gsc = getattr(_gstools_core, "mps_dist_block_l1", None)
+    _mps_dist_block_l1_masked_gsc = getattr(
+        _gstools_core, "mps_dist_block_l1_masked", None
+    )
+    _mps_dist_block_l2_gsc = getattr(_gstools_core, "mps_dist_block_l2", None)
+    _mps_dist_block_lp_gsc = getattr(_gstools_core, "mps_dist_block_lp", None)
+    _mps_dist_block_variation_gsc = getattr(
+        _gstools_core, "mps_dist_block_variation", None
+    )
+    _mps_scan_node_cat_gsc = getattr(_gstools_core, "mps_scan_node_cat", None)
+else:  # pragma: no cover
+    _mps_dist_block_cat_gsc = None
+    _mps_dist_block_cat_masked_gsc = None
+    _mps_dist_block_l1_gsc = None
+    _mps_dist_block_l1_masked_gsc = None
+    _mps_dist_block_l2_gsc = None
+    _mps_dist_block_lp_gsc = None
+    _mps_dist_block_variation_gsc = None
+    _mps_scan_node_cat_gsc = None
 
 
 @dataclass(frozen=True)
@@ -44,10 +68,12 @@ class _ScanConfig:
     vec_distance_var: object
     ti_has_nan: bool
     # New fields for Rust dispatch (populated by _DirectSamplingEngine)
-    var_categorical: dict   # {v: bool}
-    var_p_norm: dict        # {v: float or None}  — None for categorical / variation
-    var_d_max: dict         # {v: float or None}  — None for categorical
-    ti_flat_f64: dict       # {v: ndarray float64} — pre-cast flat TI for Rust
+    var_has_nan: dict  # {v: bool} — per-variable masked-distance dispatch
+    var_categorical: dict  # {v: bool}
+    var_p_norm: dict  # {v: float or None}  — None for categorical / variation
+    var_d_max: dict  # {v: float or None}  — None for categorical
+    ti_flat_f64: dict  # {v: ndarray float64} — pre-cast flat TI for Rust
+    var_variation_p: dict  # {v: float or None}  — variation Lp exponent; None unless variation
 
 
 # DS-mode scan block size.  Large enough that per-call NumPy overhead is
@@ -165,13 +191,17 @@ def _scan_for_match(
     flat_il = {v: int_lags[v] @ cfg.ti_strides[v] for v in active_vars}
 
     _use_rust = (
-        _mps_config.USE_GSTOOLS_CORE
-        and _mps_config._GSTOOLS_CORE_AVAIL
-        and not cfg.ti_has_nan
+        _mps_config.USE_GSTOOLS_CORE and _mps_config._GSTOOLS_CORE_AVAIL
     )
 
     # Fast path: univariate categorical with no NaN — full scan loop in Rust.
-    if _use_rust and len(active_vars) == 1 and cfg.var_categorical[active_vars[0]]:
+    if (
+        _use_rust
+        and not cfg.ti_has_nan
+        and _mps_scan_node_cat_gsc is not None
+        and len(active_vars) == 1
+        and cfg.var_categorical[active_vars[0]]
+    ):
         v = active_vars[0]
         return _mps_scan_node_cat_gsc(
             np.asarray(lo, dtype=np.int64),
@@ -190,26 +220,99 @@ def _scan_for_match(
         d = np.zeros(len(y_blk))
         for v in active_vars:
             base = (y_blk @ cfg.ti_strides[v]).astype(np.int64)
-            if _use_rust and (cfg.var_categorical[v] or cfg.var_p_norm[v] is not None):
-                lag_i64 = flat_il[v].astype(np.int64)
+            if cfg.var_has_nan[v]:
                 if cfg.var_categorical[v]:
+                    rust_kernel_available = (
+                        _mps_dist_block_cat_masked_gsc is not None
+                    )
+                elif cfg.var_p_norm[v] == 1.0:
+                    rust_kernel_available = (
+                        _mps_dist_block_l1_masked_gsc is not None
+                    )
+                else:
+                    rust_kernel_available = False
+            else:
+                if cfg.var_categorical[v]:
+                    rust_kernel_available = _mps_dist_block_cat_gsc is not None
+                elif cfg.var_p_norm[v] == 1.0:
+                    rust_kernel_available = _mps_dist_block_l1_gsc is not None
+                elif cfg.var_p_norm[v] == 2.0:
+                    rust_kernel_available = _mps_dist_block_l2_gsc is not None
+                elif cfg.var_p_norm[v] is not None:
+                    rust_kernel_available = _mps_dist_block_lp_gsc is not None
+                else:
+                    rust_kernel_available = (
+                        _mps_dist_block_variation_gsc is not None
+                    )
+            if _use_rust and rust_kernel_available:
+                lag_i64 = flat_il[v].astype(np.int64)
+                if cfg.var_has_nan[v] and cfg.var_categorical[v]:
+                    dist_v = _mps_dist_block_cat_masked_gsc(
+                        de_v[v],
+                        cfg.ti_flat_f64[v],
+                        base,
+                        lag_i64,
+                        precomp_w[v],
+                    )
+                elif cfg.var_has_nan[v]:
+                    # Phase 3 currently supports masked L1 only. Masked L2,
+                    # general Lp, and variation remain on the Python path.
+                    dist_v = _mps_dist_block_l1_masked_gsc(
+                        de_v[v],
+                        cfg.ti_flat_f64[v],
+                        base,
+                        lag_i64,
+                        precomp_w[v],
+                        cfg.var_d_max[v],
+                    )
+                elif cfg.var_categorical[v]:
                     dist_v = _mps_dist_block_cat_gsc(
-                        de_v[v], cfg.ti_flat_f64[v], base, lag_i64, precomp_w[v],
+                        de_v[v],
+                        cfg.ti_flat_f64[v],
+                        base,
+                        lag_i64,
+                        precomp_w[v],
                     )
                 elif cfg.var_p_norm[v] == 1.0:
                     dist_v = _mps_dist_block_l1_gsc(
-                        de_v[v], cfg.ti_flat_f64[v], base, lag_i64, precomp_w[v],
+                        de_v[v],
+                        cfg.ti_flat_f64[v],
+                        base,
+                        lag_i64,
+                        precomp_w[v],
                         cfg.var_d_max[v],
                     )
                 elif cfg.var_p_norm[v] == 2.0:
                     dist_v = _mps_dist_block_l2_gsc(
-                        de_v[v], cfg.ti_flat_f64[v], base, lag_i64, precomp_w[v],
+                        de_v[v],
+                        cfg.ti_flat_f64[v],
+                        base,
+                        lag_i64,
+                        precomp_w[v],
                         cfg.var_d_max[v],
                     )
-                else:
+                elif cfg.var_p_norm[v] is not None:
                     dist_v = _mps_dist_block_lp_gsc(
-                        de_v[v], cfg.ti_flat_f64[v], base, lag_i64, precomp_w[v],
-                        cfg.var_d_max[v], cfg.var_p_norm[v],
+                        de_v[v],
+                        cfg.ti_flat_f64[v],
+                        base,
+                        lag_i64,
+                        precomp_w[v],
+                        cfg.var_d_max[v],
+                        cfg.var_p_norm[v],
+                    )
+                else:
+                    # Variation distance (NaN-free): p_norm is None but
+                    # var_variation_p is set. Mean-shift on the accepted value
+                    # stays in Python (TrainingImage.adjust_value).
+                    dist_v = _mps_dist_block_variation_gsc(
+                        de_v[v],
+                        cfg.ti_flat_f64[v],
+                        base,
+                        lag_i64,
+                        precomp_w[v],
+                        cfg.var_d_max[v],
+                        cfg.var_variation_p[v],
                     )
             else:
                 all_de_ti = cfg.ti_flat[v][base[:, None] + flat_il[v][None, :]]
@@ -221,7 +324,7 @@ def _scan_for_match(
                     cfg.cond_weight,
                     ln_v[v],
                     weights=precomp_w[v],
-                    has_nan=cfg.ti_has_nan,
+                    has_nan=cfg.var_has_nan[v],
                 )
             d += cfg.weights[v] * dist_v
         # Renormalize so the joint distance stays in [0, 1] even when
