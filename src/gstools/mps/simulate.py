@@ -2,10 +2,12 @@
 
 `ds_simulate` is the entry point; `_DirectSamplingEngine` holds one run's
 state (output grids, informed masks, config) explicitly — what used to be
-captured by closures inside `ds_simulate`. The engine orchestrates per-node
-simulation by calling the stateless `neighbors`, `scan`, and `runner` modules.
+captured by closures inside `ds_simulate`. A current Rust backend executes the
+complete node path in one call; the Python engine retains the stateless
+`neighbors`, `scan`, and `runner` route as the compatibility fallback.
 """
 
+import warnings
 from concurrent.futures import ThreadPoolExecutor
 from math import prod
 
@@ -23,6 +25,23 @@ from gstools.mps.neighbors import (
 )
 from gstools.mps.runner import _make_progress, _run_path
 from gstools.mps.scan import _scan_for_match, _ScanConfig
+
+if config._GSTOOLS_CORE_AVAIL:  # pragma: no cover
+    import gstools_core as _gstools_core
+
+    _mps_simulate_gsc = getattr(_gstools_core, "mps_simulate", None)
+else:  # pragma: no cover
+    _mps_simulate_gsc = None
+
+# Action Plan 7 measured policy. The complete engine is the default when the
+# export is available; progress callbacks, disabled/absent cores, and older
+# cores retain the Python engine. Python precomputes optional per-node lag
+# transform matrices before the GIL-free Rust call.
+_MPS_RUST_ENGINE_ENABLED = True
+_MPS_RUST_ENGINE_FORCE = False
+# Private instrumentation hook used by the reproducibility/benchmark harness.
+# Production callers leave this as ``None``.
+_MPS_RUST_ENGINE_STATS_HOOK = None
 
 
 def _build_path(unknown, path, rng_path, sim_shape):
@@ -254,6 +273,16 @@ class _DirectSamplingEngine:
             v.name: np.asarray(self.ti_flat[v.name], dtype=np.float64)
             for v in training_image.variables
         }
+        var_index = {
+            variable.name: index
+            for index, variable in enumerate(training_image.variables)
+        }
+        ti_matrix_f64 = np.ascontiguousarray(
+            np.stack(
+                [ti_flat_f64[v.name] for v in training_image.variables],
+                axis=0,
+            )
+        )
         var_categorical = {
             v.name: v.categorical for v in training_image.variables
         }
@@ -282,6 +311,8 @@ class _DirectSamplingEngine:
             var_p_norm=var_p_norm,
             var_d_max=var_d_max,
             ti_flat_f64=ti_flat_f64,
+            ti_matrix_f64=ti_matrix_f64,
+            var_index=var_index,
             var_variation_p=var_variation_p,
         )
 
@@ -565,12 +596,172 @@ class _DirectSamplingEngine:
             self.sg[v][node] = val
             self.informed[v][node] = True
 
+    def _run_rust_engine(self, n_threads):
+        """Run the complete node path inside one GIL-free Rust call."""
+        fields = np.ascontiguousarray(
+            np.stack([self.sg[v].reshape(-1) for v in self.variables])
+        )
+        conditioned = np.ascontiguousarray(
+            np.stack(
+                [self.is_cond[v].reshape(-1) for v in self.variables]
+            ).astype(np.uint8)
+        )
+        metric_kinds = np.fromiter(
+            (
+                0
+                if self._scan_config.var_categorical[v]
+                else 1
+                if self._scan_config.var_p_norm[v] is not None
+                else 2
+                for v in self.variables
+            ),
+            dtype=np.int64,
+            count=len(self.variables),
+        )
+        p_norm = np.fromiter(
+            (
+                1.0
+                if self._scan_config.var_categorical[v]
+                else self._scan_config.var_p_norm[v]
+                if self._scan_config.var_p_norm[v] is not None
+                else self._scan_config.var_variation_p[v]
+                for v in self.variables
+            ),
+            dtype=np.float64,
+            count=len(self.variables),
+        )
+        lag_matrices = (
+            np.ascontiguousarray(
+                np.stack(
+                    [
+                        _lag_transform_matrix(
+                            self.dim,
+                            self.rotation_map,
+                            self.anis_map,
+                            node,
+                        )
+                        for node in self.path
+                    ]
+                )
+            )
+            if (self.rotation_map is not None or self.anis_map is not None)
+            and len(self.path)
+            else np.empty((0, self.dim, self.dim), dtype=np.float64)
+        )
+        (
+            result,
+            strict_fallbacks,
+            level_count,
+            max_ready_width,
+            used_threads,
+            collapsed_lags,
+        ) = (
+            _mps_simulate_gsc(
+                self._scan_config.ti_matrix_f64,
+                np.asarray(self.ti_shape, dtype=np.int64),
+                fields,
+                conditioned,
+                np.asarray(self.sim_shape, dtype=np.int64),
+                np.asarray(self.path, dtype=np.int64),
+                lag_matrices,
+                np.asarray(self.u_start, dtype=np.float64),
+                np.asarray(self.u_fallback, dtype=np.float64),
+                np.asarray(self.offset_arr, dtype=np.int64),
+                np.fromiter(
+                    (self.n_k[v] for v in self.variables),
+                    dtype=np.int64,
+                    count=len(self.variables),
+                ),
+                np.fromiter(
+                    (
+                        np.nan
+                        if self.max_radius_per_var[v] is None
+                        else self.max_radius_per_var[v]
+                        for v in self.variables
+                    ),
+                    dtype=np.float64,
+                    count=len(self.variables),
+                ),
+                np.fromiter(
+                    (self.weights[v] for v in self.variables),
+                    dtype=np.float64,
+                    count=len(self.variables),
+                ),
+                metric_kinds,
+                np.fromiter(
+                    (self._scan_config.var_has_nan[v] for v in self.variables),
+                    dtype=np.uint8,
+                    count=len(self.variables),
+                ),
+                np.fromiter(
+                    (
+                        1.0
+                        if self._scan_config.var_d_max[v] is None
+                        else self._scan_config.var_d_max[v]
+                        for v in self.variables
+                    ),
+                    dtype=np.float64,
+                    count=len(self.variables),
+                ),
+                p_norm,
+                self.threshold,
+                self.scan_fraction,
+                self.training_image.distance_power,
+                self.cond_weight,
+                self.boundary == "partial",
+                n_threads,
+            )
+        )
+        for row, variable in enumerate(self.variables):
+            self.sg[variable][...] = result[row].reshape(self.sim_shape)
+            self.informed[variable][...] = ~np.isnan(self.sg[variable])
+        self._rust_engine_stats = {
+            "level_count": int(level_count),
+            "max_ready_width": int(max_ready_width),
+            "requested_threads": int(n_threads),
+            "used_threads": int(used_threads),
+        }
+        if _MPS_RUST_ENGINE_STATS_HOOK is not None:
+            _MPS_RUST_ENGINE_STATS_HOOK(self._rust_engine_stats.copy())
+        if strict_fallbacks:
+            warnings.warn(
+                "gstools.mps: boundary='strict' could not fit the full data "
+                "event inside the TI; falling back to partial mode (dropping "
+                "the furthest neighbour(s)). Ensure the TI is at least as "
+                "large as the data event extent to enforce strict mode.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+        if collapsed_lags:
+            warnings.warn(
+                "gstools.mps: anisotropy/rotation transform collapsed "
+                "neighbour lag(s) onto duplicate TI positions; the "
+                "duplicates are excluded from the data event. Reduce the "
+                "anisotropy ratio or rotation to retain them.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+        return self.sg
+
     def run(self, num_threads=None, progress=None):
         n_threads = (
             num_threads
             if num_threads is not None
             else (config.NUM_THREADS or 1)
         )
+        # The complete Rust call cannot currently invoke a Python callback per
+        # completed node. During the transition, requesting progress therefore
+        # selects the intact Python scheduler rather than silently dropping
+        # callback events.
+        use_rust_engine = (
+            (_MPS_RUST_ENGINE_ENABLED or _MPS_RUST_ENGINE_FORCE)
+            and config.USE_GSTOOLS_CORE
+            and config._GSTOOLS_CORE_AVAIL
+            and _mps_simulate_gsc is not None
+            and not progress
+        )
+        if use_rust_engine:
+            return self._run_rust_engine(n_threads)
         executor = (
             ThreadPoolExecutor(max_workers=n_threads)
             if n_threads > 1

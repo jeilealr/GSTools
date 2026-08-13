@@ -72,19 +72,32 @@ def test_older_core_without_mps_exports_uses_python_fallback():
             "mps_dist_block_l1",
             "mps_dist_block_l1_masked",
             "mps_dist_block_l2",
+            "mps_dist_block_l2_masked",
             "mps_dist_block_lp",
+            "mps_dist_block_lp_masked",
             "mps_dist_block_variation",
+            "mps_dist_block_variation_masked",
+            "mps_scan_node",
             "mps_scan_node_cat",
+            "mps_simulate",
         ):
             if hasattr(gstools_core, name):
                 delattr(gstools_core, name)
 
         import numpy as np
         import gstools as gs
-        from gstools.mps import DirectSampling, MPSModel, TrainingImage, scan
+        from gstools.mps import (
+            DirectSampling,
+            MPSModel,
+            TrainingImage,
+            scan,
+            simulate,
+        )
 
         assert gs.config._GSTOOLS_CORE_AVAIL is True
         assert scan._mps_dist_block_variation_gsc is None
+        assert scan._mps_scan_node_gsc is None
+        assert simulate._mps_simulate_gsc is None
         data = np.sin(np.indices((16, 16))[0] / 4.0)
         ti = TrainingImage(
             data, categorical=False, distance="variation", n_neighbors=4

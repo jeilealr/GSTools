@@ -6,6 +6,19 @@ All notable changes to **GSTools** will be documented in this file.
 
 ### Changes
 
+- add a transition-default Rust backend for Multiple Point Statistics Direct
+  Sampling when a compatible GSTools-Core is installed
+  - one Rust call owns neighbour selection, distance scanning, value retrieval,
+    simulation-grid writes, and deterministic node-level Rayon scheduling
+  - repeated runs are bit-identical across Rust thread counts for fixed seeds
+  - `gstools.config.USE_GSTOOLS_CORE=False` intentionally retains the complete
+    pure-Python MPS engine for migration checks and final benchmarking
+  - progress callbacks continue to use the Python scheduler during the
+    transition release
+  - Python and Rust may choose different categorical values at effective
+    distance ties; regenerate exact categorical golden fields from the Rust
+    engine when production ownership changes instead of reusing Python/block
+    backend goldens across that boundary
 - add decision-tree based plurigaussian fields [#387](https://github.com/GeoStat-Framework/GSTools/pull/387)
   - instead of spatial rules, as before, decision trees are a more flexible approach
   - each node of the binary tree is a decision based on the values of the SRF

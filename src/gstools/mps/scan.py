@@ -22,6 +22,9 @@ if _mps_config._GSTOOLS_CORE_AVAIL:  # pragma: no cover
     _mps_dist_block_cat_gsc = getattr(
         _gstools_core, "mps_dist_block_cat", None
     )
+    _mps_dist_block_cat_rayon_gsc = getattr(
+        _gstools_core, "mps_dist_block_cat_rayon", None
+    )
     _mps_dist_block_cat_masked_gsc = getattr(
         _gstools_core, "mps_dist_block_cat_masked", None
     )
@@ -30,20 +33,49 @@ if _mps_config._GSTOOLS_CORE_AVAIL:  # pragma: no cover
         _gstools_core, "mps_dist_block_l1_masked", None
     )
     _mps_dist_block_l2_gsc = getattr(_gstools_core, "mps_dist_block_l2", None)
+    _mps_dist_block_l2_masked_gsc = getattr(
+        _gstools_core, "mps_dist_block_l2_masked", None
+    )
     _mps_dist_block_lp_gsc = getattr(_gstools_core, "mps_dist_block_lp", None)
+    _mps_dist_block_lp_masked_gsc = getattr(
+        _gstools_core, "mps_dist_block_lp_masked", None
+    )
     _mps_dist_block_variation_gsc = getattr(
         _gstools_core, "mps_dist_block_variation", None
     )
+    _mps_dist_block_variation_masked_gsc = getattr(
+        _gstools_core, "mps_dist_block_variation_masked", None
+    )
+    _mps_scan_node_gsc = getattr(_gstools_core, "mps_scan_node", None)
     _mps_scan_node_cat_gsc = getattr(_gstools_core, "mps_scan_node_cat", None)
 else:  # pragma: no cover
     _mps_dist_block_cat_gsc = None
+    _mps_dist_block_cat_rayon_gsc = None
     _mps_dist_block_cat_masked_gsc = None
     _mps_dist_block_l1_gsc = None
     _mps_dist_block_l1_masked_gsc = None
     _mps_dist_block_l2_gsc = None
+    _mps_dist_block_l2_masked_gsc = None
     _mps_dist_block_lp_gsc = None
+    _mps_dist_block_lp_masked_gsc = None
     _mps_dist_block_variation_gsc = None
+    _mps_dist_block_variation_masked_gsc = None
+    _mps_scan_node_gsc = None
     _mps_scan_node_cat_gsc = None
+
+# Action Plan 4 experiment. This remains private and disabled by default so
+# existing backend behavior is unchanged outside the isolated scaling harness.
+_MPS_RAYON_CANDIDATES = False
+
+# Action Plan 6 measurement override. Normal dispatch uses the generic full
+# scan only where the end-to-end harness found a benefit (positive-threshold
+# DS). Tests and benchmarks can force it to exercise every supported metric.
+_MPS_FULL_NODE_SCAN_FORCE = False
+
+# Criterion shows that Rayon overhead dominates below a full scan chunk.
+# Keep the prototype serial for partial blocks; the scaling harness evaluates
+# whether parallelizing 4096-candidate chunks pays off end to end.
+_MPS_RAYON_MIN_CANDIDATES = 4096
 
 
 @dataclass(frozen=True)
@@ -73,6 +105,8 @@ class _ScanConfig:
     var_p_norm: dict  # {v: float or None}  — None for categorical / variation
     var_d_max: dict  # {v: float or None}  — None for categorical
     ti_flat_f64: dict  # {v: ndarray float64} — pre-cast flat TI for Rust
+    ti_matrix_f64: object  # float64, shape (n_variables, ti_size)
+    var_index: dict  # {v: row in ti_matrix_f64}
     var_variation_p: dict  # {v: float or None}  — variation Lp exponent; None unless variation
 
 
@@ -194,14 +228,134 @@ def _scan_for_match(
         _mps_config.USE_GSTOOLS_CORE and _mps_config._GSTOOLS_CORE_AVAIL
     )
 
-    # Fast path: univariate categorical with no NaN — full scan loop in Rust.
-    if (
+    legacy_categorical_scan = (
         _use_rust
         and not cfg.ti_has_nan
         and _mps_scan_node_cat_gsc is not None
         and len(active_vars) == 1
         and cfg.var_categorical[active_vars[0]]
+    )
+    if legacy_categorical_scan and not _MPS_FULL_NODE_SCAN_FORCE:
+        v = active_vars[0]
+        return _mps_scan_node_cat_gsc(
+            np.asarray(lo, dtype=np.int64),
+            np.asarray(win_shape, dtype=np.int64),
+            start,
+            max_scan,
+            cfg.threshold,
+            de_v[v],
+            cfg.ti_flat_f64[v],
+            cfg.ti_strides[v].astype(np.int64),
+            flat_il[v].astype(np.int64),
+            precomp_w[v],
+        )
+
+    # Action Plan 6: one serial Rust call owns candidate generation, every
+    # per-variable distance, joint weighting, center checks, and winner
+    # selection. Python still owns event construction, fallback, retrieval,
+    # variation adjustment, and the SG write. Concatenated event arrays support
+    # different neighbour counts without padding or a candidate-by-event gather.
+    # The measured default policy uses this for positive-threshold DS. DSBC
+    # stays on the faster legacy Rust block/specialized scan path unless a
+    # validation harness explicitly forces the complete generic scan.
+    if (
+        _use_rust
+        and _mps_scan_node_gsc is not None
+        and (cfg.threshold > 0.0 or _MPS_FULL_NODE_SCAN_FORCE)
     ):
+        lengths = np.fromiter(
+            (len(de_v[v]) for v in active_vars),
+            dtype=np.int64,
+            count=len(active_vars),
+        )
+        event_offsets = np.empty(len(active_vars) + 1, dtype=np.int64)
+        event_offsets[0] = 0
+        np.cumsum(lengths, out=event_offsets[1:])
+        de_flat = np.concatenate(
+            [np.asarray(de_v[v], dtype=np.float64) for v in active_vars]
+        )
+        lag_flat = np.concatenate(
+            [np.asarray(flat_il[v], dtype=np.int64) for v in active_vars]
+        )
+        node_weights = np.concatenate(
+            [np.asarray(precomp_w[v], dtype=np.float64) for v in active_vars]
+        )
+        active_rows = np.fromiter(
+            (cfg.var_index[v] for v in active_vars),
+            dtype=np.int64,
+            count=len(active_vars),
+        )
+        variable_weights = np.fromiter(
+            (cfg.weights[v] for v in active_vars),
+            dtype=np.float64,
+            count=len(active_vars),
+        )
+        metric_kinds = np.fromiter(
+            (
+                0
+                if cfg.var_categorical[v]
+                else 1
+                if cfg.var_p_norm[v] is not None
+                else 2
+                for v in active_vars
+            ),
+            dtype=np.int64,
+            count=len(active_vars),
+        )
+        has_nan = np.fromiter(
+            (cfg.var_has_nan[v] for v in active_vars),
+            dtype=np.uint8,
+            count=len(active_vars),
+        )
+        d_max = np.fromiter(
+            (
+                1.0 if cfg.var_d_max[v] is None else cfg.var_d_max[v]
+                for v in active_vars
+            ),
+            dtype=np.float64,
+            count=len(active_vars),
+        )
+        p_norm = np.fromiter(
+            (
+                1.0
+                if cfg.var_categorical[v]
+                else cfg.var_p_norm[v]
+                if cfg.var_p_norm[v] is not None
+                else cfg.var_variation_p[v]
+                for v in active_vars
+            ),
+            dtype=np.float64,
+            count=len(active_vars),
+        )
+        target_rows = np.fromiter(
+            (cfg.var_index[v] for v in scan_targets),
+            dtype=np.int64,
+            count=len(scan_targets),
+        )
+        return _mps_scan_node_gsc(
+            np.asarray(lo, dtype=np.int64),
+            np.asarray(win_shape, dtype=np.int64),
+            start,
+            max_scan,
+            cfg.threshold,
+            cfg.ti_matrix_f64,
+            np.asarray(cfg.ti_strides[active_vars[0]], dtype=np.int64),
+            active_rows,
+            event_offsets,
+            de_flat,
+            lag_flat,
+            node_weights,
+            variable_weights,
+            metric_kinds,
+            has_nan,
+            d_max,
+            p_norm,
+            target_rows,
+            cfg.ti_has_nan,
+        )
+
+    # Fast path: univariate categorical with no NaN — full scan loop in Rust.
+    if legacy_categorical_scan:
         v = active_vars[0]
         return _mps_scan_node_cat_gsc(
             np.asarray(lo, dtype=np.int64),
@@ -229,8 +383,18 @@ def _scan_for_match(
                     rust_kernel_available = (
                         _mps_dist_block_l1_masked_gsc is not None
                     )
+                elif cfg.var_p_norm[v] == 2.0:
+                    rust_kernel_available = (
+                        _mps_dist_block_l2_masked_gsc is not None
+                    )
+                elif cfg.var_p_norm[v] is not None:
+                    rust_kernel_available = (
+                        _mps_dist_block_lp_masked_gsc is not None
+                    )
                 else:
-                    rust_kernel_available = False
+                    rust_kernel_available = (
+                        _mps_dist_block_variation_masked_gsc is not None
+                    )
             else:
                 if cfg.var_categorical[v]:
                     rust_kernel_available = _mps_dist_block_cat_gsc is not None
@@ -254,9 +418,7 @@ def _scan_for_match(
                         lag_i64,
                         precomp_w[v],
                     )
-                elif cfg.var_has_nan[v]:
-                    # Phase 3 currently supports masked L1 only. Masked L2,
-                    # general Lp, and variation remain on the Python path.
+                elif cfg.var_has_nan[v] and cfg.var_p_norm[v] == 1.0:
                     dist_v = _mps_dist_block_l1_masked_gsc(
                         de_v[v],
                         cfg.ti_flat_f64[v],
@@ -265,8 +427,44 @@ def _scan_for_match(
                         precomp_w[v],
                         cfg.var_d_max[v],
                     )
+                elif cfg.var_has_nan[v] and cfg.var_p_norm[v] == 2.0:
+                    dist_v = _mps_dist_block_l2_masked_gsc(
+                        de_v[v],
+                        cfg.ti_flat_f64[v],
+                        base,
+                        lag_i64,
+                        precomp_w[v],
+                        cfg.var_d_max[v],
+                    )
+                elif cfg.var_has_nan[v] and cfg.var_p_norm[v] is not None:
+                    dist_v = _mps_dist_block_lp_masked_gsc(
+                        de_v[v],
+                        cfg.ti_flat_f64[v],
+                        base,
+                        lag_i64,
+                        precomp_w[v],
+                        cfg.var_d_max[v],
+                        cfg.var_p_norm[v],
+                    )
+                elif cfg.var_has_nan[v]:
+                    dist_v = _mps_dist_block_variation_masked_gsc(
+                        de_v[v],
+                        cfg.ti_flat_f64[v],
+                        base,
+                        lag_i64,
+                        precomp_w[v],
+                        cfg.var_d_max[v],
+                        cfg.var_variation_p[v],
+                    )
                 elif cfg.var_categorical[v]:
-                    dist_v = _mps_dist_block_cat_gsc(
+                    categorical_kernel = (
+                        _mps_dist_block_cat_rayon_gsc
+                        if _MPS_RAYON_CANDIDATES
+                        and _mps_dist_block_cat_rayon_gsc is not None
+                        and len(base) >= _MPS_RAYON_MIN_CANDIDATES
+                        else _mps_dist_block_cat_gsc
+                    )
+                    dist_v = categorical_kernel(
                         de_v[v],
                         cfg.ti_flat_f64[v],
                         base,
