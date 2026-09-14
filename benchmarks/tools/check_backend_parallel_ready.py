@@ -154,6 +154,8 @@ def check_rust_backend(threads):
         y = np.linspace(0.0, 5.0, 12)
         field = np.sin(x) + np.cos(y)
         bins = np.linspace(0.0, 8.0, 6)
+
+        # variogram
         gs.vario_estimate(
             (x, y),
             field,
@@ -161,6 +163,20 @@ def check_rust_backend(threads):
             mesh_type="unstructured",
             return_counts=True,
         )
+
+        # field generation
+        model = gs.Gaussian(dim=2, var=1.0, len_scale=3.0)
+        srf = gs.SRF(model, seed=1)
+        srf((x, y))
+
+        # kriging
+        krige = gs.Krige(
+            model,
+            cond_pos=(x[:6], y[:6]),
+            cond_val=field[:6],
+        )
+        krige((x[6:], y[6:]))
+
     finally:
         (
             gs.config._GSTOOLS_CORE_AVAIL,
