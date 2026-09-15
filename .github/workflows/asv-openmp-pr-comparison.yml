@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: write
 
 concurrency:
   group: openmp-pr-${{ github.event.pull_request.number }}
@@ -40,7 +41,6 @@ jobs:
             pyproject.toml \
             asv.conf.json \
             asv.openmp.conf.json \
-            .github/workflows/benchmark-readiness.yml \
             .github/workflows/asv-openmp-pr-comparison.yml \
             .github/workflows/asv-benchmark-publish.yml
           then
@@ -114,6 +114,16 @@ jobs:
             --bench "^benchmark_" \
             --show-stderr
 
+      - name: Check Cython OpenMP and Rust backend readiness
+        run: |
+          # The benchmark suite silently skips backends that cannot run in
+          # parallel. Probe the environment ASV just built so a broken OpenMP
+          # or Rust install fails this job instead of producing misleading
+          # thread-scaling results.
+          for py in .asv-openmp/env/*/bin/python; do
+            "$py" benchmarks/tools/check_backend_parallel_ready.py --verbose
+          done
+
       - name: Write informational ASV comparison
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
@@ -121,6 +131,11 @@ jobs:
         run: |
           mkdir -p .asv-openmp/artifact
           set +e
+          # --factor 1.05: only flag changes whose ratio exceeds 5%.
+          # A benchmark is marked regressed (+) or improved (-) only when BOTH
+          # the ratio threshold AND ASV's Mann-Whitney U statistical test agree.
+          # Lines prefixed with ~ exceeded the ratio but were not statistically
+          # significant (measurement noise on the shared runner).
           asv --config "$ASV_CONFIG" compare \
             "$BASE_SHA" \
             "$HEAD_SHA" \
@@ -160,67 +175,44 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          python - <<'PY'
-          import os
-          from pathlib import Path
+          python benchmarks/tools/render_benchmark_comment.py \
+            --base "$BASE_SHA" \
+            --head "$HEAD_SHA" \
+            --repository "$GITHUB_REPOSITORY" \
+            --artifact-url "${ARTIFACT_URL:-}" \
+            --comparison .asv-openmp/artifact/comparison.txt \
+            --output /tmp/benchmark_comment.md
+          if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+            tail -n +2 /tmp/benchmark_comment.md > "$GITHUB_STEP_SUMMARY"
+          fi
 
-          base = os.environ["BASE_SHA"][:8]
-          head = os.environ["HEAD_SHA"][:8]
-          artifact_url = os.environ.get("ARTIFACT_URL", "")
-          report_link = (
-              f" · [Full HTML Report ↗]({artifact_url})" if artifact_url else ""
-          )
-
-          try:
-              comparison = Path(".asv-openmp/artifact/comparison.txt").read_text()
-          except FileNotFoundError:
-              comparison = "_Comparison output not available._"
-
-          lines = comparison.splitlines()
-          regressed = sum(
-              1 for l in lines if l.startswith("+") and l[1:2] == " "
-          )
-          improved = sum(
-              1 for l in lines if l.startswith("-") and l[1:2] == " "
-          )
-          if regressed:
-              badge = f"⚠️ {regressed} benchmark(s) regressed"
-          elif improved:
-              badge = f"✅ {improved} benchmark(s) improved, none regressed"
-          else:
-              badge = "✅ No significant changes detected"
-
-          body = (
-              "<!-- gstools-openmp-benchmark -->\n"
-              "## OpenMP Benchmark Results\n\n"
-              f"**Base:** `{base}` → **Head:** `{head}`{report_link}\n\n"
-              f"{badge}\n\n"
-              "<details>\n<summary>Full ASV comparison</summary>\n\n"
-              f"```\n{comparison}\n```\n\n"
-              "</details>\n"
-          )
-          Path("/tmp/benchmark_comment.md").write_text(body)
-
-          summary_env = os.environ.get("GITHUB_STEP_SUMMARY", "")
-          if summary_env:
-              Path(summary_env).write_text(
-                  body.replace("<!-- gstools-openmp-benchmark -->\n", "")
-              )
-          PY
+      - name: Post benchmark results as PR comment
+        if: always() && github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          EXISTING_ID=$(gh api \
+            "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" \
+            --jq '.[] | select(.body | startswith("<!-- gstools-openmp-benchmark -->")) | .id' \
+            | head -1)
+          if [ -n "$EXISTING_ID" ]; then
+            gh api "repos/$GITHUB_REPOSITORY/issues/comments/$EXISTING_ID" \
+              -X PATCH -F body=@/tmp/benchmark_comment.md
+          else
+            gh pr comment "$PR_NUMBER" --body-file /tmp/benchmark_comment.md
+          fi
 
       - name: Save PR context for comment workflow
         if: always()
         env:
           PR_NUMBER: ${{ github.event.pull_request.number }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          ARTIFACT_URL: ${{ steps.upload.outputs.artifact-url }}
         run: |
+          # Only the PR number and the comparison text are handed over; the
+          # comment workflow verifies the number against its triggering run
+          # and resolves commits and artifact URL from the GitHub API.
           mkdir -p .asv-openmp/pr-context
           printf '%s' "$PR_NUMBER"    > .asv-openmp/pr-context/pr_number.txt
-          printf '%s' "$BASE_SHA"     > .asv-openmp/pr-context/base_sha.txt
-          printf '%s' "$HEAD_SHA"     > .asv-openmp/pr-context/head_sha.txt
-          printf '%s' "$ARTIFACT_URL" > .asv-openmp/pr-context/artifact_url.txt
           cp .asv-openmp/artifact/comparison.txt \
              .asv-openmp/pr-context/comparison.txt 2>/dev/null \
             || printf '_Comparison output not available._' \

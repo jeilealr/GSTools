@@ -99,11 +99,11 @@ def iter_result_files(results_dir):
 
 
 def load_json(path):
-    """Load one ASV result file, ignoring invalid JSON files."""
+    """Load one ASV result file, ignoring unreadable or invalid JSON files."""
     try:
         with path.open(encoding="utf8") as handle:
             return json.load(handle)
-    except json.JSONDecodeError:
+    except (OSError, json.JSONDecodeError):
         return None
 
 
@@ -265,7 +265,10 @@ def sort_rows(rows):
 def thread_number(label):
     """Return the numeric part of a ``threads_N`` label."""
     if isinstance(label, str) and label.startswith(THREAD_PREFIX):
-        return int(label[len(THREAD_PREFIX) :])
+        try:
+            return int(label[len(THREAD_PREFIX) :])
+        except ValueError:
+            return -1
     return -1
 
 

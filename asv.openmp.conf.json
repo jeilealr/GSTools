@@ -28,6 +28,9 @@
       "wheel": [""]
     }
   },
+  "build_command": [
+    "python -m pip wheel --no-deps -w {build_cache_dir} {build_dir}"
+  ],
   "install_command": [
     "in-dir={env_dir} python {conf_dir}/benchmarks/tools/install_pyproject_extras.py --pyproject {conf_dir}/pyproject.toml rust",
     "in-dir={env_dir} python {conf_dir}/benchmarks/tools/install_openmp_cython.py {env_dir}",
