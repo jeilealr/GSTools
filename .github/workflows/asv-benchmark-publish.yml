@@ -23,13 +23,13 @@ concurrency:
 
 env:
   ASV_CONFIG: asv.openmp.conf.json
-  BENCHMARKS_REPO: GeoStat-Framework/GSTools-Benchmarks
+  BENCHMARKS_REPO: jeilealr/gstools-benchmarks-asv
   MACHINE_NAME: github-actions-ubuntu
 
 jobs:
   publish:
     name: Benchmark accepted main commit and publish history
-    if: github.repository == 'GeoStat-Framework/GSTools'
+    if: github.repository == 'jeilealr/GSTools'
     runs-on: ubuntu-latest
     timeout-minutes: 360
 
