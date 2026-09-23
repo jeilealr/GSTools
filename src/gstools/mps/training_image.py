@@ -14,14 +14,23 @@ import warnings
 
 import numpy as np
 
-from gstools.mps.distance import (
-    compute_node_weights,
-    vec_categorical_dist,
-    vec_l1_dist,
-    vec_l2_dist,
-    vec_lp_dist,
-    vec_variation_dist,
+# Rust is the only MPS backend on this branch: the block-distance kernels are
+# imported eagerly, so importing gstools.mps fails clearly if gstools_core is
+# missing (see RUST_ONLY_MIGRATION.md).
+from gstools_core import (
+    mps_dist_block_cat,
+    mps_dist_block_cat_masked,
+    mps_dist_block_l1,
+    mps_dist_block_l1_masked,
+    mps_dist_block_l2,
+    mps_dist_block_l2_masked,
+    mps_dist_block_lp,
+    mps_dist_block_lp_masked,
+    mps_dist_block_variation,
+    mps_dist_block_variation_masked,
 )
+
+from gstools.mps.distance import compute_node_weights
 
 __all__ = ["Variable", "TrainingImage"]
 
@@ -508,22 +517,43 @@ class TrainingImage:
         numpy.ndarray, shape (max_scan,)
             Distance in [0, 1] for each candidate.
         """
-        # Dispatch order: categorical > l1 (p==1) > l2 (p==2) > lp > variation.
-        # l1/l2 are explicit fast-paths (not folded into lp) so the specialised
-        # BLAS-friendly kernels are always selected for p in {1, 2}.
+        # Route to the Rust block-distance kernels. The kernels normally gather
+        # candidates from a flat TI via base + lag indices; here `all_de_ti` is
+        # already a materialized (max_scan, n) block, so we present it as a flat
+        # "TI" with row-start bases and column-index lags — kernel[i, j] then
+        # reads all_de_ti[i, j]. Same maths as the former Python vec_*_dist,
+        # computed in Rust. Dispatch order: categorical > l1 > l2 > lp > variation.
+        de = np.asarray(de_sim, dtype=np.float64)
+        block = np.ascontiguousarray(all_de_ti, dtype=np.float64)
+        m, n = block.shape
+        if m == 0:
+            return np.zeros(0)
+        ti_flat = block.ravel()
+        base = np.arange(m, dtype=np.int64) * n
+        lags = np.arange(n, dtype=np.int64)
+        w = np.asarray(w, dtype=np.float64)
         if categorical:
-            return vec_categorical_dist(de_sim, all_de_ti, w, has_nan=has_nan)
-        if p_norm == 1.0:
-            return vec_l1_dist(de_sim, all_de_ti, w, d_max, has_nan=has_nan)
-        if p_norm == 2.0:
-            return vec_l2_dist(de_sim, all_de_ti, w, d_max, has_nan=has_nan)
-        if p_norm is not None:
-            return vec_lp_dist(
-                de_sim, all_de_ti, w, d_max, p_norm, has_nan=has_nan
+            kernel = (
+                mps_dist_block_cat_masked if has_nan else mps_dist_block_cat
             )
-        return vec_variation_dist(
-            de_sim, all_de_ti, w, d_max, vp_norm, has_nan=has_nan
+            return np.asarray(kernel(de, ti_flat, base, lags, w))
+        if p_norm == 1.0:
+            kernel = mps_dist_block_l1_masked if has_nan else mps_dist_block_l1
+            return np.asarray(kernel(de, ti_flat, base, lags, w, d_max))
+        if p_norm == 2.0:
+            kernel = mps_dist_block_l2_masked if has_nan else mps_dist_block_l2
+            return np.asarray(kernel(de, ti_flat, base, lags, w, d_max))
+        if p_norm is not None:
+            kernel = mps_dist_block_lp_masked if has_nan else mps_dist_block_lp
+            return np.asarray(
+                kernel(de, ti_flat, base, lags, w, d_max, p_norm)
+            )
+        kernel = (
+            mps_dist_block_variation_masked
+            if has_nan
+            else mps_dist_block_variation
         )
+        return np.asarray(kernel(de, ti_flat, base, lags, w, d_max, vp_norm))
 
     def adjust_value(self, ti_val, data_event_sim, data_event_ti, var=None):
         """Adjust matched TI value before assignment to SG.

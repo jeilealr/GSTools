@@ -5,19 +5,19 @@ import unittest
 import warnings
 
 import numpy as np
-
-import gstools as gs
-from gstools import config as gs_config
-from gstools.mps.data_event import DataEvent
-from gstools.mps.direct_sampling import DirectSampling
-from gstools.mps.distance import (
-    compute_node_weights,
+from _mps_distance_ref import (
     vec_categorical_dist,
     vec_l1_dist,
     vec_l2_dist,
     vec_lp_dist,
     vec_variation_dist,
 )
+
+import gstools as gs
+from gstools import config as gs_config
+from gstools.mps.data_event import DataEvent
+from gstools.mps.direct_sampling import DirectSampling
+from gstools.mps.distance import compute_node_weights
 from gstools.mps.model import MPSModel
 from gstools.mps.neighbors import (
     _precompute_offsets,

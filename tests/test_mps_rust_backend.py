@@ -22,15 +22,16 @@ pytestmark = pytest.mark.skipif(
     not _CORE_AVAIL, reason="gstools_core not installed"
 )
 
-import gstools as gs
-from gstools.mps import DirectSampling, MPSModel, TrainingImage
-from gstools.mps.distance import (
+from _mps_distance_ref import (
     vec_categorical_dist,
     vec_l1_dist,
     vec_l2_dist,
     vec_lp_dist,
     vec_variation_dist,
 )
+
+import gstools as gs
+from gstools.mps import DirectSampling, MPSModel, TrainingImage
 from gstools.mps.training_image import Variable
 
 
@@ -1600,7 +1601,9 @@ def test_action7_nonstationary_engine_matches_oracle_and_threads(dimension):
             rotation = np.linspace(0.0, np.pi / 3, np.prod(sim_shape)).reshape(
                 sim_shape
             )
-            anis = np.linspace(0.55, 1.0, np.prod(sim_shape)).reshape(sim_shape)
+            anis = np.linspace(0.55, 1.0, np.prod(sim_shape)).reshape(
+                sim_shape
+            )
         else:
             rotation = np.array([0.1, 0.2, 0.3])
             anis = np.array([0.7, 0.9])
@@ -1682,7 +1685,9 @@ def test_action7_strided_explicit_path_and_progress_fallback(monkeypatch):
         raise AssertionError("progress run must retain the Python scheduler")
 
     monkeypatch.setattr(_simulate, "_mps_simulate_gsc", _unexpected)
-    progress_result = _run_path(True, progress=lambda done, total: calls.append((done, total)))
+    progress_result = _run_path(
+        True, progress=lambda done, total: calls.append((done, total))
+    )
     np.testing.assert_array_equal(progress_result, python)
     assert calls[-1] == (81, 81)
 
@@ -1698,7 +1703,9 @@ def test_action7_reports_measured_small_path_thread_policy(
 
     captured = []
     monkeypatch.setattr(_simulate, "_MPS_RUST_ENGINE_ENABLED", True)
-    monkeypatch.setattr(_simulate, "_MPS_RUST_ENGINE_STATS_HOOK", captured.append)
+    monkeypatch.setattr(
+        _simulate, "_MPS_RUST_ENGINE_STATS_HOOK", captured.append
+    )
     gs.config.USE_GSTOOLS_CORE = True
     ti = TrainingImage(_cat_ti((48, 48)), categorical=True, n_neighbors=12)
     ds = DirectSampling(MPSModel(ti, scan_fraction=0.3), seed=20260811)

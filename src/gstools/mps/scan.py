@@ -8,60 +8,30 @@ parameters (does not own a TrainingImage).
 
 from dataclasses import dataclass
 
+import gstools_core as _gstools_core
 import numpy as np
 
 from gstools import config as _mps_config
 from gstools.mps.distance import compute_node_weights
 
-if _mps_config._GSTOOLS_CORE_AVAIL:  # pragma: no cover
-    import gstools_core as _gstools_core
-
-    # MPS exports were added incrementally to gstools_core. Capability checks
-    # keep an older installed core from breaking GSTools import: any missing
-    # function simply leaves that particular MPS operation on the Python path.
-    _mps_dist_block_cat_gsc = getattr(
-        _gstools_core, "mps_dist_block_cat", None
-    )
-    _mps_dist_block_cat_rayon_gsc = getattr(
-        _gstools_core, "mps_dist_block_cat_rayon", None
-    )
-    _mps_dist_block_cat_masked_gsc = getattr(
-        _gstools_core, "mps_dist_block_cat_masked", None
-    )
-    _mps_dist_block_l1_gsc = getattr(_gstools_core, "mps_dist_block_l1", None)
-    _mps_dist_block_l1_masked_gsc = getattr(
-        _gstools_core, "mps_dist_block_l1_masked", None
-    )
-    _mps_dist_block_l2_gsc = getattr(_gstools_core, "mps_dist_block_l2", None)
-    _mps_dist_block_l2_masked_gsc = getattr(
-        _gstools_core, "mps_dist_block_l2_masked", None
-    )
-    _mps_dist_block_lp_gsc = getattr(_gstools_core, "mps_dist_block_lp", None)
-    _mps_dist_block_lp_masked_gsc = getattr(
-        _gstools_core, "mps_dist_block_lp_masked", None
-    )
-    _mps_dist_block_variation_gsc = getattr(
-        _gstools_core, "mps_dist_block_variation", None
-    )
-    _mps_dist_block_variation_masked_gsc = getattr(
-        _gstools_core, "mps_dist_block_variation_masked", None
-    )
-    _mps_scan_node_gsc = getattr(_gstools_core, "mps_scan_node", None)
-    _mps_scan_node_cat_gsc = getattr(_gstools_core, "mps_scan_node_cat", None)
-else:  # pragma: no cover
-    _mps_dist_block_cat_gsc = None
-    _mps_dist_block_cat_rayon_gsc = None
-    _mps_dist_block_cat_masked_gsc = None
-    _mps_dist_block_l1_gsc = None
-    _mps_dist_block_l1_masked_gsc = None
-    _mps_dist_block_l2_gsc = None
-    _mps_dist_block_l2_masked_gsc = None
-    _mps_dist_block_lp_gsc = None
-    _mps_dist_block_lp_masked_gsc = None
-    _mps_dist_block_variation_gsc = None
-    _mps_dist_block_variation_masked_gsc = None
-    _mps_scan_node_gsc = None
-    _mps_scan_node_cat_gsc = None
+# Rust is the only MPS backend on this branch: bind the block/scan kernels to
+# the historical ``*_gsc`` names used below. ``import gstools_core`` above fails
+# clearly if the core is missing; a missing kernel raises AttributeError here.
+_mps_dist_block_cat_gsc = _gstools_core.mps_dist_block_cat
+_mps_dist_block_cat_masked_gsc = _gstools_core.mps_dist_block_cat_masked
+_mps_dist_block_cat_rayon_gsc = _gstools_core.mps_dist_block_cat_rayon
+_mps_dist_block_l1_gsc = _gstools_core.mps_dist_block_l1
+_mps_dist_block_l1_masked_gsc = _gstools_core.mps_dist_block_l1_masked
+_mps_dist_block_l2_gsc = _gstools_core.mps_dist_block_l2
+_mps_dist_block_l2_masked_gsc = _gstools_core.mps_dist_block_l2_masked
+_mps_dist_block_lp_gsc = _gstools_core.mps_dist_block_lp
+_mps_dist_block_lp_masked_gsc = _gstools_core.mps_dist_block_lp_masked
+_mps_dist_block_variation_gsc = _gstools_core.mps_dist_block_variation
+_mps_dist_block_variation_masked_gsc = (
+    _gstools_core.mps_dist_block_variation_masked
+)
+_mps_scan_node_gsc = _gstools_core.mps_scan_node
+_mps_scan_node_cat_gsc = _gstools_core.mps_scan_node_cat
 
 # Action Plan 4 experiment. This remains private and disabled by default so
 # existing backend behavior is unchanged outside the isolated scaling harness.

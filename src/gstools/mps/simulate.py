@@ -13,6 +13,10 @@ from math import prod
 
 import numpy as np
 
+# Rust is the only MPS backend on this branch: import the complete engine
+# eagerly so importing gstools.mps fails clearly if gstools_core is missing.
+from gstools_core import mps_simulate as _mps_simulate_gsc
+
 from gstools import config
 from gstools.mps.data_event import DataEvent
 from gstools.mps.neighbors import (
@@ -25,13 +29,6 @@ from gstools.mps.neighbors import (
 )
 from gstools.mps.runner import _make_progress, _run_path
 from gstools.mps.scan import _scan_for_match, _ScanConfig
-
-if config._GSTOOLS_CORE_AVAIL:  # pragma: no cover
-    import gstools_core as _gstools_core
-
-    _mps_simulate_gsc = getattr(_gstools_core, "mps_simulate", None)
-else:  # pragma: no cover
-    _mps_simulate_gsc = None
 
 # Action Plan 7 measured policy. The complete engine is the default when the
 # export is available; progress callbacks, disabled/absent cores, and older
@@ -655,62 +652,60 @@ class _DirectSamplingEngine:
             max_ready_width,
             used_threads,
             collapsed_lags,
-        ) = (
-            _mps_simulate_gsc(
-                self._scan_config.ti_matrix_f64,
-                np.asarray(self.ti_shape, dtype=np.int64),
-                fields,
-                conditioned,
-                np.asarray(self.sim_shape, dtype=np.int64),
-                np.asarray(self.path, dtype=np.int64),
-                lag_matrices,
-                np.asarray(self.u_start, dtype=np.float64),
-                np.asarray(self.u_fallback, dtype=np.float64),
-                np.asarray(self.offset_arr, dtype=np.int64),
-                np.fromiter(
-                    (self.n_k[v] for v in self.variables),
-                    dtype=np.int64,
-                    count=len(self.variables),
+        ) = _mps_simulate_gsc(
+            self._scan_config.ti_matrix_f64,
+            np.asarray(self.ti_shape, dtype=np.int64),
+            fields,
+            conditioned,
+            np.asarray(self.sim_shape, dtype=np.int64),
+            np.asarray(self.path, dtype=np.int64),
+            lag_matrices,
+            np.asarray(self.u_start, dtype=np.float64),
+            np.asarray(self.u_fallback, dtype=np.float64),
+            np.asarray(self.offset_arr, dtype=np.int64),
+            np.fromiter(
+                (self.n_k[v] for v in self.variables),
+                dtype=np.int64,
+                count=len(self.variables),
+            ),
+            np.fromiter(
+                (
+                    np.nan
+                    if self.max_radius_per_var[v] is None
+                    else self.max_radius_per_var[v]
+                    for v in self.variables
                 ),
-                np.fromiter(
-                    (
-                        np.nan
-                        if self.max_radius_per_var[v] is None
-                        else self.max_radius_per_var[v]
-                        for v in self.variables
-                    ),
-                    dtype=np.float64,
-                    count=len(self.variables),
+                dtype=np.float64,
+                count=len(self.variables),
+            ),
+            np.fromiter(
+                (self.weights[v] for v in self.variables),
+                dtype=np.float64,
+                count=len(self.variables),
+            ),
+            metric_kinds,
+            np.fromiter(
+                (self._scan_config.var_has_nan[v] for v in self.variables),
+                dtype=np.uint8,
+                count=len(self.variables),
+            ),
+            np.fromiter(
+                (
+                    1.0
+                    if self._scan_config.var_d_max[v] is None
+                    else self._scan_config.var_d_max[v]
+                    for v in self.variables
                 ),
-                np.fromiter(
-                    (self.weights[v] for v in self.variables),
-                    dtype=np.float64,
-                    count=len(self.variables),
-                ),
-                metric_kinds,
-                np.fromiter(
-                    (self._scan_config.var_has_nan[v] for v in self.variables),
-                    dtype=np.uint8,
-                    count=len(self.variables),
-                ),
-                np.fromiter(
-                    (
-                        1.0
-                        if self._scan_config.var_d_max[v] is None
-                        else self._scan_config.var_d_max[v]
-                        for v in self.variables
-                    ),
-                    dtype=np.float64,
-                    count=len(self.variables),
-                ),
-                p_norm,
-                self.threshold,
-                self.scan_fraction,
-                self.training_image.distance_power,
-                self.cond_weight,
-                self.boundary == "partial",
-                n_threads,
-            )
+                dtype=np.float64,
+                count=len(self.variables),
+            ),
+            p_norm,
+            self.threshold,
+            self.scan_fraction,
+            self.training_image.distance_power,
+            self.cond_weight,
+            self.boundary == "partial",
+            n_threads,
         )
         for row, variable in enumerate(self.variables):
             self.sg[variable][...] = result[row].reshape(self.sim_shape)
