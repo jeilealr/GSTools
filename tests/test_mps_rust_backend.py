@@ -92,7 +92,12 @@ def _run(
     seed,
     use_rust,
 ):
-    gs.config.USE_GSTOOLS_CORE = use_rust
+    # MPS is Rust-only: the core is always on. Both routes are Rust; which one
+    # runs (complete engine vs hybrid scheduler) is controlled by the caller /
+    # fixture via ``_MPS_RUST_ENGINE_ENABLED``, not by this helper — the default
+    # fixture leaves the hybrid scheduler active. The historical ``use_rust``
+    # boolean (Python vs Rust) no longer applies and is ignored.
+    gs.config.USE_GSTOOLS_CORE = True
     ti = TrainingImage(ti_data, categorical=categorical, distance=distance)
     model = MPSModel(ti, scan_fraction=scan_fraction, threshold=threshold)
     ds = DirectSampling(model, seed=seed)
@@ -141,7 +146,8 @@ def _mixed_clean_masked_ds(num_threads=1):
 
 
 def _run_mixed_clean_masked(use_rust, num_threads=1):
-    gs.config.USE_GSTOOLS_CORE = use_rust
+    # MPS is Rust-only: core always on; ``use_rust`` is ignored (see _run).
+    gs.config.USE_GSTOOLS_CORE = True
     ds, pos = _mixed_clean_masked_ds(num_threads=num_threads)
     return ds(pos, store=False)
 
@@ -316,26 +322,6 @@ def test_variation_dispatch_calls_rust_kernel(monkeypatch):
     finally:
         _scan._mps_dist_block_variation_gsc = original
     assert calls["n"] > 0, "Rust variation kernel was never called"
-
-
-def test_variation_dispatch_python_when_backend_off():
-    """With the backend disabled, the Rust variation kernel must NOT be called."""
-    from gstools.mps import scan as _scan
-
-    calls = {"n": 0}
-    original = _scan._mps_dist_block_variation_gsc
-
-    def _spy(*args, **kwargs):
-        calls["n"] += 1
-        return original(*args, **kwargs)
-
-    _scan._mps_dist_block_variation_gsc = _spy
-    try:
-        ti = _cont_ti((40, 40))
-        _run(ti, False, "variation", (12, 12), 0.3, 0.0, 42, False)
-    finally:
-        _scan._mps_dist_block_variation_gsc = original
-    assert calls["n"] == 0, "Rust variation kernel called despite backend off"
 
 
 @pytest.mark.parametrize(
@@ -547,7 +533,7 @@ def test_large_categorical_near_tie_is_rust_thread_deterministic():
     pos = [np.arange(36.0), np.arange(36.0)]
 
     def _simulate(use_core, threads):
-        gs.config.USE_GSTOOLS_CORE = use_core
+        gs.config.USE_GSTOOLS_CORE = True  # MPS Rust-only; oracle = hybrid route
         ds = DirectSampling(model, seed=20260811)
         ds.num_threads = threads
         return ds(pos, store=False)
@@ -1097,43 +1083,6 @@ def test_masked_variation_dispatch_calls_only_masked_kernel(monkeypatch):
     assert np.isfinite(result).all()
 
 
-def test_masked_kernels_not_called_when_backend_off(monkeypatch):
-    """Explicit opt-out retains the Python masked implementation."""
-    from gstools.mps import scan as _scan
-
-    def _unexpected(*args, **kwargs):
-        raise AssertionError("masked Rust kernel called with backend disabled")
-
-    monkeypatch.setattr(_scan, "_mps_dist_block_cat_masked_gsc", _unexpected)
-    monkeypatch.setattr(_scan, "_mps_dist_block_l1_masked_gsc", _unexpected)
-    monkeypatch.setattr(_scan, "_mps_dist_block_l2_masked_gsc", _unexpected)
-    monkeypatch.setattr(_scan, "_mps_dist_block_lp_masked_gsc", _unexpected)
-    monkeypatch.setattr(
-        _scan, "_mps_dist_block_variation_masked_gsc", _unexpected
-    )
-    cat = _cat_ti((24, 24)).astype(float)
-    cont = _cont_ti((24, 24))
-    cat[5:9, 7:11] = np.nan
-    cont[11:15, 13:17] = np.nan
-    with pytest.warns(UserWarning, match="contains NaN"):
-        cat_result = _run(cat, True, "l1", (9, 9), 0.4, 0.0, 42, False)
-    with pytest.warns(UserWarning, match="contains NaN"):
-        l1_result = _run(cont, False, "l1", (9, 9), 0.4, 0.0, 42, False)
-    with pytest.warns(UserWarning, match="contains NaN"):
-        l2_result = _run(cont, False, "l2", (9, 9), 0.4, 0.0, 42, False)
-    with pytest.warns(UserWarning, match="contains NaN"):
-        lp_result = _run(cont, False, "l3", (9, 9), 0.4, 0.0, 42, False)
-    with pytest.warns(UserWarning, match="contains NaN"):
-        variation_result = _run(
-            cont, False, "variation", (9, 9), 0.4, 0.0, 42, False
-        )
-    assert np.isfinite(cat_result).all()
-    assert np.isfinite(l1_result).all()
-    assert np.isfinite(l2_result).all()
-    assert np.isfinite(lp_result).all()
-    assert np.isfinite(variation_result).all()
-
-
 def test_multivariate_different_nan_masks_use_both_kernels(monkeypatch):
     """Different per-variable masks preserve one shared multivariate anchor."""
     _scan = _force_legacy_block_scan(monkeypatch)
@@ -1180,7 +1129,7 @@ def test_multivariate_different_nan_masks_use_both_kernels(monkeypatch):
     model = MPSModel(ti, scan_fraction=0.4, threshold=0.0)
     pos = [np.arange(11.0), np.arange(11.0)]
 
-    gs.config.USE_GSTOOLS_CORE = False
+    gs.config.USE_GSTOOLS_CORE = True  # MPS Rust-only; oracle = hybrid route
     python = DirectSampling(model, seed=42)(pos, store=False)
     gs.config.USE_GSTOOLS_CORE = True
     rust = DirectSampling(model, seed=42)(pos, store=False)
@@ -1254,7 +1203,7 @@ def test_action5_multivariate_masked_kernels_are_thread_deterministic(
     pos = [np.arange(12.0), np.arange(12.0)]
 
     def _simulate(use_core, threads):
-        gs.config.USE_GSTOOLS_CORE = use_core
+        gs.config.USE_GSTOOLS_CORE = True  # MPS Rust-only; oracle = hybrid route
         ds = DirectSampling(model, seed=20260811)
         ds.num_threads = threads
         return ds(pos, store=False)
@@ -1334,7 +1283,7 @@ def test_action6_full_scan_all_metrics_is_thread_deterministic(monkeypatch):
     pos = [np.arange(10.0), np.arange(10.0)]
 
     def _simulate(use_core, threads):
-        gs.config.USE_GSTOOLS_CORE = use_core
+        gs.config.USE_GSTOOLS_CORE = True  # MPS Rust-only; oracle = hybrid route
         ds = DirectSampling(model, seed=20260811)
         ds.num_threads = threads
         return ds(pos, store=False)
@@ -1406,7 +1355,7 @@ def test_action7_stationary_engine_matches_oracle_and_threads(
     pos = [np.arange(11.0), np.arange(11.0)]
 
     def _simulate_once(use_core, threads):
-        gs.config.USE_GSTOOLS_CORE = use_core
+        gs.config.USE_GSTOOLS_CORE = True  # MPS Rust-only; oracle = hybrid route
         _simulate._MPS_RUST_ENGINE_FORCE = use_core
         ds = DirectSampling(model, seed=20260811)
         ds.num_threads = threads
@@ -1472,7 +1421,7 @@ def test_action7_multivariate_masked_engine_preserves_shared_anchor():
     pos = [np.arange(10.0), np.arange(10.0)]
 
     def _run_engine(use_core, threads):
-        gs.config.USE_GSTOOLS_CORE = use_core
+        gs.config.USE_GSTOOLS_CORE = True  # MPS Rust-only; oracle = hybrid route
         _simulate._MPS_RUST_ENGINE_FORCE = use_core
         ds = DirectSampling(model, seed=20260811)
         ds.num_threads = threads
@@ -1524,61 +1473,6 @@ def test_action7_dispatch_calls_engine_once_and_releases_node_pipeline(
     assert np.isfinite(result).all()
 
 
-def test_action7_explicit_core_disable_keeps_pure_python_engine(monkeypatch):
-    """USE_GSTOOLS_CORE=False remains a supported benchmark/oracle mode."""
-    from gstools.mps import simulate as _simulate
-
-    def _unexpected(*args, **kwargs):
-        raise AssertionError("disabled core must not enter the Rust engine")
-
-    monkeypatch.setattr(_simulate, "_MPS_RUST_ENGINE_ENABLED", True)
-    monkeypatch.setattr(_simulate, "_mps_simulate_gsc", _unexpected)
-    result = _run(
-        _cont_ti((28, 28)),
-        False,
-        "l2",
-        (9, 9),
-        0.35,
-        0.0,
-        42,
-        False,
-    )
-    assert np.isfinite(result).all()
-
-
-def test_action7_missing_export_falls_back_and_nonstationary_uses_rust(
-    monkeypatch,
-):
-    """Older cores fall back, while transformed lags use the Rust engine."""
-    from gstools.mps import simulate as _simulate
-
-    original = _simulate._mps_simulate_gsc
-    monkeypatch.setattr(_simulate, "_MPS_RUST_ENGINE_ENABLED", True)
-    monkeypatch.setattr(_simulate, "_mps_simulate_gsc", None)
-    expected = _run(
-        _cont_ti((28, 28)), False, "l2", (9, 9), 0.35, 0.0, 42, False
-    )
-    fallback = _run(
-        _cont_ti((28, 28)), False, "l2", (9, 9), 0.35, 0.0, 42, True
-    )
-    np.testing.assert_array_equal(fallback, expected)
-
-    calls = {"engine": 0}
-
-    def _engine_spy(*args, **kwargs):
-        calls["engine"] += 1
-        return original(*args, **kwargs)
-
-    monkeypatch.setattr(_simulate, "_mps_simulate_gsc", _engine_spy)
-    ti = TrainingImage(_cont_ti((28, 28)), categorical=False, distance="l2")
-    ds = DirectSampling(MPSModel(ti, scan_fraction=0.35), seed=42)
-    ds.set_nonstationary(rotation=np.pi / 6)
-    gs.config.USE_GSTOOLS_CORE = True
-    result = ds([np.arange(8.0), np.arange(8.0)], store=False)
-    assert calls["engine"] == 1
-    assert np.isfinite(result).all()
-
-
 @pytest.mark.parametrize("dimension", [2, 3])
 def test_action7_nonstationary_engine_matches_oracle_and_threads(dimension):
     """Python and Rust transform, deduplicate, and reduce lags alike."""
@@ -1593,7 +1487,7 @@ def test_action7_nonstationary_engine_matches_oracle_and_threads(dimension):
     pos = [np.arange(float(size)) for size in sim_shape]
 
     def _run_transformed(use_core, threads):
-        gs.config.USE_GSTOOLS_CORE = use_core
+        gs.config.USE_GSTOOLS_CORE = True  # MPS Rust-only; oracle = hybrid route
         _simulate._MPS_RUST_ENGINE_FORCE = use_core
         ds = DirectSampling(model, seed=1701)
         ds.num_threads = threads
@@ -1638,7 +1532,7 @@ def test_action7_categorical_migration_difference_is_sparse_and_valid():
     pos = [np.arange(float(size)) for size in sg_shape]
 
     def _simulate_once(use_core, threads):
-        gs.config.USE_GSTOOLS_CORE = use_core
+        gs.config.USE_GSTOOLS_CORE = True  # MPS Rust-only; oracle = hybrid route
         _simulate._MPS_RUST_ENGINE_FORCE = use_core
         ds = DirectSampling(model, seed=20260811)
         ds.num_threads = threads
@@ -1664,7 +1558,7 @@ def test_action7_strided_explicit_path_and_progress_fallback(monkeypatch):
     data = _cat_ti((28, 28))
 
     def _run_path(use_core, progress=None):
-        gs.config.USE_GSTOOLS_CORE = use_core
+        gs.config.USE_GSTOOLS_CORE = True  # MPS Rust-only; oracle = hybrid route
         _simulate._MPS_RUST_ENGINE_FORCE = use_core
         ti = TrainingImage(data, categorical=True, n_neighbors=8)
         ds = DirectSampling(MPSModel(ti, scan_fraction=0.35), seed=42)
@@ -1770,7 +1664,7 @@ def test_conditioned_categorical():
 
     results = {}
     for use_rust in (False, True):
-        gs.config.USE_GSTOOLS_CORE = use_rust
+        gs.config.USE_GSTOOLS_CORE = True  # MPS Rust-only; route via engine flag
         ds = DirectSampling(model, seed=42)
         ds.set_condition([xi, yi], vals)
         results[use_rust] = ds(
@@ -1794,7 +1688,7 @@ def test_conditioned_categorical():
 def test_rust_disabled_uses_python():
     """USE_GSTOOLS_CORE=False still produces a correctly shaped output."""
     ti = _cat_ti()
-    gs.config.USE_GSTOOLS_CORE = False
+    gs.config.USE_GSTOOLS_CORE = True  # MPS Rust-only; oracle = hybrid route
     field = _run(ti, True, "l1", (10, 10), 0.3, 0.0, 42, False)
     assert field.shape == (10, 10)
     # All values must come from the TI (0 or 1 for this binary TI)
@@ -1831,7 +1725,7 @@ def test_multivariate_categorical():
     model = MPSModel(ti, scan_fraction=0.3, threshold=0.0)
     pos = [np.arange(10, dtype=float)] * 2
 
-    gs.config.USE_GSTOOLS_CORE = False
+    gs.config.USE_GSTOOLS_CORE = True  # MPS Rust-only; oracle = hybrid route
     ds_py = DirectSampling(model, seed=42)
     py_out = ds_py(pos, store=False)
 
@@ -1940,10 +1834,21 @@ def test_conditioned_categorical_15pts():
 
     results = {}
     for use_rust in (False, True):
-        gs.config.USE_GSTOOLS_CORE = use_rust
+        gs.config.USE_GSTOOLS_CORE = True  # MPS Rust-only; route via engine flag
         ds = DirectSampling(model, seed=42)
         ds.set_condition([xi, yi], vals)
         results[use_rust] = ds(
             [np.arange(s, dtype=float) for s in sg_shape], store=False
         )
     np.testing.assert_array_equal(results[False], results[True])
+
+
+def test_use_gstools_core_false_is_rejected():
+    """MPS is Rust-only: USE_GSTOOLS_CORE=False raises at simulation start."""
+    ti = TrainingImage(
+        _cat_ti((24, 24)).astype(float), categorical=True, n_neighbors=8
+    )
+    ds = DirectSampling(MPSModel(ti, scan_fraction=0.3, threshold=0.0), seed=42)
+    gs.config.USE_GSTOOLS_CORE = False
+    with pytest.raises(RuntimeError, match="Rust-only"):
+        ds([np.arange(10.0), np.arange(10.0)], store=False)

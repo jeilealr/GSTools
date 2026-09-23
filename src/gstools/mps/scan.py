@@ -1,22 +1,22 @@
 """TI search-window scanning for Direct Sampling.
 
 Scans a candidate window for the best weighted-distance match (greedy
-early-exit in DS mode, running-best argmin in DSBC mode). Depends only on
-distance.py; receives TI arrays and the vectorized distance callable as
-parameters (does not own a TrainingImage).
+early-exit in DS mode, running-best argmin in DSBC mode). The Python scheduler
+uses Rust kernels for numerical distances and eligible full-node scans; masked
+candidate loops remain in Python. This module receives TI arrays and distance
+callables; it does not own a TrainingImage.
 """
 
 from dataclasses import dataclass
 
-import gstools_core as _gstools_core
 import numpy as np
 
-from gstools import config as _mps_config
+from gstools.mps import _core as _gstools_core
 from gstools.mps.distance import compute_node_weights
 
-# Rust is the only MPS backend on this branch: bind the block/scan kernels to
-# the historical ``*_gsc`` names used below. ``import gstools_core`` above fails
-# clearly if the core is missing; a missing kernel raises AttributeError here.
+# Rust is the only MPS backend: bind the validated block/scan kernels to the
+# historical ``*_gsc`` names used below. Importing ``_core`` raises a clear
+# error if GSTools-Core is missing or lacks the required MPS kernels.
 _mps_dist_block_cat_gsc = _gstools_core.mps_dist_block_cat
 _mps_dist_block_cat_masked_gsc = _gstools_core.mps_dist_block_cat_masked
 _mps_dist_block_cat_rayon_gsc = _gstools_core.mps_dist_block_cat_rayon
@@ -88,7 +88,7 @@ _SCAN_BLOCK = 4096
 
 
 def _scan_window(lo, win_shape, start, max_scan, threshold, dist_fn):
-    """Chunked vectorized TI window scan (pure-Python path).
+    """Chunked TI window scan for the Python scheduler with Rust distances.
 
     Parameters
     ----------
@@ -194,9 +194,10 @@ def _scan_for_match(
     # (_intersect_search_windows), so the flat take needs no bounds checking.
     flat_il = {v: int_lags[v] @ cfg.ti_strides[v] for v in active_vars}
 
-    _use_rust = (
-        _mps_config.USE_GSTOOLS_CORE and _mps_config._GSTOOLS_CORE_AVAIL
-    )
+    # MPS is Rust-only: always dispatch distances to the Rust kernels. The
+    # global USE_GSTOOLS_CORE flag no longer gates this (it is rejected at
+    # simulation start; see _DirectSamplingEngine.run).
+    _use_rust = True
 
     legacy_categorical_scan = (
         _use_rust

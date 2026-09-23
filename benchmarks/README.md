@@ -131,9 +131,8 @@ The benchmarking setup currently consists of:
   workflow from `benchmark_two_point_statistics.py` under Python's built-in
   `cProfile`, so you can see which functions take time in the current
   checkout.
-- `benchmarks/tools/profile_mps_workflows.py`: same concept for MPS; profiles
-  TrainingImage construction and DirectSampling simulation to identify Python
-  hot paths for the future Rust port.
+- `benchmarks/tools/profile_mps_workflows.py`: MPS cProfile helper; its
+  DirectSampling call signature currently needs an update (see below).
 - `benchmarks/tools/check_backend_parallel_ready.py`: CI helper that verifies
   Cython OpenMP detection and Rust backend execution (variogram, field
   generation, and kriging) with more than one GSTools thread.
@@ -860,11 +859,17 @@ For example, `--limit 10` means "print the top 10 function rows after sorting".
 
 ## Multiple Point Statistics Benchmarks
 
-MPS simulations run pure Python — there is no compiled backend yet. The MPS
-benchmark suite therefore has a different focus from the two-point statistics
-suite: instead of comparing two backends, its main goal is to identify the
-slowest Python functions (via cProfile) so they can be prioritized for a
-future Rust implementation.
+MPS Direct Sampling requires `gstools_core>=1.4.0`. Its normal simulation path
+runs the complete node engine in Rust. With a progress callback, Python
+schedules nodes while Rust computes numerical distances and eligible full
+scans. The global `USE_GSTOOLS_CORE=False` setting is still supported for SRF
+and kriging, but raises for MPS simulations.
+
+The MPS benchmark code predates this contract. Its `"core"` simulation cases
+use Rust, while its `"python"` cases set `USE_GSTOOLS_CORE=False` and now fail
+at simulation time. The profiling helper also needs an updated method call
+signature. These require a separate code change; the current suite is not a
+valid Python-versus-Rust MPS comparison.
 
 ### MPS Benchmarking Scripts
 
@@ -872,21 +877,20 @@ The MPS suite adds two files:
 
 - `benchmarks/benchmark_mps.py`: ASV benchmark classes for TrainingImage
   construction and DirectSampling simulation.
-- `benchmarks/tools/profile_mps_workflows.py`: cProfile helper that profiles
-  the same workflows to identify Python hot paths.
+- `benchmarks/tools/profile_mps_workflows.py`: cProfile helper whose simulation
+  profiling path currently needs a backend-argument update.
 
-There is no `asv.openmp.conf.json` variant for MPS yet. When a Rust backend
-is added, follow the pattern in `benchmark_two_point_statistics.py` to
-introduce `BACKENDS` and `THREAD_COUNTS` parameters.
+There is no MPS-specific `asv.openmp.conf.json` variant. The MPS simulation
+benchmarks currently declare `BACKENDS = ("python", "core")`, but only `"core"`
+matches the Rust-only runtime contract. They do not yet vary thread counts.
 
 ### MPS Benchmark Coverage
 
 #### TrainingImageBenchmarks
 
-Measures the cost of wrapping raw NumPy arrays in a `TrainingImage`. Though
-construction is fast, it exercises internal bookkeeping (variable creation,
-distance-function dispatch, shape checks) that will need to be mirrored in a
-future compiled backend.
+Measures the cost of wrapping raw NumPy arrays in a `TrainingImage`:
+variable creation, distance configuration, shape checks, and bookkeeping.
+Rust kernels compute distances during simulation, not construction.
 
 ```text
 cat_60x60        categorical 60×60 synthetic channel TI
@@ -927,146 +931,38 @@ cases.
 
 ### Running MPS Benchmarks
 
-Run the MPS benchmark suite on the latest local `main` commit:
-
-```bash
-asv run 'main^!' --bench benchmark_mps
-```
-
-Compare the MPS baseline across commits:
-
-```bash
-asv run 'main~3..main' --bench benchmark_mps --show-stderr
-asv compare main~1 main
-```
-
-Run a quick smoke check (one repeat, fast path):
-
-```bash
-asv run --quick --show-stderr --bench benchmark_mps
-```
-
-The `--quick` flag makes ASV run each case only once; useful for verifying that
-the benchmarks import and run without errors.
+Use a GSTools commit with MPS support and an environment containing
+`gstools_core>=1.4.0`. The existing `"python"` simulation cases fail under the
+Rust-only contract; filter to `"core"` cases or wait for the benchmark code
+follow-up before treating a complete ASV run as green. TrainingImage
+construction cases do not select a backend. The `--quick` option reduces
+repeats, but does not fix the unsupported `"python"` cases.
 
 ### MPS Profiling With cProfile
 
-The MPS profiler is at `benchmarks/tools/profile_mps_workflows.py`.
-
-It imports from `benchmark_mps`, calls `setup()` once outside the profiler
-(so construction overhead is excluded), and then profiles the simulation or
-TI-construction method under `cProfile`. This matches what ASV does: `setup()`
-is not part of the timed region.
-
-Select an ASV environment Python:
-
-```bash
-ASV_ENV="$(ls -td .asv/env/* | head -n 1)"
-ASV_PYTHON="$ASV_ENV/bin/python"
-```
-
-List available cases:
-
-```bash
-"$ASV_PYTHON" benchmarks/tools/profile_mps_workflows.py --list
-```
-
-All available cases:
-
-```text
-ti-cat-60x60          [TI]  categorical 60×60 TI construction
-ti-cat-150x150        [TI]  categorical 150×150 TI construction
-ti-cont-60x60         [TI]  continuous 60×60 TI construction
-ti-multivar-60x60     [TI]  multivariate 60×60 TI construction
-ds-cat-dsbc-small     [DS]  categorical DSBC, TI=40×40, SG=20×20
-ds-cat-dsbc-medium    [DS]  categorical DSBC, TI=60×60, SG=30×30  (baseline)
-ds-cat-dsbc-large     [DS]  categorical DSBC, TI=120×120, SG=40×40
-ds-cat-ds-medium      [DS]  categorical DS (greedy), TI=60×60, SG=30×30
-ds-cont-l1-medium     [DS]  continuous l1, TI=60×60, SG=30×30
-ds-cat-hiscan         [DS]  high scan fraction (f=0.8), TI=60×60, SG=30×30
-ds-cat-highk          [DS]  more neighbors (n=24), TI=60×60, SG=30×30
-ds-cat-cond           [DS]  conditional (30 hard data pts), TI=60×60, SG=30×30
-```
-
-Profile the baseline DS case (best starting point for Rust porting decisions):
-
-```bash
-"$ASV_PYTHON" benchmarks/tools/profile_mps_workflows.py \
-    --case ds-cat-dsbc-medium --limit 25 --sort cumtime
-```
-
-Profile the large case to see which functions dominate at scale:
-
-```bash
-"$ASV_PYTHON" benchmarks/tools/profile_mps_workflows.py \
-    --case ds-cat-dsbc-large --limit 30 --sort tottime
-```
-
-Compare neighbor-selection vs scan overhead with different n_neighbors:
-
-```bash
-"$ASV_PYTHON" benchmarks/tools/profile_mps_workflows.py --case ds-cat-dsbc-medium
-"$ASV_PYTHON" benchmarks/tools/profile_mps_workflows.py --case ds-cat-highk
-```
-
-Compare DSBC vs DS (greedy threshold) scan patterns:
-
-```bash
-"$ASV_PYTHON" benchmarks/tools/profile_mps_workflows.py --case ds-cat-dsbc-medium
-"$ASV_PYTHON" benchmarks/tools/profile_mps_workflows.py --case ds-cat-ds-medium
-```
-
-Profile with multiple repeats for better statistical sampling:
-
-```bash
-"$ASV_PYTHON" benchmarks/tools/profile_mps_workflows.py \
-    --case ds-cat-dsbc-medium --repeat 3 --limit 20
-```
-
-Profile all cases at once (warning: the large case is slow):
-
-```bash
-"$ASV_PYTHON" benchmarks/tools/profile_mps_workflows.py --case all --limit 15
-```
+`benchmarks/tools/profile_mps_workflows.py --list` still lists the available
+cases. Its profiling path currently calls `DirectSamplingBenchmarks.setup()`
+and `time_simulate()` without their required `backend` argument, so profiling
+cases raise `TypeError` until that helper is updated. Once repaired, cProfile
+will measure Python orchestration and the calls into Rust; Rust internals do
+not appear as Python function rows.
 
 #### Interpreting MPS cProfile Output
 
-The primary hot paths identified in the pure-Python MPS implementation are:
-
-| Function | File | Why it matters |
-|---|---|---|
-| `_select_neighbors` | `mps/neighbors.py` | Python for-loop over sorted offset array; called once per node per variable |
-| `_scan_window` | `mps/scan.py` | Chunked TI scan with threshold test; called once per node |
-| `_dist_block` | `mps/scan.py` | Vectorized weighted distance per candidate block; called inside `_scan_window` |
-| `vec_categorical_dist` / `vec_l1_dist` | `mps/distance.py` | Per-block NumPy distance ops; called from `_dist_block` |
-| `compute_node_weights` | `mps/distance.py` | Per-node weight normalization; called once per node per active variable |
-| `_precompute_offsets` | `mps/neighbors.py` | Builds sorted offset array; called once per simulation call inside the engine constructor |
-
-Functions with high `tottime` (self time, excluding callees) are direct Rust
-port candidates because their cost does not come from called sub-functions.
-Functions with high `cumtime` but low `tottime` are orchestration code whose
-cost comes from callees; optimize the callees first.
-
-The comparison `ds-cat-dsbc-medium` vs `ds-cat-highk` (different `n_neighbors`)
-quantifies how much of the simulation time is in neighbor selection versus TI
-scanning. The comparison `ds-cat-dsbc-medium` vs `ds-cat-hiscan` (different
-`scan_fraction`) quantifies the scan fraction contribution.
+The complete Rust engine is the normal MPS path. A progress callback selects
+the Python scheduler, which still calls Rust distance and scan kernels.
+`_select_neighbors`, `_scan_window`, and `compute_node_weights` describe
+Python work on that scheduler path; the removed NumPy `vec_*_dist` functions
+cannot appear in new profiles. A high Python `cumtime` may include time spent
+inside Rust calls, so it does not measure Rust internals separately.
 
 ### MPS Benchmark Roadmap
 
-When a compiled Rust backend for MPS is available, update `benchmark_mps.py`:
-
-1. Add `BACKENDS = ("python", "rust_core")` at module level.
-2. Add a `gstools_mps_backend(backend)` context manager analogous to
-   `gstools_backend()` in `benchmark_two_point_statistics.py`.
-3. Add `BACKENDS` as the first element of `params` for each benchmark class.
-4. Wrap the simulation call in `time_simulate` with the backend context manager.
-5. Update `profile_mps_workflows.py` to accept a `--backend` argument.
-
-The baseline speedup ratio to report will be:
-```text
-speedup = python_time / rust_core_time
-```
+The benchmark code needs to replace the unsupported `"python"` case with a
+valid comparison, such as the complete Rust engine versus the Python scheduler
+with Rust kernels. The profiling helper must pass the selected backend to
+`setup()` and the measured method. Historical Python-versus-Rust speedups can
+only be reproduced from commits that still contain the Python MPS backend.
 
 ## More ASV Commands
 

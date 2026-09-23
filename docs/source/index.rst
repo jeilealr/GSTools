@@ -113,8 +113,10 @@ For the development version, you can do almost the same:
 
 ***Using GSTools-Core for parallelization and even more speed***
 
-You can install the optional dependency `GSTools-Core <https://github.com/GeoStat-Framework/GSTools-Core>`_,
-which is a re-implementation of GSTools-Cython:
+`GSTools-Core <https://github.com/GeoStat-Framework/GSTools-Core>`_ is an
+optional Rust accelerator for random fields and kriging, and a requirement for
+Multiple Point Statistics (MPS) Direct Sampling. Install GSTools with a
+compatible core (version 1.4.0 or newer) using:
 
 .. code-block:: none
 
@@ -124,25 +126,19 @@ or by manually installing the package
 
 .. code-block:: none
 
-    pip install gstools-core
+    pip install "gstools-core>=1.4.0"
 
-The new package uses the language Rust and it should be safer and faster (in some cases by orders of magnitude).
-Once the package GSTools-Core is available on your machine, it will be used by default.
-In case you want to switch back to the Cython implementation, you can set
-:code:`gstools.config.USE_GSTOOLS_CORE=False` in your code. This also works at runtime.
+When installed, GSTools-Core is used by default. For random fields and kriging,
+set :code:`gstools.config.USE_GSTOOLS_CORE=False` to select the Cython backend;
+this can also be changed at runtime.
 
-For Multiple Point Statistics Direct Sampling, the same switch selects the
-complete pure-Python numerical engine. During the Rust transition this mode is
-kept deliberately for reproducibility checks and Python-versus-Rust
-benchmarks::
-
-    import gstools as gs
-
-    gs.config.USE_GSTOOLS_CORE = False  # pure-Python MPS reference
-
-Set the flag before running the simulation. A compatible GSTools-Core is used
-by default when the flag is :code:`True`. Progress callbacks currently retain
-the Python scheduler, even when the core is enabled.
+MPS Direct Sampling requires GSTools-Core >= 1.4.0 and its MPS kernels.
+Accessing the MPS API without a compatible core raises an :code:`ImportError`;
+other GSTools features remain available. Setting
+:code:`gstools.config.USE_GSTOOLS_CORE=False` raises a :code:`RuntimeError`
+when running an MPS simulation. MPS has no pure-Python numerical fallback.
+With a progress callback, a Python scheduler handles per-node callbacks while
+the numerical distance and scan work still uses Rust.
 
 GSTools-Core will automatically run in parallel, without having to provide OpenMP or a local C compiler.
 
@@ -493,6 +489,8 @@ Optional
 --------
 
 - `GSTools-Core >= 0.2.0 <https://github.com/GeoStat-Framework/GSTools-Core>`_
+  (optional for random fields and kriging; version >= 1.4.0 is required for
+  MPS Direct Sampling)
 - `matplotlib <https://matplotlib.org>`_
 - `pyvista <https://docs.pyvista.org>`_
 

@@ -1,45 +1,24 @@
 """Benchmark MPS (Multiple Point Statistics) workflows: TrainingImage and DirectSampling.
 
-Usage:
-    cd /path/to/MPS-Tools/GSTools
-    # See benchmarks/README.md for ASV and optional cProfile setup.
-    asv machine --yes
-    # Benchmark the current HEAD commit (your feature branch):
-    asv run 'HEAD^!' --bench benchmark_mps
-    # Or benchmark a specific branch:
-    asv run 'feature/mps-direct-sampling^!' --bench benchmark_mps
-    asv run --quick --show-stderr --bench benchmark_mps
-    asv run
-    asv publish
-    asv preview
-    asv compare main~1 HEAD
+See benchmarks/README.md for ASV setup and the current MPS benchmark limits.
 
-MPS runs pure Python — there is no compiled backend yet. When a Rust (or
-Cython) backend is added, introduce BACKENDS and THREAD_COUNTS parameters
-following the pattern in benchmark_two_point_statistics.py and add a backend
-context manager to each benchmark method.
+MPS Direct Sampling requires gstools_core>=1.4.0 and computes its numerical
+distances and scans in Rust. The current DirectSamplingBenchmarks still expose
+legacy "python" and "core" cases. The "python" case sets
+USE_GSTOOLS_CORE=False and raises under the Rust-only MPS contract; only the
+"core" case can run until the benchmark parameters are revised.
 
 Benchmarks that run against a gstools commit that does not include
 gstools.mps (e.g. the main branch before MPS was merged) are automatically
 skipped rather than failing, so this file can live in the repo before MPS
 lands on main.
 
-The cProfile helper at benchmarks/tools/profile_mps_workflows.py identifies
-which Python functions take the most time — the primary hot-path candidates
-for a future Rust implementation.
+The cProfile helper at benchmarks/tools/profile_mps_workflows.py also needs its
+call signature updated for the backend parameter before it can profile these
+DirectSamplingBenchmarks.
 
-Hot paths identified by cProfile:
-    - _select_neighbors (mps/neighbors.py): pure-Python loop over distance-sorted
-      offsets, called once per node per variable.
-    - _scan_window (mps/scan.py): chunked candidate scan with threshold test.
-    - _dist_block closure (mps/scan.py → _scan_for_match): vectorized distance
-      batch, called once per scan block.
-    - vec_distance_var dispatch (mps/training_image.py → mps/distance.py):
-      per-block NumPy distance computation (categorical / l1 / l2 / variation).
-    - compute_node_weights (mps/distance.py): weight normalization per variable
-      per node.
-    - _precompute_offsets (mps/neighbors.py): builds the sorted neighbour-offset
-      array once per simulation call (inside the engine constructor).
+When progress callbacks select the Python scheduler, Python handles neighbour
+selection and scan orchestration. The distance and scan kernels remain Rust.
 """
 
 from __future__ import annotations
@@ -48,8 +27,8 @@ import numpy as np
 
 # MPS classes are imported directly from gstools.mps so this benchmark file
 # works regardless of whether they are re-exported from the top-level gstools
-# package.  The try/except allows ASV to skip gracefully when benchmarking a
-# commit that predates the MPS module (e.g. historical main).
+# package. The try/except lets ASV skip when MPS is absent or its required
+# GSTools-Core MPS kernels are unavailable.
 try:
     from gstools.mps import DirectSampling, MPSModel, TrainingImage, Variable
 
@@ -60,7 +39,7 @@ except (ImportError, ModuleNotFoundError):
 
 
 def _check_mps_available():
-    """Raise NotImplementedError when gstools.mps is absent (pre-MPS commit)."""
+    """Skip when MPS or its required GSTools-Core kernels are unavailable."""
     if not _MPS_AVAILABLE:
         raise NotImplementedError(
             "gstools.mps is not available in this gstools version; "
@@ -227,11 +206,8 @@ class TrainingImageBenchmarks:
 
     Benchmarks the cost of wrapping raw numpy arrays in a TrainingImage.
     Construction includes internal bookkeeping — variable creation, shape
-    validation, distance-function dispatch, and NaN-presence detection — that
-    will need to be mirrored in a future compiled backend.
-
-    When a Rust backend is added: introduce BACKENDS / THREAD_COUNTS parameters
-    here, following the pattern in benchmark_two_point_statistics.py.
+    validation, distance-function dispatch, and NaN-presence detection.
+    The numerical distance kernels used during simulation are in Rust.
     """
 
     params = [TI_CASES]
@@ -295,21 +271,12 @@ class DirectSamplingBenchmarks:
       - size/mod: ``small``, ``medium``, ``large``, ``hiscan``, ``highk``,
                   ``cond``
 
-    Hot-path candidates for future Rust port (per cProfile of time_simulate):
-      1. _select_neighbors — Python for-loop over sorted offset array, O(N_sg)
-      2. _scan_window      — chunked TI scan with threshold test, O(N_scan)
-      3. _dist_block       — vectorized weighted distance per candidate block
-      4. vec_distance_var  — per-block distance dispatch (categorical / l1 / l2)
-      5. compute_node_weights — per-node weight normalization, O(n_neighbors)
-      6. _precompute_offsets  — builds offset array once per simulation call
-
-    When a Rust backend is added:
-      - Introduce BACKENDS / THREAD_COUNTS parameters (see benchmark_two_point_statistics.py)
-      - Add a gstools_backend() context manager inside time_simulate / peakmem_simulate
-      - The speedup ratio Rust/Python for each case will quantify the Rust gain
+    The "core" parameter runs the Rust-only MPS engine. The legacy "python"
+    parameter sets USE_GSTOOLS_CORE=False, which now raises at simulation time.
+    The benchmark needs a code follow-up to remove or replace that parameter.
     """
 
-    # MPS simulations are O(N_sg × N_scan × n_neighbors) in pure Python.
+    # Repeat each Rust-backed simulation three times for a stable median.
     # repeat=3 limits total measurement time while still giving a stable median.
     # Override with ASV's --repeat flag when higher resolution is needed.
     number = 1

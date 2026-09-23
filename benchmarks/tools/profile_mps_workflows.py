@@ -1,33 +1,19 @@
 #!/usr/bin/env python
 """Profile representative MPS benchmark workflows with cProfile.
 
-This is a quick measurement helper. ASV remains the source of truth for saved
-benchmark results, while this script identifies the top cumulative Python call
-sites for the current checkout. The goal is to find which functions are
-slowest in the pure-Python MPS implementation so they can be prioritized for
-a future Rust port.
-
-Key MPS hot paths to watch (sort by cumtime or tottime):
-    _select_neighbors   mps/neighbors.py  — Python loop over sorted offsets
-    _scan_window        mps/scan.py       — chunked TI candidate scan
-    _dist_block         mps/scan.py       — vectorized distance per block
-    vec_categorical_dist / vec_l1_dist    — per-block NumPy distance ops
-    compute_node_weights mps/distance.py  — per-node weight normalization
-    _precompute_offsets mps/neighbors.py  — sorted offset array build
+This helper needs a code follow-up: DirectSamplingBenchmarks now expects a
+backend argument, but run_case still calls setup() and time_simulate() without
+it. MPS itself requires gstools_core>=1.4.0; there is no Python numerical
+backend to profile. With progress callbacks, Python schedules nodes around
+Rust distance and scan kernels.
 
 Usage:
     cd /path/to/MPS-Tools/GSTools
     ASV_ENV="$(ls -td .asv/env/* | head -n 1)"
     "$ASV_ENV/bin/python" benchmarks/tools/profile_mps_workflows.py --list
-    "$ASV_ENV/bin/python" benchmarks/tools/profile_mps_workflows.py \\
-        --case ds-cat-dsbc-medium
-    "$ASV_ENV/bin/python" benchmarks/tools/profile_mps_workflows.py \\
-        --case ds-cat-dsbc-large --limit 30 --sort tottime
-    "$ASV_ENV/bin/python" benchmarks/tools/profile_mps_workflows.py \\
-        --case all --repeat 1 --limit 20
 
-When a Rust backend is added: add a --backend argument following the pattern
-in profile_benchmark_workflows.py and pass it to the benchmark method.
+The --list option still works; profiling a simulation currently raises a
+missing-backend-argument TypeError until the helper is updated.
 """
 
 from __future__ import annotations

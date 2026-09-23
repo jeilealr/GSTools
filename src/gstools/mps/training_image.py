@@ -14,10 +14,9 @@ import warnings
 
 import numpy as np
 
-# Rust is the only MPS backend on this branch: the block-distance kernels are
-# imported eagerly, so importing gstools.mps fails clearly if gstools_core is
-# missing (see RUST_ONLY_MIGRATION.md).
-from gstools_core import (
+# MPS is Rust-only: the block-distance kernels come from gstools.mps._core,
+# which hard-imports and version-checks gstools_core (see RUST_ONLY_MIGRATION.md).
+from gstools.mps._core import (
     mps_dist_block_cat,
     mps_dist_block_cat_masked,
     mps_dist_block_l1,
@@ -29,7 +28,6 @@ from gstools_core import (
     mps_dist_block_variation,
     mps_dist_block_variation_masked,
 )
-
 from gstools.mps.distance import compute_node_weights
 
 __all__ = ["Variable", "TrainingImage"]
@@ -604,6 +602,9 @@ class TrainingImage:
         has_nan=False,
     ):
         """Vectorized distance for one variable over all TI scan candidates.
+
+        Candidate distances are computed by GSTools-Core Rust block kernels;
+        Python prepares node weights and the candidate array.
 
         Parameters
         ----------

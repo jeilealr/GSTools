@@ -2,9 +2,10 @@
 
 `ds_simulate` is the entry point; `_DirectSamplingEngine` holds one run's
 state (output grids, informed masks, config) explicitly — what used to be
-captured by closures inside `ds_simulate`. A current Rust backend executes the
-complete node path in one call; the Python engine retains the stateless
-`neighbors`, `scan`, and `runner` route as the compatibility fallback.
+captured by closures inside `ds_simulate`. The Rust engine normally executes
+the complete node path in one call. When a progress callback is requested,
+`neighbors`, `scan`, and `runner` schedule nodes in Python while the numerical
+distance and scan work still uses Rust.
 """
 
 import warnings
@@ -13,11 +14,11 @@ from math import prod
 
 import numpy as np
 
-# Rust is the only MPS backend on this branch: import the complete engine
-# eagerly so importing gstools.mps fails clearly if gstools_core is missing.
-from gstools_core import mps_simulate as _mps_simulate_gsc
-
 from gstools import config
+
+# MPS is Rust-only: the complete engine comes from gstools.mps._core, which
+# hard-imports and version-checks gstools_core (see RUST_ONLY_MIGRATION.md).
+from gstools.mps._core import mps_simulate as _mps_simulate_gsc
 from gstools.mps.data_event import DataEvent
 from gstools.mps.neighbors import (
     _lag_transform_matrix,
@@ -30,9 +31,8 @@ from gstools.mps.neighbors import (
 from gstools.mps.runner import _make_progress, _run_path
 from gstools.mps.scan import _scan_for_match, _ScanConfig
 
-# Action Plan 7 measured policy. The complete engine is the default when the
-# export is available; progress callbacks, disabled/absent cores, and older
-# cores retain the Python engine. Python precomputes optional per-node lag
+# The complete Rust engine is the default. Progress callbacks use the Python
+# scheduler with Rust kernels. Python precomputes optional per-node lag
 # transform matrices before the GIL-free Rust call.
 _MPS_RUST_ENGINE_ENABLED = True
 _MPS_RUST_ENGINE_FORCE = False
@@ -739,22 +739,27 @@ class _DirectSamplingEngine:
         return self.sg
 
     def run(self, num_threads=None, progress=None):
+        # MPS is Rust-only. USE_GSTOOLS_CORE=False cannot disable it (there is no
+        # pure-Python numerical engine anymore), so reject it explicitly rather
+        # than silently running Rust anyway.
+        if not config.USE_GSTOOLS_CORE:
+            raise RuntimeError(
+                "GSTools MPS is Rust-only: gstools.config.USE_GSTOOLS_CORE must "
+                "be True. It cannot be disabled for MPS (set it back to True). "
+                "To use the Python scheduler around the Rust kernels, pass "
+                "progress=... instead."
+            )
         n_threads = (
             num_threads
             if num_threads is not None
             else (config.NUM_THREADS or 1)
         )
-        # The complete Rust call cannot currently invoke a Python callback per
-        # completed node. During the transition, requesting progress therefore
-        # selects the intact Python scheduler rather than silently dropping
-        # callback events.
+        # The complete Rust call cannot invoke a Python callback per node.
+        # Progress selects the Python scheduler with Rust kernels; the global
+        # USE_GSTOOLS_CORE flag was validated above.
         use_rust_engine = (
-            (_MPS_RUST_ENGINE_ENABLED or _MPS_RUST_ENGINE_FORCE)
-            and config.USE_GSTOOLS_CORE
-            and config._GSTOOLS_CORE_AVAIL
-            and _mps_simulate_gsc is not None
-            and not progress
-        )
+            _MPS_RUST_ENGINE_ENABLED or _MPS_RUST_ENGINE_FORCE
+        ) and not progress
         if use_rust_engine:
             return self._run_rust_engine(n_threads)
         executor = (

@@ -151,7 +151,6 @@ from gstools import (
     covmodel,
     field,
     krige,
-    mps,
     normalizer,
     random,
     tools,
@@ -182,7 +181,6 @@ from gstools.covmodel import (
 )
 from gstools.field import PGS, SRF, CondSRF
 from gstools.krige import Krige
-from gstools.mps import DirectSampling, MPSModel, TrainingImage
 from gstools.tools import (
     DEGREE_SCALE,
     EARTH_RADIUS,
@@ -268,3 +266,17 @@ __all__ += [
     "to_vtk_structured",
     "to_vtk_unstructured",
 ]
+
+# MPS (DirectSampling/MPSModel/TrainingImage and the `mps` submodule) requires
+# the Rust backend gstools_core. Import it lazily so plain ``import gstools`` and
+# the SRF/kriging paths keep working without the Rust core — the requirement
+# applies only when MPS is actually used.
+_MPS_LAZY = ("DirectSampling", "MPSModel", "TrainingImage")
+
+
+def __getattr__(name):
+    if name == "mps" or name in _MPS_LAZY:
+        import gstools.mps as _mps
+
+        return _mps if name == "mps" else getattr(_mps, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
