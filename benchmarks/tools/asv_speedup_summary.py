@@ -2,9 +2,9 @@
 """Summarize Rust-vs-Cython speedups from local ASV result files.
 
 The summary is optional. ASV itself remains the source of truth for benchmark
-storage and visualization. The helper understands both current generated
-benchmark method names, which encode case and thread labels, and older
-parameterized ASV result files.
+storage and visualization. The helper understands the current parameterized
+ASV results and older result files that encode case and thread labels in
+benchmark method names.
 
 Usage:
     python benchmarks/tools/asv_speedup_summary.py
@@ -99,11 +99,11 @@ def iter_result_files(results_dir):
 
 
 def load_json(path):
-    """Load one ASV result file, ignoring invalid JSON files."""
+    """Load one ASV result file, ignoring unreadable or invalid JSON files."""
     try:
         with path.open(encoding="utf8") as handle:
             return json.load(handle)
-    except json.JSONDecodeError:
+    except (OSError, json.JSONDecodeError):
         return None
 
 
@@ -149,6 +149,16 @@ def parse_benchmark_name(name):
     return short_name, "-", threads
 
 
+def _is_thread_label(item):
+    """True for a threads parameter value.
+
+    The suite stores the threads parameter as a bare integer (``THREAD_COUNTS``,
+    e.g. ``"4"``); older results encoded it as ``"threads_4"``. Both are treated
+    as the thread label so the thread count is never mistaken for a case value.
+    """
+    return item.isdigit() or item.startswith(THREAD_PREFIX)
+
+
 def backend_rows(benchmark, entry):
     """Return backend/value rows for one ASV benchmark entry."""
     parsed_benchmark, parsed_case, parsed_threads = parse_benchmark_name(
@@ -174,12 +184,16 @@ def backend_rows(benchmark, entry):
         case_values = [
             item
             for item in combo_values
-            if item not in BACKENDS and not item.startswith(THREAD_PREFIX)
+            if item not in BACKENDS and not _is_thread_label(item)
         ]
         threads = next(
-            (item for item in combo_values if item.startswith(THREAD_PREFIX)),
+            (item for item in combo_values if _is_thread_label(item)),
             parsed_threads,
         )
+        # Normalise a bare integer ("4") to the "threads_4" convention used by
+        # thread_number() and the summary output.
+        if threads.isdigit():
+            threads = f"{THREAD_PREFIX}{threads}"
         rows.append(
             {
                 "backend": backend,
@@ -265,7 +279,10 @@ def sort_rows(rows):
 def thread_number(label):
     """Return the numeric part of a ``threads_N`` label."""
     if isinstance(label, str) and label.startswith(THREAD_PREFIX):
-        return int(label[len(THREAD_PREFIX) :])
+        try:
+            return int(label[len(THREAD_PREFIX) :])
+        except ValueError:
+            return -1
     return -1
 
 
