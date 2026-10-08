@@ -57,14 +57,26 @@ def render(base, head, artifact_url, comparison):
     )
 
     lines = comparison.splitlines()
-    # ASV marks "+" (regressed) or "-" (improved) only when BOTH the
-    # ratio > 1.05 AND the Mann-Whitney U test agree. Lines with "~"
-    # exceeded the ratio threshold but were not statistically significant.
-    regressed = sum(1 for l in lines if l.startswith("+") and l[1:2] == " ")
-    improved = sum(1 for l in lines if l.startswith("-") and l[1:2] == " ")
+    # ASV marks "+" (regressed) or "-" (improved) only when BOTH the ratio
+    # > 1.05 AND the Mann-Whitney U test agree. Lines with "~" exceeded the
+    # ratio threshold but were not statistically significant. "!" marks a
+    # benchmark that worked on the base but now fails on the head — a failure
+    # must be surfaced, never hidden behind "no significant changes".
+
+    def _count(mark):
+        return sum(1 for l in lines if l.startswith(mark) and l[1:2] == " ")
+
+    regressed = _count("+")
+    improved = _count("-") + _count("*")
+    failed = _count("!")
     note = "Mann-Whitney U · 5% threshold"
-    if regressed:
-        badge = f"⚠️ {regressed} benchmark(s) regressed · {note}"
+    if failed or regressed:
+        parts = []
+        if failed:
+            parts.append(f"{failed} benchmark(s) failed")
+        if regressed:
+            parts.append(f"{regressed} benchmark(s) regressed")
+        badge = f"⚠️ {', '.join(parts)} · {note}"
     elif improved:
         badge = f"✅ {improved} benchmark(s) improved, none regressed · {note}"
     else:

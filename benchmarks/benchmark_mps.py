@@ -2,23 +2,17 @@
 
 See benchmarks/README.md for ASV setup and the current MPS benchmark limits.
 
-MPS Direct Sampling requires gstools_core>=1.4.0 and computes its numerical
-distances and scans in Rust. The current DirectSamplingBenchmarks still expose
-legacy "python" and "core" cases. The "python" case sets
-USE_GSTOOLS_CORE=False and raises under the Rust-only MPS contract; only the
-"core" case can run until the benchmark parameters are revised.
+MPS Direct Sampling is Rust-only: it requires gstools_core>=1.4.0 and computes
+its numerical distances and scans in Rust. The DirectSamplingBenchmarks
+therefore run a single "core" backend (the Rust engine); there is no pure-Python
+MPS backend to compare against.
 
 Benchmarks that run against a gstools commit that does not include
 gstools.mps (e.g. the main branch before MPS was merged) are automatically
 skipped rather than failing, so this file can live in the repo before MPS
 lands on main.
 
-The cProfile helper at benchmarks/tools/profile_mps_workflows.py also needs its
-call signature updated for the backend parameter before it can profile these
-DirectSamplingBenchmarks.
-
-When progress callbacks select the Python scheduler, Python handles neighbour
-selection and scan orchestration. The distance and scan kernels remain Rust.
+All Direct Sampling simulation work uses the complete Rust engine.
 """
 
 from __future__ import annotations
@@ -46,26 +40,27 @@ def _check_mps_available():
             "benchmark skipped for pre-MPS commits."
         )
 
+
 # ---------------------------------------------------------------------------
 # Case definitions
 # ---------------------------------------------------------------------------
 
 TI_CASES = (
-    "cat_60x60",       # categorical 60×60 synthetic channel TI
-    "cat_150x150",     # categorical 150×150 (larger TI, measures scaling)
-    "cont_60x60",      # continuous 60×60 with l1 distance
+    "cat_60x60",  # categorical 60×60 synthetic channel TI
+    "cat_150x150",  # categorical 150×150 (larger TI, measures scaling)
+    "cont_60x60",  # continuous 60×60 with l1 distance
     "multivar_60x60",  # multivariate 2-variable (categorical + continuous) 60×60
 )
 
 DS_CASES = (
-    "cat_dsbc_small",   # categorical TI=40×40, SG=20×20, n=8,  f=0.3, t=0.0
+    "cat_dsbc_small",  # categorical TI=40×40, SG=20×20, n=8,  f=0.3, t=0.0
     "cat_dsbc_medium",  # categorical TI=60×60, SG=30×30, n=12, f=0.3, t=0.0  (baseline)
-    "cat_dsbc_large",   # categorical TI=120×120, SG=40×40, n=16, f=0.3, t=0.0
-    "cat_ds_medium",    # categorical TI=60×60, SG=30×30, n=12, f=0.3, t=0.1  (DS mode)
-    "cont_l1_medium",   # continuous   TI=60×60, SG=30×30, n=12, f=0.3, t=0.0, l1
+    "cat_dsbc_large",  # categorical TI=120×120, SG=40×40, n=16, f=0.3, t=0.0
+    "cat_ds_medium",  # categorical TI=60×60, SG=30×30, n=12, f=0.3, t=0.1  (DS mode)
+    "cont_l1_medium",  # continuous   TI=60×60, SG=30×30, n=12, f=0.3, t=0.0, l1
     "cat_dsbc_hiscan",  # categorical TI=60×60, SG=30×30, n=12, f=0.8, t=0.0  (high scan)
-    "cat_dsbc_highk",   # categorical TI=60×60, SG=30×30, n=24, f=0.3, t=0.0  (more neighbors)
-    "cat_dsbc_cond",    # categorical TI=60×60, SG=30×30, n=12, f=0.3, t=0.0, conditioned
+    "cat_dsbc_highk",  # categorical TI=60×60, SG=30×30, n=24, f=0.3, t=0.0  (more neighbors)
+    "cat_dsbc_cond",  # categorical TI=60×60, SG=30×30, n=12, f=0.3, t=0.0, conditioned
 )
 
 # Full parameter specification for each DS case.
@@ -244,7 +239,9 @@ class TrainingImageBenchmarks:
         elif case == "multivar_60x60":
             ti_cat, ti_cont = raw
             v0 = Variable("facies", ti_cat, categorical=True)
-            v1 = Variable("porosity", ti_cont, categorical=False, distance="l1")
+            v1 = Variable(
+                "porosity", ti_cont, categorical=False, distance="l1"
+            )
             TrainingImage([v0, v1])
         else:
             raise ValueError(f"Unknown TI case: {case!r}")
@@ -271,9 +268,8 @@ class DirectSamplingBenchmarks:
       - size/mod: ``small``, ``medium``, ``large``, ``hiscan``, ``highk``,
                   ``cond``
 
-    The "core" parameter runs the Rust-only MPS engine. The legacy "python"
-    parameter sets USE_GSTOOLS_CORE=False, which now raises at simulation time.
-    The benchmark needs a code follow-up to remove or replace that parameter.
+    MPS is Rust-only, so the single "core" backend runs the Rust engine (there
+    is no pure-Python MPS backend to compare against).
     """
 
     # Repeat each Rust-backed simulation three times for a stable median.
@@ -284,7 +280,7 @@ class DirectSamplingBenchmarks:
     # Allow up to 5 minutes per case; the large categorical case can be slow.
     timeout = 300
 
-    BACKENDS = ("python", "core")
+    BACKENDS = ("core",)
 
     params = [DS_CASES, BACKENDS]
     param_names = ["case", "backend"]
@@ -322,16 +318,14 @@ class DirectSamplingBenchmarks:
         _check_mps_available()
         import gstools.config as _cfg
 
-        if backend == "core":
-            try:
-                import gstools_core  # noqa: F401
-            except ImportError:
-                raise NotImplementedError(
-                    "gstools_core not installed; 'core' backend skipped."
-                )
-            _cfg.USE_GSTOOLS_CORE = True
-        else:
-            _cfg.USE_GSTOOLS_CORE = False
+        # MPS is Rust-only; the single "core" backend runs the Rust engine.
+        try:
+            import gstools_core  # noqa: F401
+        except ImportError:
+            raise NotImplementedError(
+                "gstools_core not installed; MPS benchmark skipped."
+            )
+        _cfg.USE_GSTOOLS_CORE = True
 
         spec = _DS_SPECS[case]
         ti = TrainingImage(
@@ -350,7 +344,9 @@ class DirectSamplingBenchmarks:
         self.seed = _DS_SEEDS[case]
 
         if spec["conditioned"]:
-            self.ds.set_condition(data[case]["cond_pos"], data[case]["cond_val"])
+            self.ds.set_condition(
+                data[case]["cond_pos"], data[case]["cond_val"]
+            )
 
     def time_simulate(self, data, case, backend):
         """Run one Direct Sampling simulation."""

@@ -1,19 +1,14 @@
 #!/usr/bin/env python
 """Profile representative MPS benchmark workflows with cProfile.
 
-This helper needs a code follow-up: DirectSamplingBenchmarks now expects a
-backend argument, but run_case still calls setup() and time_simulate() without
-it. MPS itself requires gstools_core>=1.4.0; there is no Python numerical
-backend to profile. With progress callbacks, Python schedules nodes around
-Rust distance and scan kernels.
+MPS is Rust-only (requires gstools_core>=1.4.0); the DirectSamplingBenchmarks
+run a single "core" backend, which this helper passes automatically. Python
+profiling observes the call into Rust, not its internal node work.
 
 Usage:
     cd /path/to/MPS-Tools/GSTools
     ASV_ENV="$(ls -td .asv/env/* | head -n 1)"
     "$ASV_ENV/bin/python" benchmarks/tools/profile_mps_workflows.py --list
-
-The --list option still works; profiling a simulation currently raises a
-missing-backend-argument TypeError until the helper is updated.
 """
 
 from __future__ import annotations
@@ -169,16 +164,20 @@ def run_case(name, class_name, method_base_name, case, repeat, limit, sort):
     suite = suite_cls()
     data = suite.setup_cache()
 
+    # Classes parametrized by "backend" (DirectSamplingBenchmarks) take the
+    # single Rust "core" backend; TI-construction benchmarks are not.
+    extra = ("core",) if "backend" in getattr(suite, "param_names", []) else ()
+
     # Call setup() outside the profiler so construction overhead is excluded.
     if hasattr(suite, "setup"):
-        suite.setup(data, case)
+        suite.setup(data, case, *extra)
 
     method = getattr(suite, method_base_name)
 
     profiler = cProfile.Profile()
     profiler.enable()
     for _ in range(repeat):
-        method(data, case)
+        method(data, case, *extra)
     profiler.disable()
 
     print(f"\n== {name} ==")

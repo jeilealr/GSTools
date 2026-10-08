@@ -13,8 +13,8 @@ All notable changes to **GSTools** will be documented in this file.
   - repeated runs are bit-identical across Rust thread counts for fixed seeds
   - `gstools.config.USE_GSTOOLS_CORE=False` raises for MPS simulations; the
     setting still selects the Cython backend for SRF and kriging
-  - progress callbacks use the Python scheduler with Rust distance and scan
-    kernels; MPS has no Python numerical fallback
+  - remove the Python node scheduler and per-node progress callback; all MPS
+    simulations now run through the complete Rust engine
   - exact categorical golden fields should be generated with the Rust engine;
     historical Python and Rust paths can select different values at effective
     distance ties

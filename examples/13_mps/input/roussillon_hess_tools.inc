@@ -749,7 +749,6 @@ def simulate_layer(
         boundary=args.boundary,
         num_threads=args.num_threads,
         rotation_map=rotation,
-        progress=args.progress,
         path=args.path,
     )
     return np.rint(result["facies"]).astype(np.uint8)
@@ -2257,7 +2256,6 @@ def build_parser() -> argparse.ArgumentParser:
         default=1,
         help="Thread count for Direct Sampling; keep 1 for byte-identical reruns.",
     )
-    parser.add_argument("--progress", action="store_true")
     parser.add_argument(
         "--repeat-check",
         action="store_true",

@@ -137,8 +137,8 @@ Accessing the MPS API without a compatible core raises an :code:`ImportError`;
 other GSTools features remain available. Setting
 :code:`gstools.config.USE_GSTOOLS_CORE=False` raises a :code:`RuntimeError`
 when running an MPS simulation. MPS has no pure-Python numerical fallback.
-With a progress callback, a Python scheduler handles per-node callbacks while
-the numerical distance and scan work still uses Rust.
+All MPS simulations run through the complete Rust engine; the former per-node
+progress callback is no longer available.
 
 GSTools-Core will automatically run in parallel, without having to provide OpenMP or a local C compiler.
 

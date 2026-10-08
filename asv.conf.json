@@ -3,7 +3,7 @@
   "project": "GSTools",
   "project_url": "https://github.com/jeilealr/GSTools",
   "repo": ".",
-  "branches": ["main"],
+  "branches": ["main", "feature/mps-direct-sampling-only-rust-backend"],
   "benchmark_dir": "benchmarks",
   "env_dir": ".asv/env",
   "results_dir": ".asv/results",

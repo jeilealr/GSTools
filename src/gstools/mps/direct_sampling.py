@@ -97,8 +97,7 @@ class DirectSampling(Field):
 
     Notes
     -----
-    Runtime concerns (thread count, progress reporting) are set on the
-    instance via :attr:`num_threads` or passed as keyword arguments to
+    Runtime thread count is set via :attr:`num_threads` or passed to
     :meth:`__call__`.
 
     See Also
@@ -154,7 +153,6 @@ class DirectSampling(Field):
         mesh_type="structured",
         post_process=True,
         store=True,
-        progress=None,
         num_threads=None,
     ):
         """Generate the spatial random field via Direct Sampling.
@@ -191,9 +189,9 @@ class DirectSampling(Field):
             standard DS behaviour.  ``"sequential"`` visits nodes in raster
             (lexicographic) order, which is deterministic regardless of
             ``path_seed``.  An explicit integer array of shape ``(N, dim)``
-            provides a caller-supplied visit order and must be a permutation
-            of exactly the unknown-node set (missing nodes, extra nodes, and
-            duplicate rows all raise :class:`ValueError`).
+            provides a caller-supplied visit order and must include every
+            unknown node (conditioned nodes are ignored; missing unknown
+            nodes and duplicate rows raise :class:`ValueError`).
             Default: ``"random"``
         mesh_type : :class:`str`, optional
             Grid type. Must be ``"structured"``.
@@ -205,12 +203,6 @@ class DirectSampling(Field):
             Whether to store the field (``True``), not store it (``False``),
             or store it under a custom name (string).
             Default: :any:`True`
-        progress : :class:`bool` or callable or None, optional
-            Show simulation progress. ``True`` prints a plain percentage line
-            (no third-party dependency); a callable is invoked as
-            ``progress(n_done, n_total)`` once per completed node.
-            ``None``/``False`` (default) disables it.
-
         Returns
         -------
         field : :class:`numpy.ndarray` or :class:`dict`
@@ -286,7 +278,6 @@ class DirectSampling(Field):
             num_threads=n_threads,
             rotation_map=rotation_map,
             anis_map=anis_map,
-            progress=progress,
             path=path,
         )
         # Branch only on the return type: multivariate → dict of named arrays;

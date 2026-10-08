@@ -15,17 +15,10 @@ from _mps_distance_ref import (
 
 import gstools as gs
 from gstools import config as gs_config
-from gstools.mps.data_event import DataEvent
 from gstools.mps.direct_sampling import DirectSampling
 from gstools.mps.distance import compute_node_weights
 from gstools.mps.model import MPSModel
-from gstools.mps.neighbors import (
-    _precompute_offsets,
-    _reduce_to_fit,
-    _transform_lags,
-    _window_bounds,
-)
-from gstools.mps.scan import _scan_window
+from gstools.mps.neighbors import _precompute_offsets
 from gstools.mps.simulate import ds_simulate
 from gstools.mps.training_image import TrainingImage, Variable
 
@@ -1985,80 +1978,6 @@ class TestDSSeedControl(unittest.TestCase):
         self.assertTrue(np.array_equal(fa, fb))
 
 
-class TestTransformLagsCollapse(unittest.TestCase):
-    def test_collapsed_lags_warn(self):
-        # Strong anisotropy flattens the y-axis: SG lags (0,1) and (0,2) both
-        # round to TI lag (0,0). The dropped neighbour must be warned about.
-        M = np.array([[1.0, 0.0], [0.0, 0.1]])
-        lags = np.array([[0.0, 1.0], [0.0, 2.0]])
-        de = np.array([5.0, 9.0])
-        with self.assertWarns(RuntimeWarning):
-            lags_ti, de_out = _transform_lags(lags, M, de)
-        self.assertEqual(len(lags_ti), 1)
-        self.assertEqual(de_out.tolist(), [5.0])  # first occurrence kept
-
-    def test_no_collapse_no_warning(self):
-        # Identity transform keeps both lags distinct → no warning.
-        M = np.eye(2)
-        lags = np.array([[0.0, 1.0], [0.0, 2.0]])
-        de = np.array([5.0, 9.0])
-        with warnings.catch_warnings():
-            warnings.simplefilter("error", RuntimeWarning)
-            lags_ti, de_out = _transform_lags(lags, M, de)
-        self.assertEqual(len(lags_ti), 2)
-
-
-class TestReduceToFit(unittest.TestCase):
-    """M10 para [43]: global reduce-to-fit, drop most-outside node by rank (#3)."""
-
-    def test_drops_oob_regardless_of_rank(self):
-        # The near (low-rank) lag maps out of a 4x4 TI; the far (high-rank) lag
-        # is feasible. para [43] keeps the feasible one and drops the OOB one —
-        # the opposite of partial-mode furthest-first truncation.
-        lags_ti = np.array([[0.0, 10.0], [1.0, 0.0]])
-        de = np.array([5.0, 9.0])
-        out_lags, out_de = _reduce_to_fit(lags_ti, (4, 4), de)
-        np.testing.assert_array_equal(out_lags, [[1.0, 0.0]])
-        np.testing.assert_array_equal(
-            out_de, [9.0]
-        )  # parallel array sliced too
-
-    def test_both_extremes_overspan_reduced(self):
-        # Two lags each fit alone but jointly over-span a 4-wide TI (ti-1==3):
-        # extent 3-(-3)=6 > 3. One outermost node is dropped until it fits.
-        lags_ti = np.array([[0.0, 3.0], [0.0, -3.0]])
-        (out_lags,) = _reduce_to_fit(lags_ti, (4, 4))
-        self.assertEqual(len(out_lags), 1)
-
-    def test_collocated_never_dropped_and_inbounds_kept(self):
-        # h=0 and an in-bounds lag survive; the over-long lag is removed.
-        lags_ti = np.array([[0.0, 0.0], [3.0, 0.0], [9.0, 0.0]])
-        (out_lags,) = _reduce_to_fit(lags_ti, (4, 4))  # ti-1 == 3
-        self.assertIn([0.0, 0.0], out_lags.tolist())  # collocated kept
-        self.assertNotIn([9.0, 0.0], out_lags.tolist())  # most-outside dropped
-
-    def test_already_fits_is_noop(self):
-        lags_ti = np.array([[1.0, 0.0], [0.0, -1.0]])
-        (out_lags,) = _reduce_to_fit(lags_ti, (20, 20))
-        np.testing.assert_array_equal(out_lags, lags_ti)
-
-    def test_empty(self):
-        (out,) = _reduce_to_fit(np.empty((0, 2)), (4, 4))
-        self.assertEqual(out.size, 0)
-
-    def test_strong_anis_retains_pattern_neighbour(self):
-        # End to end: strong anisotropy on a small TI used to collapse the
-        # window to a random draw; with para [43] the feasible neighbour is
-        # retained, so output stays valid and finite (no crash, no NaN).
-        rng = np.random.default_rng(0)
-        ti = gs.mps.TrainingImage(rng.integers(0, 2, (6, 6)))
-        ds = gs.mps.DirectSampling(MPSModel(ti, scan_fraction=1.0))
-        ds.set_nonstationary(anis=0.1)
-        field = ds([np.arange(8, dtype=float)] * 2, seed=0)
-        self.assertTrue(np.all(np.isfinite(field)))
-        self.assertTrue(set(np.unique(field)).issubset({0.0, 1.0}))
-
-
 class TestVariationNNeighbors(unittest.TestCase):
     def test_variation_n1_raises_at_variable_construction(self):
         with self.assertRaisesRegex(ValueError, "variation"):
@@ -2131,81 +2050,6 @@ class TestVariationNNeighbors(unittest.TestCase):
         with self.assertRaises(ValueError):
             v.n_neighbors = 1
         self.assertEqual(ds.n_neighbors, 3)  # unchanged
-
-
-class TestStrictBoundaryWarning(unittest.TestCase):
-    def test_strict_infeasible_warns_and_falls_back(self):
-        # A lag larger than the TI cannot fit any anchor in strict mode, so the
-        # function must warn before falling back to partial truncation.
-        ti_shape = np.array([5])
-        lags_ti = np.array(
-            [[10.0]]
-        )  # |lag| 10 > TI size 5 → strict infeasible
-        with self.assertWarns(RuntimeWarning):
-            lo, hi, keep = _window_bounds(lags_ti, ti_shape, "strict")
-        # falls back: partial loop drops the over-long lag → keep < len(lags_ti)
-        self.assertLess(keep, len(lags_ti) + 1)
-
-    def test_strict_feasible_no_warning(self):
-        # A lag that fits leaves strict mode satisfied → no warning.
-        ti_shape = np.array([20])
-        lags_ti = np.array([[1.0]])
-        with warnings.catch_warnings():
-            warnings.simplefilter("error", RuntimeWarning)
-            lo, hi, keep = _window_bounds(lags_ti, ti_shape, "strict")
-        self.assertEqual(keep, 1)
-
-
-class TestScanWindowThreshold(unittest.TestCase):
-    def test_ds_mode_strict_threshold(self):
-        # Mariethoz2010 ¶23: DS acceptance is strict d < t. A candidate at
-        # exactly the threshold (0.1) must be rejected; the 0.05 candidate is
-        # accepted instead. With the old inclusive d <= t the at-threshold
-        # candidate would win first (scan order).
-        win_shape = (2,)
-        lo = np.array([0])
-        dists = np.array([0.1, 0.05])
-
-        def dist_fn(y_blk):
-            return dists[: len(y_blk)]
-
-        y = _scan_window(lo, win_shape, 0, 2, 0.1, dist_fn)
-        self.assertEqual(int(y[0]), 1)  # the 0.05 candidate, not the 0.1 one
-
-    def test_scan_window_greedy_first_under_threshold(self):
-        # DS mode (threshold > 0) must return the FIRST candidate in scan order
-        # with d < threshold — NOT the global-argmin candidate.
-        # Design: candidate 0 has d=0.15 (under threshold 0.2, not the argmin);
-        # candidate 1 has d=0.05 (under threshold 0.2, IS the argmin).
-        # np.argmax(under) returns the first True in [True, True] == index 0,
-        # confirming greedy (first-under-threshold) semantics, not argmin semantics.
-        win_shape = (3,)
-        lo = np.array([0])
-        # distances for positions 0, 1, 2 in scan order
-        dists = np.array([0.15, 0.05, 0.30])
-
-        def dist_fn(y_blk):
-            idxs = (y_blk[:, 0] - lo[0]).astype(int)
-            return dists[idxs]
-
-        # Argmin candidate is position 1 (d=0.05); first-under-threshold is
-        # position 0 (d=0.15 < 0.2). The function must return position 0.
-        y = _scan_window(lo, win_shape, 0, 3, 0.2, dist_fn)
-        self.assertEqual(
-            int(y[0]), 0
-        )  # first-under-threshold, not argmin (pos 1)
-
-    def test_dsbc_accepts_exact_match(self):
-        # DSBC (t=0): exact match d == 0 is still accepted (d <= 0).
-        win_shape = (2,)
-        lo = np.array([0])
-        dists = np.array([0.0, 0.5])
-
-        def dist_fn(y_blk):
-            return dists[: len(y_blk)]
-
-        y = _scan_window(lo, win_shape, 0, 2, 0.0, dist_fn)
-        self.assertEqual(int(y[0]), 0)  # the exact-match candidate
 
 
 class TestNaNTrainingImage(unittest.TestCase):
@@ -2417,31 +2261,6 @@ class TestMVTransformsAndReporting(unittest.TestCase):
             sim_a_values.issubset(ti_a_values),
             msg=f"post_process=False 'a' values {sim_a_values} are not a subset of TI values {ti_a_values}.",
         )
-
-    def test_progress_callback_invoked(self):
-        """progress callable must be called exactly n_nodes times; final call done == total == n_nodes."""
-        rng = np.random.default_rng(1)
-        data = rng.integers(0, 3, (20, 20)).astype(float)
-        ti = TrainingImage(data, n_neighbors=4)
-        ds = DirectSampling(MPSModel(ti, scan_fraction=0.3))
-        pos = [np.arange(6, dtype=float)] * 2
-        n_nodes = 6 * 6
-
-        calls = []
-
-        def cb(done, total):
-            calls.append((done, total))
-
-        ds(pos, seed=0, progress=cb)
-
-        self.assertEqual(
-            len(calls),
-            n_nodes,
-            msg=f"Progress callback should be called {n_nodes} times, got {len(calls)}.",
-        )
-        last_done, last_total = calls[-1]
-        self.assertEqual(last_done, n_nodes)
-        self.assertEqual(last_total, n_nodes)
 
     def test_cond_weight_changes_output(self):
         """Different cond_weight values must yield different fields while honoring the conditioned node."""
@@ -2979,56 +2798,6 @@ class TestCondWeightOverride(unittest.TestCase):
         ds = DirectSampling(model)
         with self.assertRaises(AttributeError):
             ds.cond_weight = 3.5
-
-
-class TestDataEvent(unittest.TestCase):
-    def _make(self, k=3, dim=2):
-        lags_sg = np.arange(k * dim, dtype=np.float64).reshape(k, dim)
-        values = np.arange(k, dtype=np.float64)
-        cond_mask = np.array([True, False, False][:k], dtype=bool)
-        lag_norms = np.linalg.norm(lags_sg, axis=1)
-        return DataEvent(lags_sg, values, cond_mask, lag_norms)
-
-    def test_len_is_lag_count(self):
-        de = self._make(k=3)
-        self.assertEqual(len(de), 3)
-
-    def test_lags_ti_defaults_none(self):
-        de = self._make()
-        self.assertIsNone(de.lags_ti)
-
-    def test_with_lags_ti_sets_field_and_keeps_sg(self):
-        de = self._make(k=3)
-        ti = de.lags_sg * 2
-        de2 = de.with_lags_ti(ti)
-        np.testing.assert_array_equal(de2.lags_ti, ti)
-        np.testing.assert_array_equal(de2.lags_sg, de.lags_sg)
-        self.assertIsNone(de.lags_ti)  # original unchanged
-
-    def test_truncate_slices_all_arrays(self):
-        de = self._make(k=3).with_lags_ti(np.arange(6.0).reshape(3, 2))
-        t = de.truncate(2)
-        self.assertEqual(len(t), 2)
-        np.testing.assert_array_equal(t.lags_sg, de.lags_sg[:2])
-        np.testing.assert_array_equal(t.values, de.values[:2])
-        np.testing.assert_array_equal(t.cond_mask, de.cond_mask[:2])
-        np.testing.assert_array_equal(t.lag_norms, de.lag_norms[:2])
-        np.testing.assert_array_equal(t.lags_ti, de.lags_ti[:2])
-
-    def test_truncate_does_not_mutate_lags_sg_via_lags_ti(self):
-        # Aliasing invariant: truncating must not let lags_ti writes hit lags_sg.
-        de = self._make(k=3)
-        de = de.with_lags_ti(
-            de.lags_sg.copy()
-        )  # caller must copy for independence
-        t = de.truncate(2)
-        t.lags_ti[:] = -999.0  # mutate the truncated TI-frame copy
-        # original SG lags must be untouched
-        self.assertFalse(np.any(de.lags_sg == -999.0))
-
-    def test_truncate_preserves_none_lags_ti(self):
-        de = self._make(k=3)
-        self.assertIsNone(de.truncate(2).lags_ti)
 
 
 class TestPerVariableSetterDedup(unittest.TestCase):
