@@ -48,6 +48,39 @@ gaia_unil_stone_texture.npz
     Preparation: converted from TIFF into a 200x200 floating-point NumPy array
     for offline documentation use.
 
+gaia_unil_fold_categorical_3d.npz
+    Source: fold_categorical.zip from the MPS_book_data/Part2 directory of
+    the GAIA-UNIL trainingimages repository
+    https://github.com/GAIA-UNIL/trainingimages
+
+    Upstream file:
+    MPS_book_data/Part2/fold_categorical.zip
+
+    License: GPL-3.0. The local copy of the GPL-3.0 license text is stored in
+    GAIA-UNIL-GPL-3.0.txt.
+
+    Preparation: extracted ``fold_categorical.SGEMS`` from the upstream zip,
+    parsed it as a 180x150x120 binary facies volume using NumPy
+    ``reshape(..., order="F")``, and stored it as a compressed ``uint8`` array
+    for offline documentation use.
+
+gaia_unil_fluvsim_5facies_crop.npz
+    Source: ti_fluvsim_big_channels3D.zip from the MPS_book_data/Part2
+    directory of the GAIA-UNIL trainingimages repository
+    https://github.com/GAIA-UNIL/trainingimages
+
+    Upstream file:
+    MPS_book_data/Part2/ti_fluvsim_big_channels3D.zip
+
+    License: GPL-3.0. The local copy of the GPL-3.0 license text is stored in
+    GAIA-UNIL-GPL-3.0.txt.
+
+    Preparation: extracted ``ti_fluvsim_big_channels3D.SGEMS`` from the
+    upstream zip, parsed the 250x250x100 five-facies source volume using NumPy
+    ``reshape(..., order="F")``, and stored the channel-rich crop
+    ``[110:230, 0:120, 10:70]`` as a compressed ``uint8`` array for offline
+    documentation use.
+
 Generated documentation inputs
 ------------------------------
 
@@ -61,9 +94,9 @@ synthetic_channel_context_ti.npz
 synthetic_variation_ti.npz
     License: GSTools documentation/example license.
 
-    Preparation: generated once as a 250x250 continuous multi-Gaussian field with
-    anisotropic spatial correlation, using an exponential covariance model with
-    ``len_scale=[35, 25]`` and ``seed=123``.
+    Preparation: generated once as a 250x250 continuous multi-Gaussian field
+    with anisotropic spatial correlation, using an exponential covariance model
+    with ``len_scale=[35, 25]`` and ``seed=123``.
 
 synthetic_3d_channel_ti.npz
     License: GSTools documentation/example license.

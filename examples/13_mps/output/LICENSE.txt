@@ -15,5 +15,9 @@ Input provenance and third-party license information is documented in
   derived from the bundled GeoDataSets/Strebelle channel input.
 * ``continuous_stone_conditioning.png`` is derived from the bundled GAIA-UNIL
   stone texture.
+* ``three_dimensional_fold_facies.png`` is derived from the bundled GAIA-UNIL
+  fold categorical 3D input.
+* ``three_dimensional_fluvsim_multifacies.png`` is derived from the bundled
+  GAIA-UNIL Fluvsim five-facies 3D input.
 * ``multivariate_context_channels.png`` is generated from synthetic GSTools
   documentation input.

@@ -73,10 +73,12 @@ TI. **Continuous conditioning with a bundled texture** uses the GAIA-UNIL
 ``stone`` training image and compares the simulated and training-image
 histograms.
 
-Finally, **3D categorical simulation with voxel and slice plots** changes the
-dimensionality rather than the variable type. It keeps the volume small for the
-documentation build while showing that the same Direct Sampling workflow
-applies to structured 3D arrays.
+Finally, the 3D examples change the dimensionality rather than the variable
+type. **3D categorical simulation with folded facies** uses a larger binary
+GAIA-UNIL volume with validation plots for facies proportions and two-point
+correlation, while **Large 3D multi-facies channel simulation** uses a
+five-facies Fluvsim crop with sparse conditioning points and the same
+paper-style validation checks.
 
 Examples
 --------

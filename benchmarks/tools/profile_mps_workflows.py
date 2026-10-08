@@ -1,33 +1,14 @@
 #!/usr/bin/env python
 """Profile representative MPS benchmark workflows with cProfile.
 
-This is a quick measurement helper. ASV remains the source of truth for saved
-benchmark results, while this script identifies the top cumulative Python call
-sites for the current checkout. The goal is to find which functions are
-slowest in the pure-Python MPS implementation so they can be prioritized for
-a future Rust port.
-
-Key MPS hot paths to watch (sort by cumtime or tottime):
-    _select_neighbors   mps/neighbors.py  — Python loop over sorted offsets
-    _scan_window        mps/scan.py       — chunked TI candidate scan
-    _dist_block         mps/scan.py       — vectorized distance per block
-    vec_categorical_dist / vec_l1_dist    — per-block NumPy distance ops
-    compute_node_weights mps/distance.py  — per-node weight normalization
-    _precompute_offsets mps/neighbors.py  — sorted offset array build
+MPS is Rust-only (requires gstools_core>=1.4.0); the DirectSamplingBenchmarks
+run a single "core" backend, which this helper passes automatically. Python
+profiling observes the call into Rust, not its internal node work.
 
 Usage:
     cd /path/to/MPS-Tools/GSTools
     ASV_ENV="$(ls -td .asv/env/* | head -n 1)"
     "$ASV_ENV/bin/python" benchmarks/tools/profile_mps_workflows.py --list
-    "$ASV_ENV/bin/python" benchmarks/tools/profile_mps_workflows.py \\
-        --case ds-cat-dsbc-medium
-    "$ASV_ENV/bin/python" benchmarks/tools/profile_mps_workflows.py \\
-        --case ds-cat-dsbc-large --limit 30 --sort tottime
-    "$ASV_ENV/bin/python" benchmarks/tools/profile_mps_workflows.py \\
-        --case all --repeat 1 --limit 20
-
-When a Rust backend is added: add a --backend argument following the pattern
-in profile_benchmark_workflows.py and pass it to the benchmark method.
 """
 
 from __future__ import annotations
@@ -183,16 +164,20 @@ def run_case(name, class_name, method_base_name, case, repeat, limit, sort):
     suite = suite_cls()
     data = suite.setup_cache()
 
+    # Classes parametrized by "backend" (DirectSamplingBenchmarks) take the
+    # single Rust "core" backend; TI-construction benchmarks are not.
+    extra = ("core",) if "backend" in getattr(suite, "param_names", []) else ()
+
     # Call setup() outside the profiler so construction overhead is excluded.
     if hasattr(suite, "setup"):
-        suite.setup(data, case)
+        suite.setup(data, case, *extra)
 
     method = getattr(suite, method_base_name)
 
     profiler = cProfile.Profile()
     profiler.enable()
     for _ in range(repeat):
-        method(data, case)
+        method(data, case, *extra)
     profiler.disable()
 
     print(f"\n== {name} ==")

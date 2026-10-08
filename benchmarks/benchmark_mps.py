@@ -1,45 +1,18 @@
 """Benchmark MPS (Multiple Point Statistics) workflows: TrainingImage and DirectSampling.
 
-Usage:
-    cd /path/to/MPS-Tools/GSTools
-    # See benchmarks/README.md for ASV and optional cProfile setup.
-    asv machine --yes
-    # Benchmark the current HEAD commit (your feature branch):
-    asv run 'HEAD^!' --bench benchmark_mps
-    # Or benchmark a specific branch:
-    asv run 'feature/mps-direct-sampling^!' --bench benchmark_mps
-    asv run --quick --show-stderr --bench benchmark_mps
-    asv run
-    asv publish
-    asv preview
-    asv compare main~1 HEAD
+See benchmarks/README.md for ASV setup and the current MPS benchmark limits.
 
-MPS runs pure Python — there is no compiled backend yet. When a Rust (or
-Cython) backend is added, introduce BACKENDS and THREAD_COUNTS parameters
-following the pattern in benchmark_two_point_statistics.py and add a backend
-context manager to each benchmark method.
+MPS Direct Sampling is Rust-only: it requires gstools_core>=1.4.0 and computes
+its numerical distances and scans in Rust. The DirectSamplingBenchmarks
+therefore run a single "core" backend (the Rust engine); there is no pure-Python
+MPS backend to compare against.
 
 Benchmarks that run against a gstools commit that does not include
 gstools.mps (e.g. the main branch before MPS was merged) are automatically
 skipped rather than failing, so this file can live in the repo before MPS
 lands on main.
 
-The cProfile helper at benchmarks/tools/profile_mps_workflows.py identifies
-which Python functions take the most time — the primary hot-path candidates
-for a future Rust implementation.
-
-Hot paths identified by cProfile:
-    - _select_neighbors (mps/neighbors.py): pure-Python loop over distance-sorted
-      offsets, called once per node per variable.
-    - _scan_window (mps/scan.py): chunked candidate scan with threshold test.
-    - _dist_block closure (mps/scan.py → _scan_for_match): vectorized distance
-      batch, called once per scan block.
-    - vec_distance_var dispatch (mps/training_image.py → mps/distance.py):
-      per-block NumPy distance computation (categorical / l1 / l2 / variation).
-    - compute_node_weights (mps/distance.py): weight normalization per variable
-      per node.
-    - _precompute_offsets (mps/neighbors.py): builds the sorted neighbour-offset
-      array once per simulation call (inside the engine constructor).
+All Direct Sampling simulation work uses the complete Rust engine.
 """
 
 from __future__ import annotations
@@ -48,8 +21,8 @@ import numpy as np
 
 # MPS classes are imported directly from gstools.mps so this benchmark file
 # works regardless of whether they are re-exported from the top-level gstools
-# package.  The try/except allows ASV to skip gracefully when benchmarking a
-# commit that predates the MPS module (e.g. historical main).
+# package. The try/except lets ASV skip when MPS is absent or its required
+# GSTools-Core MPS kernels are unavailable.
 try:
     from gstools.mps import DirectSampling, MPSModel, TrainingImage, Variable
 
@@ -60,33 +33,34 @@ except (ImportError, ModuleNotFoundError):
 
 
 def _check_mps_available():
-    """Raise NotImplementedError when gstools.mps is absent (pre-MPS commit)."""
+    """Skip when MPS or its required GSTools-Core kernels are unavailable."""
     if not _MPS_AVAILABLE:
         raise NotImplementedError(
             "gstools.mps is not available in this gstools version; "
             "benchmark skipped for pre-MPS commits."
         )
 
+
 # ---------------------------------------------------------------------------
 # Case definitions
 # ---------------------------------------------------------------------------
 
 TI_CASES = (
-    "cat_60x60",       # categorical 60×60 synthetic channel TI
-    "cat_150x150",     # categorical 150×150 (larger TI, measures scaling)
-    "cont_60x60",      # continuous 60×60 with l1 distance
+    "cat_60x60",  # categorical 60×60 synthetic channel TI
+    "cat_150x150",  # categorical 150×150 (larger TI, measures scaling)
+    "cont_60x60",  # continuous 60×60 with l1 distance
     "multivar_60x60",  # multivariate 2-variable (categorical + continuous) 60×60
 )
 
 DS_CASES = (
-    "cat_dsbc_small",   # categorical TI=40×40, SG=20×20, n=8,  f=0.3, t=0.0
+    "cat_dsbc_small",  # categorical TI=40×40, SG=20×20, n=8,  f=0.3, t=0.0
     "cat_dsbc_medium",  # categorical TI=60×60, SG=30×30, n=12, f=0.3, t=0.0  (baseline)
-    "cat_dsbc_large",   # categorical TI=120×120, SG=40×40, n=16, f=0.3, t=0.0
-    "cat_ds_medium",    # categorical TI=60×60, SG=30×30, n=12, f=0.3, t=0.1  (DS mode)
-    "cont_l1_medium",   # continuous   TI=60×60, SG=30×30, n=12, f=0.3, t=0.0, l1
+    "cat_dsbc_large",  # categorical TI=120×120, SG=40×40, n=16, f=0.3, t=0.0
+    "cat_ds_medium",  # categorical TI=60×60, SG=30×30, n=12, f=0.3, t=0.1  (DS mode)
+    "cont_l1_medium",  # continuous   TI=60×60, SG=30×30, n=12, f=0.3, t=0.0, l1
     "cat_dsbc_hiscan",  # categorical TI=60×60, SG=30×30, n=12, f=0.8, t=0.0  (high scan)
-    "cat_dsbc_highk",   # categorical TI=60×60, SG=30×30, n=24, f=0.3, t=0.0  (more neighbors)
-    "cat_dsbc_cond",    # categorical TI=60×60, SG=30×30, n=12, f=0.3, t=0.0, conditioned
+    "cat_dsbc_highk",  # categorical TI=60×60, SG=30×30, n=24, f=0.3, t=0.0  (more neighbors)
+    "cat_dsbc_cond",  # categorical TI=60×60, SG=30×30, n=12, f=0.3, t=0.0, conditioned
 )
 
 # Full parameter specification for each DS case.
@@ -227,11 +201,8 @@ class TrainingImageBenchmarks:
 
     Benchmarks the cost of wrapping raw numpy arrays in a TrainingImage.
     Construction includes internal bookkeeping — variable creation, shape
-    validation, distance-function dispatch, and NaN-presence detection — that
-    will need to be mirrored in a future compiled backend.
-
-    When a Rust backend is added: introduce BACKENDS / THREAD_COUNTS parameters
-    here, following the pattern in benchmark_two_point_statistics.py.
+    validation, distance-function dispatch, and NaN-presence detection.
+    The numerical distance kernels used during simulation are in Rust.
     """
 
     params = [TI_CASES]
@@ -268,7 +239,9 @@ class TrainingImageBenchmarks:
         elif case == "multivar_60x60":
             ti_cat, ti_cont = raw
             v0 = Variable("facies", ti_cat, categorical=True)
-            v1 = Variable("porosity", ti_cont, categorical=False, distance="l1")
+            v1 = Variable(
+                "porosity", ti_cont, categorical=False, distance="l1"
+            )
             TrainingImage([v0, v1])
         else:
             raise ValueError(f"Unknown TI case: {case!r}")
@@ -295,21 +268,11 @@ class DirectSamplingBenchmarks:
       - size/mod: ``small``, ``medium``, ``large``, ``hiscan``, ``highk``,
                   ``cond``
 
-    Hot-path candidates for future Rust port (per cProfile of time_simulate):
-      1. _select_neighbors — Python for-loop over sorted offset array, O(N_sg)
-      2. _scan_window      — chunked TI scan with threshold test, O(N_scan)
-      3. _dist_block       — vectorized weighted distance per candidate block
-      4. vec_distance_var  — per-block distance dispatch (categorical / l1 / l2)
-      5. compute_node_weights — per-node weight normalization, O(n_neighbors)
-      6. _precompute_offsets  — builds offset array once per simulation call
-
-    When a Rust backend is added:
-      - Introduce BACKENDS / THREAD_COUNTS parameters (see benchmark_two_point_statistics.py)
-      - Add a gstools_backend() context manager inside time_simulate / peakmem_simulate
-      - The speedup ratio Rust/Python for each case will quantify the Rust gain
+    MPS is Rust-only, so the single "core" backend runs the Rust engine (there
+    is no pure-Python MPS backend to compare against).
     """
 
-    # MPS simulations are O(N_sg × N_scan × n_neighbors) in pure Python.
+    # Repeat each Rust-backed simulation three times for a stable median.
     # repeat=3 limits total measurement time while still giving a stable median.
     # Override with ASV's --repeat flag when higher resolution is needed.
     number = 1
@@ -317,7 +280,7 @@ class DirectSamplingBenchmarks:
     # Allow up to 5 minutes per case; the large categorical case can be slow.
     timeout = 300
 
-    BACKENDS = ("python", "core")
+    BACKENDS = ("core",)
 
     params = [DS_CASES, BACKENDS]
     param_names = ["case", "backend"]
@@ -355,16 +318,14 @@ class DirectSamplingBenchmarks:
         _check_mps_available()
         import gstools.config as _cfg
 
-        if backend == "core":
-            try:
-                import gstools_core  # noqa: F401
-            except ImportError:
-                raise NotImplementedError(
-                    "gstools_core not installed; 'core' backend skipped."
-                )
-            _cfg.USE_GSTOOLS_CORE = True
-        else:
-            _cfg.USE_GSTOOLS_CORE = False
+        # MPS is Rust-only; the single "core" backend runs the Rust engine.
+        try:
+            import gstools_core  # noqa: F401
+        except ImportError:
+            raise NotImplementedError(
+                "gstools_core not installed; MPS benchmark skipped."
+            )
+        _cfg.USE_GSTOOLS_CORE = True
 
         spec = _DS_SPECS[case]
         ti = TrainingImage(
@@ -383,7 +344,9 @@ class DirectSamplingBenchmarks:
         self.seed = _DS_SEEDS[case]
 
         if spec["conditioned"]:
-            self.ds.set_condition(data[case]["cond_pos"], data[case]["cond_val"])
+            self.ds.set_condition(
+                data[case]["cond_pos"], data[case]["cond_val"]
+            )
 
     def time_simulate(self, data, case, backend):
         """Run one Direct Sampling simulation."""

@@ -1,46 +1,23 @@
 """Direct Sampling simulation engine.
 
 `ds_simulate` is the entry point; `_DirectSamplingEngine` holds one run's
-state (output grids, informed masks, config) explicitly — what used to be
-captured by closures inside `ds_simulate`. A current Rust backend executes the
-complete node path in one call; the Python engine retains the stateless
-`neighbors`, `scan`, and `runner` route as the compatibility fallback.
+state (output grids, conditioning masks, config) explicitly. The complete node
+path executes in the Rust engine.
 """
 
 import warnings
-from concurrent.futures import ThreadPoolExecutor
-from math import prod
 
 import numpy as np
 
 from gstools import config
-from gstools.mps.data_event import DataEvent
-from gstools.mps.neighbors import (
-    _lag_transform_matrix,
-    _precompute_offsets,
-    _reduce_to_fit,
-    _select_neighbors,
-    _transform_lags,
-    _window_bounds,
-)
-from gstools.mps.runner import _make_progress, _run_path
-from gstools.mps.scan import _scan_for_match, _ScanConfig
 
-if config._GSTOOLS_CORE_AVAIL:  # pragma: no cover
-    import gstools_core as _gstools_core
+# MPS is Rust-only: the complete engine comes from gstools.mps._core, which
+# hard-imports and version-checks gstools_core (see RUST_ONLY_MIGRATION.md).
+from gstools.mps._core import mps_simulate as _mps_simulate_gsc
+from gstools.mps.neighbors import _lag_transform_matrix, _precompute_offsets
 
-    _mps_simulate_gsc = getattr(_gstools_core, "mps_simulate", None)
-else:  # pragma: no cover
-    _mps_simulate_gsc = None
-
-# Action Plan 7 measured policy. The complete engine is the default when the
-# export is available; progress callbacks, disabled/absent cores, and older
-# cores retain the Python engine. Python precomputes optional per-node lag
-# transform matrices before the GIL-free Rust call.
-_MPS_RUST_ENGINE_ENABLED = True
-_MPS_RUST_ENGINE_FORCE = False
-# Private instrumentation hook used by the reproducibility/benchmark harness.
-# Production callers leave this as ``None``.
+# Python precomputes optional per-node lag transform matrices before the
+# GIL-free Rust call.
 _MPS_RUST_ENGINE_STATS_HOOK = None
 
 
@@ -166,7 +143,6 @@ class _DirectSamplingEngine:
         )
         self.ti_shape = np.array(training_image.shape)
         self.sim_shape = sim_shape
-        self.sim_shape_arr = np.array(sim_shape)
         self.dim = len(sim_shape)
         self.threshold = threshold
         self.scan_fraction = scan_fraction
@@ -176,29 +152,18 @@ class _DirectSamplingEngine:
         self.anis_map = anis_map
 
         self.n_k = {v.name: v.n_neighbors for v in training_image.variables}
-        self.ti_vars = {v.name: v.data for v in training_image.variables}
 
-        # Precompute flat TI arrays and C-order strides for O(1) index arithmetic
-        # in _dist_block.  Invariant: every y + lag is in-bounds by window construction,
-        # so the flat take never needs bounds checking.
-        ti_shape_tuple = tuple(int(s) for s in training_image.shape)
-        _dim = len(ti_shape_tuple)
-        self.ti_strides = {
-            v.name: np.array(
-                [prod(ti_shape_tuple[d + 1 :]) for d in range(_dim)],
-                dtype=np.intp,
+        self.ti_matrix_f64 = np.ascontiguousarray(
+            np.stack(
+                [
+                    np.asarray(v.data, dtype=np.float64).ravel()
+                    for v in training_image.variables
+                ],
+                axis=0,
             )
-            for v in training_image.variables
-        }
-        self.ti_flat = {
-            v.name: np.ascontiguousarray(v.data).ravel()
-            for v in training_image.variables
-        }
+        )
 
         self.sg = {v: np.full(sim_shape, np.nan) for v in self.variables}
-        self.informed = {
-            v: np.zeros(sim_shape, dtype=bool) for v in self.variables
-        }
         self.is_cond = {
             v: np.zeros(sim_shape, dtype=bool) for v in self.variables
         }
@@ -207,7 +172,6 @@ class _DirectSamplingEngine:
                 for v, val in vd.items():
                     self.sg[v][idx] = val
                     self.is_cond[v][idx] = True
-                    self.informed[v][idx] = True
 
         self.max_radius_per_var = {
             v.name: v.max_radius for v in training_image.variables
@@ -220,7 +184,6 @@ class _DirectSamplingEngine:
             else None
         )
         self.offset_arr = _precompute_offsets(sim_shape, max_off_int)
-        self.max_radius = global_max_radius
 
         # Node path: every node with >= 1 uninformed variable.  Fully-conditioned
         # nodes need no simulation and are excluded (they stay -1 / always available).
@@ -232,369 +195,30 @@ class _DirectSamplingEngine:
         self.u_start = rng_nodes.uniform(size=n_nodes)
         self.u_fallback = rng_nodes.uniform(size=(n_nodes, self.dim))
 
-        sg_size = int(np.prod(sim_shape))
-        path_flat = (
-            np.ravel_multi_index(self.path.T, sim_shape)
-            if len(self.path)
-            else np.empty(0, dtype=np.intp)
-        )
-        # Per-variable position maps over the node path.  A path node carries its
-        # node-path index; a cell conditioned in variable v is set to -1 in vmap[v]
-        # (always available for v, like univariate conditioning) — essential for a
-        # partially-conditioned node, whose known value must not be gated by path
-        # order.  Cells absent from the path are already -1.
-        self.vmap = {}
-        for v in self.variables:
-            m = np.full(sg_size, -1, dtype=np.intp)
-            m[path_flat] = np.arange(len(path_flat))
-            m[np.flatnonzero(self.is_cond[v].reshape(-1))] = -1
-            self.vmap[v] = m
-
-        # Masked-TI support: NaN cells are undefined. When present, distances
-        # exclude them per-position and fallback draws are restricted to cells that
-        # are defined in *every* variable (so a joint draw never yields NaN). The
-        # ``ti_has_nan`` gate keeps the fully-defined path byte-identical.
-        self.ti_has_nan = training_image.has_nan
-        if self.ti_has_nan:
+        # A joint fallback draw must have all variables defined.
+        if training_image.has_nan:
             finite_all = np.ones(self.ti_shape, dtype=bool)
-            for a in self.ti_vars.values():
-                if np.issubdtype(a.dtype, np.floating):
-                    finite_all &= ~np.isnan(a)
-            self.finite_flat = np.flatnonzero(finite_all.reshape(-1))
-            if self.finite_flat.size == 0:
+            for variable in training_image.variables:
+                data = variable.data
+                if np.issubdtype(data.dtype, np.floating):
+                    finite_all &= ~np.isnan(data)
+            if not finite_all.any():
                 raise ValueError(
                     "TrainingImage has no cell defined in all variables (every "
                     "cell is NaN in at least one variable); cannot simulate."
                 )
-        else:
-            self.finite_flat = None
 
-        ti_flat_f64 = {
-            v.name: np.asarray(self.ti_flat[v.name], dtype=np.float64)
-            for v in training_image.variables
-        }
-        var_index = {
-            variable.name: index
-            for index, variable in enumerate(training_image.variables)
-        }
-        ti_matrix_f64 = np.ascontiguousarray(
-            np.stack(
-                [ti_flat_f64[v.name] for v in training_image.variables],
-                axis=0,
-            )
-        )
-        var_categorical = {
+        self.var_categorical = {
             v.name: v.categorical for v in training_image.variables
         }
-        var_has_nan = {v.name: v.has_nan for v in training_image.variables}
-        var_p_norm = {v.name: v.p_norm for v in training_image.variables}
-        var_d_max = {v.name: v.d_max for v in training_image.variables}
-        var_variation_p = {
+        self.var_has_nan = {
+            v.name: v.has_nan for v in training_image.variables
+        }
+        self.var_p_norm = {v.name: v.p_norm for v in training_image.variables}
+        self.var_d_max = {v.name: v.d_max for v in training_image.variables}
+        self.var_variation_p = {
             v.name: v.variation_p_norm for v in training_image.variables
         }
-
-        self._scan_config = _ScanConfig(
-            variables=self.variables,
-            weights=self.weights,
-            ti_vars=self.ti_vars,
-            ti_flat=self.ti_flat,
-            ti_strides=self.ti_strides,
-            ti_shape=self.ti_shape,
-            scan_fraction=self.scan_fraction,
-            threshold=self.threshold,
-            cond_weight=self.cond_weight,
-            distance_power=self.training_image.distance_power,
-            vec_distance_var=self.training_image.vec_distance_var,
-            ti_has_nan=self.ti_has_nan,
-            var_has_nan=var_has_nan,
-            var_categorical=var_categorical,
-            var_p_norm=var_p_norm,
-            var_d_max=var_d_max,
-            ti_flat_f64=ti_flat_f64,
-            ti_matrix_f64=ti_matrix_f64,
-            var_index=var_index,
-            var_variation_p=var_variation_p,
-        )
-
-    def _rand_fallback(self, targets, u_fb_i):
-        # Single random TI cell supplies the whole node-vector (preserves the
-        # joint relationship); never an independent draw per variable. On a
-        # masked TI the draw is restricted to cells defined in every variable.
-        if self.ti_has_nan:
-            flat = self.finite_flat[int(u_fb_i[0] * len(self.finite_flat))]
-            cell = tuple(
-                int(c) for c in np.unravel_index(flat, tuple(self.ti_shape))
-            )
-        else:
-            cell = tuple(
-                int(u_fb_i[d] * s) for d, s in enumerate(self.ti_shape)
-            )
-        return {v: float(self.ti_vars[v][cell]) for v in targets}
-
-    # ------------------------------------------------------------------
-    # Simulation pipeline helpers (called only from _simulate_node)
-    # ------------------------------------------------------------------
-
-    def _gather_neighborhood(self, x_i, x_i_t, curr_idx):
-        """Seam 1 — build per-variable data-event arrays for node ``x_i``.
-
-        For each variable, selects the ``n_k[var]`` closest already-informed
-        neighbours, converts them to lag vectors, and prepends the collocated
-        ``h=0`` row when the variable is already known at this node (only
-        possible via conditioning).
-
-        Parameters
-        ----------
-        x_i : numpy.ndarray, shape (dim,)
-            Integer grid coordinates of the current node.
-        x_i_t : tuple
-            ``tuple(int(c) for c in x_i)`` — precomputed for indexing.
-        curr_idx : int
-            Path index of the current node (neighbours must have index < this).
-
-        Returns
-        -------
-        events : dict[str, DataEvent]
-            One per variable, ``lags_ti`` unset (``None``).
-        """
-        events = {}
-        for var in self.variables:
-            # Parallel path: the DAG pass already computed the identical
-            # _select_neighbors result (same call, informed=None, all earlier-
-            # path deps guaranteed informed by DAG ordering). Reuse those coords
-            # instead of recomputing.  Serial path (cache absent): compute normally.
-            if self._neighbor_cache is not None:
-                coords = self._neighbor_cache[curr_idx][var]
-            else:
-                coords, _ = _select_neighbors(
-                    x_i,
-                    self.offset_arr,
-                    self.sim_shape_arr,
-                    self.sim_shape,
-                    self.vmap[var],
-                    curr_idx,
-                    self.informed[var],
-                    self.max_radius_per_var[var],
-                    self.n_k[var],
-                )
-            if len(coords):
-                lv = (coords - x_i).astype(np.float64)
-                dv = self.sg[var][tuple(coords.T)]
-                cv = self.is_cond[var][tuple(coords.T)]
-                lnv = np.linalg.norm(lv, axis=1)
-            else:
-                lv = np.empty((0, self.dim), dtype=np.float64)
-                dv = np.empty(0)
-                cv = np.empty(0, dtype=bool)
-                lnv = np.empty(0)
-            # collocated h=0 — a variable known at this very node (only possible
-            # via conditioning, as the node's unknown variables are what we fill).
-            # Never added for a target variable (uninformed here by definition).
-            if self.informed[var][x_i_t]:
-                lv = np.concatenate([np.zeros((1, self.dim)), lv], axis=0)
-                dv = np.concatenate([[self.sg[var][x_i_t]], dv])
-                cv = np.concatenate([[self.is_cond[var][x_i_t]], cv])
-                lnv = np.concatenate([[0.0], lnv])
-            events[var] = DataEvent(lv, dv, cv, lnv)
-        return events
-
-    def _transform_and_reduce_lags(self, x_i, events):
-        """Seam 2 — map SG lags into TI frame (non-stationary) or copy (stationary).
-
-        When ``rotation_map`` or ``anis_map`` is set, applies the per-node
-        isometrization matrix, deduplicates collapsed lags
-        (:func:`_transform_lags`), and globally drops lags that cannot fit the
-        TI (:func:`_reduce_to_fit`, Mariethoz2010 para [43]).
-
-        The stationary fast-path sets ``lags_ti`` to a **copy** of ``lags_sg``
-        so partial-mode truncation in seam 3 can never alias back into the SG
-        lags.
-
-        Parameters
-        ----------
-        x_i : numpy.ndarray, shape (dim,)
-            Current node coordinates (used to index per-node maps).
-        events : dict[str, DataEvent]
-            Output of :meth:`_gather_neighborhood` (``lags_ti is None``).
-
-        Returns
-        -------
-        dict[str, DataEvent]
-            New events with ``lags_ti`` populated and SG arrays possibly trimmed
-            (non-stationary dedup / reduce-to-fit).
-        """
-        if self.rotation_map is not None or self.anis_map is not None:
-            M = _lag_transform_matrix(
-                self.dim, self.rotation_map, self.anis_map, x_i
-            )
-            out = {}
-            for v in self.variables:
-                de = events[v]
-                lv_ti, lags_sg, values, cond_mask, lag_norms = _transform_lags(
-                    de.lags_sg,
-                    M,
-                    de.lags_sg,
-                    de.values,
-                    de.cond_mask,
-                    de.lag_norms,
-                )
-                # M10 para [43]: globally reduce an over-large transformed event
-                # to fit the TI, dropping the most-outside node first (by TI
-                # extent, regardless of SG rank). One reduction per simulation
-                # node, independent of the TI scan position.
-                lv_ti, lags_sg, values, cond_mask, lag_norms = _reduce_to_fit(
-                    lv_ti, self.ti_shape, lags_sg, values, cond_mask, lag_norms
-                )
-                out[v] = DataEvent(
-                    lags_sg, values, cond_mask, lag_norms, lv_ti
-                )
-            return out
-        # Stationary: TI frame == SG frame. Copy so truncation stays independent.
-        return {
-            v: events[v].with_lags_ti(events[v].lags_sg.copy())
-            for v in self.variables
-        }
-
-    def _intersect_search_windows(self, events):
-        """Seam 3 — compute and intersect per-variable TI search windows.
-
-        Calls :func:`_window_bounds` for every variable, truncates the event to
-        the fitting lag count in partial mode, and intersects the per-variable
-        windows into a single ``(win_lo, win_hi)`` pair.
-
-        Returns ``win_lo is None`` (sentinel) when any single-variable window is
-        infeasible or the intersection is empty; the caller draws a random
-        fallback.
-
-        Parameters
-        ----------
-        events : dict[str, DataEvent]
-            TI-frame events from :meth:`_transform_and_reduce_lags`.
-
-        Returns
-        -------
-        win_lo : numpy.ndarray or None
-        win_hi : numpy.ndarray or None
-        events : dict[str, DataEvent]
-            Possibly truncated (only when ``win_lo`` is not ``None``).
-        """
-        win_lo = np.zeros(self.dim, dtype=int)
-        win_hi = self.ti_shape - 1
-        for var in self.variables:
-            de = events[var]
-            lo, hi, valid_count = _window_bounds(
-                de.lags_ti, self.ti_shape, self.boundary
-            )
-            if valid_count == -1:
-                # Infeasible: no subset of this variable's lags fits the TI.
-                return None, None, events
-            if valid_count < len(de):
-                # Truncate TI-frame and SG arrays to the same keep count.
-                events[var] = de.truncate(valid_count)
-            win_lo = np.maximum(win_lo, lo)
-            win_hi = np.minimum(win_hi, hi)
-
-        if np.any(win_lo > win_hi):
-            # Infeasible: the per-variable windows do not intersect.
-            return None, None, events
-
-        return win_lo, win_hi, events
-
-    def _scan_and_retrieve(
-        self, win_lo, win_hi, events, targets, u_start_i, u_fallback_i
-    ):
-        """Seam 4 — scan the TI window and copy the matched cell to targets.
-
-        See module docstring for the scan semantics.  Unpacks ``events`` into
-        the per-variable dicts the stateless :func:`_scan_for_match` kernel
-        expects (its signature is unchanged).
-
-        Parameters
-        ----------
-        win_lo, win_hi : numpy.ndarray, shape (dim,)
-        events : dict[str, DataEvent]
-            TI-frame events after truncation.
-        targets : list[str]
-        u_start_i : float
-        u_fallback_i : numpy.ndarray, shape (dim,)
-
-        Returns
-        -------
-        dict[str, float]
-        """
-        # Integer lags per variable (already exact integers as float64, incl.
-        # the 0.0 h=0 row); reused for the scan and the mean-shift gather.
-        int_lags = {
-            v: events[v].lags_ti.astype(int)
-            for v in self.variables
-            if len(events[v])
-        }
-        de_v = {v: events[v].values for v in self.variables}
-        cm_v = {v: events[v].cond_mask for v in self.variables}
-        ln_v = {v: events[v].lag_norms for v in self.variables}
-        y = _scan_for_match(
-            win_lo,
-            tuple(win_hi - win_lo + 1),
-            int_lags,
-            de_v,
-            cm_v,
-            ln_v,
-            u_start_i,
-            targets,
-            self._scan_config,
-        )
-        if y is None:
-            # No candidate in the window was defined (masked TI): treat as the
-            # empty-neighbourhood case and draw a defined TI cell.
-            return self._rand_fallback(targets, u_fallback_i)
-        y_t = tuple(int(c) for c in y)
-        result = {}
-        for v in targets:
-            ti_val = float(self.ti_vars[v][y_t])
-            il = int_lags.get(v)
-            de_ti_v = (
-                self.ti_vars[v][tuple((y + il).T)]
-                if il is not None
-                else np.empty(0)
-            )
-            result[v] = self.training_image.adjust_value(
-                ti_val, de_v[v], de_ti_v, var=v
-            )
-        return result
-
-    def _simulate_node(self, curr_idx, x_i, u_start_i, u_fallback_i):
-        """Simulate one node: a short pipeline of four named steps."""
-        x_i_t = tuple(int(c) for c in x_i)
-        targets = [v for v in self.variables if np.isnan(self.sg[v][x_i_t])]
-
-        # Step 1: collect informed neighbours and build per-variable data events.
-        events = self._gather_neighborhood(x_i, x_i_t, curr_idx)
-
-        # Step 2: map SG lags into TI frame (stationary path copies so step 3
-        # truncation never aliases back into the SG lags).
-        events = self._transform_and_reduce_lags(x_i, events)
-
-        if all(len(events[v]) == 0 for v in self.variables):
-            return self._rand_fallback(targets, u_fallback_i)
-
-        # Step 3: compute and intersect per-variable TI search windows.
-        win_lo, win_hi, events = self._intersect_search_windows(events)
-        if win_lo is None:
-            return self._rand_fallback(targets, u_fallback_i)
-
-        # Step 4: scan the TI window and paste the matched cell into targets.
-        return self._scan_and_retrieve(
-            win_lo, win_hi, events, targets, u_start_i, u_fallback_i
-        )
-
-    def _write_result(self, node, result):
-        for v, val in result.items():
-            if np.isnan(val):
-                raise ValueError(
-                    f"Simulation produced NaN for {(v, node)}. Check TI data."
-                )
-            self.sg[v][node] = val
-            self.informed[v][node] = True
 
     def _run_rust_engine(self, n_threads):
         """Run the complete node path inside one GIL-free Rust call."""
@@ -609,9 +233,9 @@ class _DirectSamplingEngine:
         metric_kinds = np.fromiter(
             (
                 0
-                if self._scan_config.var_categorical[v]
+                if self.var_categorical[v]
                 else 1
-                if self._scan_config.var_p_norm[v] is not None
+                if self.var_p_norm[v] is not None
                 else 2
                 for v in self.variables
             ),
@@ -621,10 +245,10 @@ class _DirectSamplingEngine:
         p_norm = np.fromiter(
             (
                 1.0
-                if self._scan_config.var_categorical[v]
-                else self._scan_config.var_p_norm[v]
-                if self._scan_config.var_p_norm[v] is not None
-                else self._scan_config.var_variation_p[v]
+                if self.var_categorical[v]
+                else self.var_p_norm[v]
+                if self.var_p_norm[v] is not None
+                else self.var_variation_p[v]
                 for v in self.variables
             ),
             dtype=np.float64,
@@ -655,66 +279,61 @@ class _DirectSamplingEngine:
             max_ready_width,
             used_threads,
             collapsed_lags,
-        ) = (
-            _mps_simulate_gsc(
-                self._scan_config.ti_matrix_f64,
-                np.asarray(self.ti_shape, dtype=np.int64),
-                fields,
-                conditioned,
-                np.asarray(self.sim_shape, dtype=np.int64),
-                np.asarray(self.path, dtype=np.int64),
-                lag_matrices,
-                np.asarray(self.u_start, dtype=np.float64),
-                np.asarray(self.u_fallback, dtype=np.float64),
-                np.asarray(self.offset_arr, dtype=np.int64),
-                np.fromiter(
-                    (self.n_k[v] for v in self.variables),
-                    dtype=np.int64,
-                    count=len(self.variables),
+        ) = _mps_simulate_gsc(
+            self.ti_matrix_f64,
+            np.asarray(self.ti_shape, dtype=np.int64),
+            fields,
+            conditioned,
+            np.asarray(self.sim_shape, dtype=np.int64),
+            np.asarray(self.path, dtype=np.int64),
+            lag_matrices,
+            np.asarray(self.u_start, dtype=np.float64),
+            np.asarray(self.u_fallback, dtype=np.float64),
+            np.asarray(self.offset_arr, dtype=np.int64),
+            np.fromiter(
+                (self.n_k[v] for v in self.variables),
+                dtype=np.int64,
+                count=len(self.variables),
+            ),
+            np.fromiter(
+                (
+                    np.nan
+                    if self.max_radius_per_var[v] is None
+                    else self.max_radius_per_var[v]
+                    for v in self.variables
                 ),
-                np.fromiter(
-                    (
-                        np.nan
-                        if self.max_radius_per_var[v] is None
-                        else self.max_radius_per_var[v]
-                        for v in self.variables
-                    ),
-                    dtype=np.float64,
-                    count=len(self.variables),
+                dtype=np.float64,
+                count=len(self.variables),
+            ),
+            np.fromiter(
+                (self.weights[v] for v in self.variables),
+                dtype=np.float64,
+                count=len(self.variables),
+            ),
+            metric_kinds,
+            np.fromiter(
+                (self.var_has_nan[v] for v in self.variables),
+                dtype=np.uint8,
+                count=len(self.variables),
+            ),
+            np.fromiter(
+                (
+                    1.0 if self.var_d_max[v] is None else self.var_d_max[v]
+                    for v in self.variables
                 ),
-                np.fromiter(
-                    (self.weights[v] for v in self.variables),
-                    dtype=np.float64,
-                    count=len(self.variables),
-                ),
-                metric_kinds,
-                np.fromiter(
-                    (self._scan_config.var_has_nan[v] for v in self.variables),
-                    dtype=np.uint8,
-                    count=len(self.variables),
-                ),
-                np.fromiter(
-                    (
-                        1.0
-                        if self._scan_config.var_d_max[v] is None
-                        else self._scan_config.var_d_max[v]
-                        for v in self.variables
-                    ),
-                    dtype=np.float64,
-                    count=len(self.variables),
-                ),
-                p_norm,
-                self.threshold,
-                self.scan_fraction,
-                self.training_image.distance_power,
-                self.cond_weight,
-                self.boundary == "partial",
-                n_threads,
-            )
+                dtype=np.float64,
+                count=len(self.variables),
+            ),
+            p_norm,
+            self.threshold,
+            self.scan_fraction,
+            self.training_image.distance_power,
+            self.cond_weight,
+            self.boundary == "partial",
+            n_threads,
         )
         for row, variable in enumerate(self.variables):
             self.sg[variable][...] = result[row].reshape(self.sim_shape)
-            self.informed[variable][...] = ~np.isnan(self.sg[variable])
         self._rust_engine_stats = {
             "level_count": int(level_count),
             "max_ready_width": int(max_ready_width),
@@ -743,71 +362,19 @@ class _DirectSamplingEngine:
             )
         return self.sg
 
-    def run(self, num_threads=None, progress=None):
+    def run(self, num_threads=None):
+        # The core is optional for other GSTools features but required for MPS.
+        if not config.USE_GSTOOLS_CORE:
+            raise RuntimeError(
+                "GSTools MPS is Rust-only: gstools.config.USE_GSTOOLS_CORE must "
+                "be True. It cannot be disabled for MPS (set it back to True)."
+            )
         n_threads = (
             num_threads
             if num_threads is not None
             else (config.NUM_THREADS or 1)
         )
-        # The complete Rust call cannot currently invoke a Python callback per
-        # completed node. During the transition, requesting progress therefore
-        # selects the intact Python scheduler rather than silently dropping
-        # callback events.
-        use_rust_engine = (
-            (_MPS_RUST_ENGINE_ENABLED or _MPS_RUST_ENGINE_FORCE)
-            and config.USE_GSTOOLS_CORE
-            and config._GSTOOLS_CORE_AVAIL
-            and _mps_simulate_gsc is not None
-            and not progress
-        )
-        if use_rust_engine:
-            return self._run_rust_engine(n_threads)
-        executor = (
-            ThreadPoolExecutor(max_workers=n_threads)
-            if n_threads > 1
-            else None
-        )
-        update_progress, close_progress = _make_progress(
-            progress, len(self.path), "DS"
-        )
-
-        # Parallel-only neighbour cache: the DAG build already calls
-        # _select_neighbors per node×variable; on_cache_ready is called by
-        # _run_path right after DAG build (before any node futures run) so
-        # _gather_neighborhood can skip the redundant _select_neighbors call.
-        # Serial mode (executor is None) leaves _neighbor_cache as None and
-        # _gather_neighborhood computes normally.
-        self._neighbor_cache = None
-
-        def _on_cache_ready(coord_cache):
-            self._neighbor_cache = coord_cache
-
-        try:
-            _run_path(
-                self.path,
-                self.u_start,
-                self.u_fallback,
-                lambda i, x_i, u_st, u_fb: self._simulate_node(
-                    i, x_i, u_st, u_fb
-                ),
-                self._write_result,
-                update_progress,
-                executor,
-                self.offset_arr,
-                self.vmap,
-                self.n_k,
-                self.sim_shape,
-                self.max_radius,
-                on_cache_ready=_on_cache_ready
-                if executor is not None
-                else None,
-            )
-        finally:
-            close_progress()
-            if executor is not None:
-                executor.shutdown(wait=True)
-
-        return self.sg
+        return self._run_rust_engine(n_threads)
 
 
 def ds_simulate(
@@ -823,7 +390,6 @@ def ds_simulate(
     num_threads=None,
     rotation_map=None,
     anis_map=None,
-    progress=None,
     path="random",
 ):
     """Node-wise multivariate Direct Sampling (Mariethoz2010 §3, Eq. 8).
@@ -860,8 +426,8 @@ def ds_simulate(
         ``"sequential"`` visits nodes in raster (lexicographic) order, which
         is deterministic and does not consume ``rng_path``.  An explicit
         integer array of shape ``(N, dim)`` provides a caller-supplied order
-        and must be a permutation of exactly the unknown-node set (missing
-        nodes, extra nodes, and duplicate rows all raise ``ValueError``).
+        and must include every unknown node (conditioned nodes are ignored;
+        missing unknown nodes and duplicate rows raise ``ValueError``).
         Default: ``"random"``.
     conditions : dict, optional
         ``{node_index: {variable: value}}`` conditioning data.
@@ -878,12 +444,6 @@ def ds_simulate(
     anis_map : numpy.ndarray or None, optional
         Per-node anisotropy ratios, shape matching the simulation grid.
         ``None`` → isotropic (stationary). All values must be positive.
-    progress : bool or callable or None, optional
-        Show simulation progress. ``True`` prints a plain percentage line
-        (no third-party dependency); a callable is invoked as
-        ``progress(n_done, n_total)`` once per completed node.
-        ``None``/``False`` (default) disables it.
-
     Returns
     -------
     dict
@@ -903,4 +463,4 @@ def ds_simulate(
         anis_map=anis_map,
         path=path,
     )
-    return engine.run(num_threads=num_threads, progress=progress)
+    return engine.run(num_threads=num_threads)
