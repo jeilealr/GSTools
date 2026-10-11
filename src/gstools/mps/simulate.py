@@ -363,12 +363,10 @@ class _DirectSamplingEngine:
         return self.sg
 
     def run(self, num_threads=None):
-        # The core is optional for other GSTools features but required for MPS.
-        if not config.USE_GSTOOLS_CORE:
-            raise RuntimeError(
-                "GSTools MPS is Rust-only: gstools.config.USE_GSTOOLS_CORE must "
-                "be True. It cannot be disabled for MPS (set it back to True)."
-            )
+        # GSTools-Core is the only numerical backend (Cython was dropped
+        # upstream), so there is no backend flag to check — MPS always runs
+        # through the Rust engine. The required core version/exports are
+        # enforced at import time by gstools.mps._core.
         n_threads = (
             num_threads
             if num_threads is not None

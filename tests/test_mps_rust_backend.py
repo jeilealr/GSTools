@@ -18,7 +18,6 @@ from _mps_distance_ref import (
     vec_variation_dist,
 )
 
-import gstools as gs
 from gstools.mps import DirectSampling, MPSModel, TrainingImage
 from gstools.mps import simulate as _simulate
 from gstools.mps.training_image import Variable
@@ -27,11 +26,9 @@ gstools_core = pytest.importorskip("gstools_core")
 
 
 @pytest.fixture(autouse=True)
-def _restore_core_flag():
-    original = gs.config.USE_GSTOOLS_CORE
+def _restore_mps_engine_state():
     original_hook = _simulate._MPS_RUST_ENGINE_STATS_HOOK
     yield
-    gs.config.USE_GSTOOLS_CORE = original
     _simulate._MPS_RUST_ENGINE_STATS_HOOK = original_hook
 
 
@@ -209,14 +206,6 @@ def test_progress_callback_is_not_in_api():
     assert (
         "progress" not in inspect.signature(_simulate.ds_simulate).parameters
     )
-
-
-def test_core_disabled_is_rejected_for_mps():
-    ti = TrainingImage(_training_data(), categorical=True)
-    ds = DirectSampling(MPSModel(ti, scan_fraction=0.3), seed=42)
-    gs.config.USE_GSTOOLS_CORE = False
-    with pytest.raises(RuntimeError, match="Rust-only"):
-        ds(_positions((8, 8)), store=False)
 
 
 def test_stats_hook_reports_rust_engine(monkeypatch):

@@ -6,13 +6,12 @@ All notable changes to **GSTools** will be documented in this file.
 
 ### Changes
 
+- drop Cython backend and use Rust as the only backend [#420](https://github.com/GeoStat-Framework/GSTools/pull/420)
 - require GSTools-Core >= 1.4.0 for Multiple Point Statistics Direct Sampling;
-  the Rust kernels are now the only MPS numerical backend
+  the Rust kernels are the MPS numerical backend
   - the default Rust call owns neighbour selection, distance scanning, value
     retrieval, simulation-grid writes, and deterministic node-level Rayon scheduling
   - repeated runs are bit-identical across Rust thread counts for fixed seeds
-  - `gstools.config.USE_GSTOOLS_CORE=False` raises for MPS simulations; the
-    setting still selects the Cython backend for SRF and kriging
   - remove the Python node scheduler and per-node progress callback; all MPS
     simulations now run through the complete Rust engine
   - exact categorical golden fields should be generated with the Rust engine;
@@ -22,6 +21,9 @@ All notable changes to **GSTools** will be documented in this file.
   - instead of spatial rules, as before, decision trees are a more flexible approach
   - each node of the binary tree is a decision based on the values of the SRF
 - replace pylint, black, and isort with ruff [#391](https://github.com/GeoStat-Framework/GSTools/pull/391)
+- add collocated cokriging [#396](https://github.com/GeoStat-Framework/GSTools/pull/396)
+  - new `SimpleCollocated` (SCCK) and `IntrinsicCollocated` (ICCK) classes, subclassing `CollocatedCokriging`
+  - uses a `Correlogram` to relate the secondary variable to the primary at the estimation location
 - add comprehensive benchmark suite for two-point statistics workflows
   - covers variogram estimation, kriging, and random field generation across Cython and Rust backends
   - includes OpenMP thread-count scaling analysis (1/2/4/8 threads)

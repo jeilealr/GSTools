@@ -19,6 +19,7 @@ Subpackages
     field
     variogram
     krige
+    cokriging
     random
     tools
     transform
@@ -47,6 +48,19 @@ Swiss-Army-Knife for Kriging. For short cut classes see: :any:`gstools.krige`
 
 .. autosummary::
    Krige
+
+Cokriging
+^^^^^^^^^
+Collocated cokriging methods for multivariate estimation
+
+.. currentmodule:: gstools.cokriging
+
+.. autosummary::
+   CollocatedCokriging
+   Correlogram
+   SimpleCollocated
+   IntrinsicCollocated
+   MarkovModel1
 
 Spatial Random Field
 ^^^^^^^^^^^^^^^^^^^^
@@ -146,16 +160,24 @@ Misc
 """
 
 # Hooray!
-from gstools import (
+from gstools import (  # noqa: I001
     config,
     covmodel,
     field,
     krige,
+    cokriging,
     normalizer,
     random,
     tools,
     transform,
     variogram,
+)
+from gstools.cokriging import (
+    CollocatedCokriging,
+    Correlogram,
+    IntrinsicCollocated,
+    MarkovModel1,
+    SimpleCollocated,
 )
 from gstools.covmodel import (
     Circular,
@@ -211,7 +233,15 @@ except ModuleNotFoundError:  # pragma: no cover
     __version__ = "0.0.0.dev0"
 
 __all__ = ["__version__"]
-__all__ += ["covmodel", "field", "variogram", "krige", "random", "tools"]
+__all__ += [
+    "covmodel",
+    "field",
+    "variogram",
+    "krige",
+    "cokriging",
+    "random",
+    "tools",
+]
 __all__ += ["transform", "normalizer", "config", "mps"]
 __all__ += [
     "CovModel",
@@ -246,6 +276,11 @@ __all__ += [
 
 __all__ += [
     "Krige",
+    "CollocatedCokriging",
+    "Correlogram",
+    "SimpleCollocated",
+    "IntrinsicCollocated",
+    "MarkovModel1",
     "SRF",
     "CondSRF",
     "PGS",
