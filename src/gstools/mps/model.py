@@ -2,7 +2,10 @@
 
 import warnings
 
+import numpy as np
+
 from gstools.mps.training_image import TrainingImage
+from gstools.tools.geometric import no_of_angles
 
 __all__ = ["MPSModel"]
 
@@ -29,16 +32,68 @@ def _validate_scan_fraction(value):
 
 
 def _validate_threshold(value):
-    """Validate threshold >= 0, warn if > 1; return float or raise ValueError."""
-    if float(value) < 0:
+    """Validate threshold: finite and >= 0, warn if > 1; return float.
+
+    NaN/inf are rejected up front (a NaN threshold would otherwise slip past
+    the ``< 0`` / ``> 1`` comparisons; cf. GeoStat-Framework/GSTools#416).
+    """
+    v = float(value)
+    if not np.isfinite(v):
+        raise ValueError(f"MPSModel: threshold must be finite, got {value!r}")
+    if v < 0:
         raise ValueError(f"MPSModel: threshold must be >= 0, got {value!r}")
-    if float(value) > 1.0:
+    if v > 1.0:
         warnings.warn(
             "MPSModel: threshold > 1.0 guarantees the first candidate is always accepted.",
             UserWarning,
             stacklevel=3,
         )
-    return float(value)
+    return v
+
+
+def _validate_rotation(spec, dim):
+    """Validate a grid-independent rotation spec.
+
+    Grid-dependent shape resolution happens at call time in
+    :func:`gstools.mps.nonstationary.resolve_spec`; here we only reject what is
+    knowable without the grid: rotation on a 1-D training image (no angles),
+    and non-finite scalar/array values. Callables are stored unvalidated and
+    checked when resolved.
+    """
+    if spec is None:
+        return None
+    if no_of_angles(dim) == 0:
+        raise ValueError(
+            f"MPSModel: rotation is undefined for a {dim}-D training image "
+            "(1-D has no rotation angles)."
+        )
+    if callable(spec):
+        return spec
+    arr = np.asarray(spec, dtype=np.float64)
+    if not np.all(np.isfinite(arr)):
+        raise ValueError("MPSModel: all rotation values must be finite.")
+    return arr
+
+
+def _validate_scale(spec, dim):
+    """Validate a grid-independent scale spec (finite and strictly positive).
+
+    Supported in every dimension (uniform scale dilates all axes). Callables
+    are stored unvalidated and checked when resolved.
+    """
+    if spec is None:
+        return None
+    if callable(spec):
+        return spec
+    arr = np.asarray(spec, dtype=np.float64)
+    if not np.all(np.isfinite(arr)):
+        raise ValueError("MPSModel: all scale values must be finite.")
+    if not np.all(arr > 0):
+        raise ValueError(
+            "MPSModel: all scale values must be > 0 "
+            f"(minimum found: {float(np.min(arr))!r})."
+        )
+    return arr
 
 
 class MPSModel:
@@ -61,6 +116,15 @@ class MPSModel:
         Weight multiplier for conditioning nodes in distance. Default: 1.0.
     boundary : :class:`str`, optional
         Search-window strategy: ``"strict"`` (default) or ``"partial"``.
+    rotation : scalar, array-like, or callable, optional
+        Grid-independent non-stationary rotation spec (Tait-Bryan angles;
+        ``no_of_angles(dim)`` components). Resolved per node at call time by
+        :func:`gstools.mps.nonstationary.resolve_spec`. Undefined in 1-D.
+        ``None`` → no rotation. Default: ``None``.
+    scale : scalar, array-like, or callable, optional
+        Grid-independent non-stationary scale spec (``dim`` components; a
+        scalar dilates all axes). Must be strictly positive. Resolved per node
+        at call time. ``None`` → no scaling. Default: ``None``.
     """
 
     def __init__(
@@ -70,6 +134,8 @@ class MPSModel:
         threshold=0.0,
         cond_weight=1.0,
         boundary="strict",
+        rotation=None,
+        scale=None,
     ):
         if not isinstance(ti, TrainingImage):
             raise TypeError(
@@ -80,6 +146,9 @@ class MPSModel:
         self._threshold = _validate_threshold(threshold)
         self._cond_weight = float(cond_weight)
         self._boundary = _validate_boundary(boundary)
+        dim = len(ti.shape)
+        self._rotation = _validate_rotation(rotation, dim)
+        self._scale = _validate_scale(scale, dim)
 
     @property
     def ti(self):
@@ -121,6 +190,24 @@ class MPSModel:
     @boundary.setter
     def boundary(self, value):
         self._boundary = _validate_boundary(value)
+
+    @property
+    def rotation(self):
+        """scalar, array-like, callable, or None: non-stationary rotation spec."""
+        return self._rotation
+
+    @rotation.setter
+    def rotation(self, value):
+        self._rotation = _validate_rotation(value, len(self._ti.shape))
+
+    @property
+    def scale(self):
+        """scalar, array-like, callable, or None: non-stationary scale spec."""
+        return self._scale
+
+    @scale.setter
+    def scale(self, value):
+        self._scale = _validate_scale(value, len(self._ti.shape))
 
     def __repr__(self):
         args = [repr(self._ti)]
