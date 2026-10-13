@@ -11,11 +11,8 @@ Usage:
     asv preview
     asv compare main~1 main
 
-Backend speedup should be interpreted as:
-    speedup = cython_fallback_time / rust_core_time
-
-Values greater than 1.0 mean the Rust backend is faster on the same machine
-for the same benchmark, case, commit, and thread count.
+Benchmarks run on the GSTools-Core (Rust) backend and track performance over
+commits and thread counts.
 
 By default the suite uses one GSTools thread. For local OpenMP scaling
 experiments, set GSTOOLS_BENCHMARK_THREADS before ASV discovers the
@@ -29,10 +26,15 @@ from __future__ import annotations
 import contextlib
 import os
 
-import gstools as gs
 import numpy as np
 
-AVAILABLE_BACKENDS = ("cython_fallback", "rust_core")
+import gstools as gs
+
+# GSTools-Core (Rust) is the only numerical backend. The single-entry backend
+# axis is kept deliberately: it preserves the ASV result shape (so previously
+# recorded results stay comparable) and leaves room to add another backend
+# later without reshaping the benchmark classes.
+AVAILABLE_BACKENDS = ("rust_core",)
 
 
 def _configured_backends():
@@ -67,7 +69,13 @@ def _configured_thread_counts():
             value = item[len("threads_") :]
         else:
             value = item
-        thread_counts.append(int(value))
+        count = int(value)
+        if count < 1:
+            raise ValueError(
+                "GSTOOLS_BENCHMARK_THREADS must contain positive thread "
+                f"counts, got {count!r}"
+            )
+        thread_counts.append(count)
     if not thread_counts:
         raise ValueError("GSTOOLS_BENCHMARK_THREADS did not define threads")
     return tuple(thread_counts)
@@ -89,39 +97,18 @@ FIELD_CASES = (
 
 
 @contextlib.contextmanager
-def gstools_backend(use_core, num_threads):
-    """Temporarily select the GSTools backend and thread count."""
-    previous = (
-        gs.config._GSTOOLS_CORE_AVAIL,
-        gs.config.USE_GSTOOLS_CORE,
-        gs.config.NUM_THREADS,
-    )
+def gstools_backend(num_threads):
+    """Temporarily set the thread count.
+
+    GSTools-Core (Rust) is the only numerical backend, so there is no backend
+    to select — only the thread count varies.
+    """
+    previous = gs.config.NUM_THREADS
     try:
-        if use_core:
-            if not previous[0]:
-                raise NotImplementedError("gstools_core is not available")
-            gs.config._GSTOOLS_CORE_AVAIL = True
-            gs.config.USE_GSTOOLS_CORE = True
-        else:
-            gs.config._GSTOOLS_CORE_AVAIL = False
-            gs.config.USE_GSTOOLS_CORE = False
         gs.config.NUM_THREADS = num_threads
         yield
     finally:
-        (
-            gs.config._GSTOOLS_CORE_AVAIL,
-            gs.config.USE_GSTOOLS_CORE,
-            gs.config.NUM_THREADS,
-        ) = previous
-
-
-def _use_core(backend):
-    """Map a benchmark backend label to the GSTools core flag."""
-    if backend == "rust_core":
-        return True
-    if backend == "cython_fallback":
-        return False
-    raise ValueError(f"Unknown backend: {backend}")
+        gs.config.NUM_THREADS = previous
 
 
 def _random_points(seed, count, scale):
@@ -156,13 +143,20 @@ def _make_krige_data(seed, cond_count, target_count, scale=50.0):
     return (cond_x, cond_y), cond_val, target_pos
 
 
-def _check_backend_available(backend):
-    """Skip Rust benchmark rows when ``gstools_core`` is unavailable."""
-    if backend == "rust_core" and not gs.config._GSTOOLS_CORE_AVAIL:
-        raise NotImplementedError("gstools_core is not available")
+class _TwoPointBenchmark:
+    """Shared ASV timing attributes for the two-point benchmark classes.
+
+    ``number``/``repeat`` are benchmark attributes (ASV ignores them in
+    ``asv.conf.json``), so this is the single place to tune timing resolution
+    for all families. ASV only collects classes with ``time_*``/``peakmem_*``
+    methods, so this base is not discovered as a benchmark itself.
+    """
+
+    number = 1  # one inner call per sample
+    repeat = 5  # repeats per case (kept modest to keep CI runtime down)
 
 
-class VariogramBenchmarks:
+class VariogramBenchmarks(_TwoPointBenchmark):
     """Measure variogram estimation cases for each backend, case, and thread count."""
 
     params = [BACKENDS, VARIOGRAM_CASES, THREAD_COUNTS]
@@ -176,48 +170,34 @@ class VariogramBenchmarks:
             "sampled_15000_to_4500": _make_variogram_data(20220503, 15000),
         }
 
-    def setup(self, data, backend, case, threads):
-        """Skip backend rows that cannot run in the current environment."""
-        _check_backend_available(backend)
+    def _run_variogram(self, data, backend, case, threads):
+        """Run one variogram estimation case with the selected backend."""
+        pos, field, bins = data[case]
+        kwargs = {}
+        if case == "sampled_5000_to_1500":
+            kwargs = {"sampling_size": 1500, "sampling_seed": 20220504}
+        if case == "sampled_15000_to_4500":
+            kwargs = {"sampling_size": 4500, "sampling_seed": 20220505}
+        with gstools_backend(threads):
+            gs.vario_estimate(
+                pos,
+                field,
+                bins,
+                mesh_type="unstructured",
+                return_counts=True,
+                **kwargs,
+            )
 
     def time_variogram_estimate(self, data, backend, case, threads):
-        """Run one variogram estimation case."""
-        pos, field, bins = data[case]
-        kwargs = {}
-        if case == "sampled_5000_to_1500":
-            kwargs = {"sampling_size": 1500, "sampling_seed": 20220504}
-        if case == "sampled_15000_to_4500":
-            kwargs = {"sampling_size": 4500, "sampling_seed": 20220505}
-        with gstools_backend(_use_core(backend), threads):
-            gs.vario_estimate(
-                pos,
-                field,
-                bins,
-                mesh_type="unstructured",
-                return_counts=True,
-                **kwargs,
-            )
+        """Measure runtime of one variogram estimation case."""
+        self._run_variogram(data, backend, case, threads)
 
     def peakmem_variogram_estimate(self, data, backend, case, threads):
-        """Measure peak memory for variogram estimation case."""
-        pos, field, bins = data[case]
-        kwargs = {}
-        if case == "sampled_5000_to_1500":
-            kwargs = {"sampling_size": 1500, "sampling_seed": 20220504}
-        if case == "sampled_15000_to_4500":
-            kwargs = {"sampling_size": 4500, "sampling_seed": 20220505}
-        with gstools_backend(_use_core(backend), threads):
-            gs.vario_estimate(
-                pos,
-                field,
-                bins,
-                mesh_type="unstructured",
-                return_counts=True,
-                **kwargs,
-            )
+        """Measure peak memory of one variogram estimation case."""
+        self._run_variogram(data, backend, case, threads)
 
 
-class KrigingBenchmarks:
+class KrigingBenchmarks(_TwoPointBenchmark):
     """Measure global kriging cases for each backend, case, and thread count."""
 
     params = [BACKENDS, KRIGE_CASES, THREAD_COUNTS]
@@ -232,49 +212,43 @@ class KrigingBenchmarks:
         }
 
     def setup(self, data, backend, case, threads):
-        """Skip backend rows that cannot run in the current environment."""
-        _check_backend_available(backend)
+        """Build the model and ``Krige`` instance outside the timed method.
+
+        Estimator construction (and the kriging-matrix solve it triggers on
+        first use) is not what we want to measure here, so it happens in
+        ``setup``; the ``time_*``/``peakmem_*`` methods then measure only the
+        kriging evaluation at the target points.
+        """
+        cond_pos, cond_val, self._target_pos = data[case]
+        model = gs.Exponential(dim=2, var=1.5, len_scale=12.0, nugget=0.05)
+        self._krige = gs.Krige(
+            model,
+            cond_pos,
+            cond_val,
+            exact=False,
+            cond_err=0.05,
+        )
+
+    def _run_krige(self, threads):
+        """Evaluate the pre-built kriging object (the timed work)."""
+        with gstools_backend(threads):
+            self._krige(
+                self._target_pos,
+                mesh_type="unstructured",
+                return_var=True,
+                store=False,
+            )
 
     def time_global_krige(self, data, backend, case, threads):
-        """Run one global kriging case."""
-        cond_pos, cond_val, target_pos = data[case]
-        model = gs.Exponential(dim=2, var=1.5, len_scale=12.0, nugget=0.05)
-        krige = gs.Krige(
-            model,
-            cond_pos,
-            cond_val,
-            exact=False,
-            cond_err=0.05,
-        )
-        with gstools_backend(_use_core(backend), threads):
-            krige(
-                target_pos,
-                mesh_type="unstructured",
-                return_var=True,
-                store=False,
-            )
+        """Measure runtime of evaluating one global kriging case."""
+        self._run_krige(threads)
 
     def peakmem_global_krige(self, data, backend, case, threads):
-        """Measure peak memory for global kriging case."""
-        cond_pos, cond_val, target_pos = data[case]
-        model = gs.Exponential(dim=2, var=1.5, len_scale=12.0, nugget=0.05)
-        krige = gs.Krige(
-            model,
-            cond_pos,
-            cond_val,
-            exact=False,
-            cond_err=0.05,
-        )
-        with gstools_backend(_use_core(backend), threads):
-            krige(
-                target_pos,
-                mesh_type="unstructured",
-                return_var=True,
-                store=False,
-            )
+        """Measure peak memory of evaluating one global kriging case."""
+        self._run_krige(threads)
 
 
-class RandomFieldBenchmarks:
+class RandomFieldBenchmarks(_TwoPointBenchmark):
     """Measure SRF and CondSRF generation cases for each backend, case, and thread count."""
 
     params = [BACKENDS, FIELD_CASES, THREAD_COUNTS]
@@ -291,37 +265,27 @@ class RandomFieldBenchmarks:
             "condsrf": _make_krige_data(20220510, 40, 1000),
         }
 
-    def setup(self, data, backend, case, threads):
-        """Skip backend rows that cannot run in the current environment."""
-        _check_backend_available(backend)
+    def _run_field(self, data, backend, case, threads):
+        """Run one SRF or CondSRF case by label with the selected backend."""
+        with gstools_backend(threads):
+            if case == "srf_unstructured_randmeth":
+                self._run_srf_unstructured(data)
+            elif case == "srf_structured_randmeth":
+                self._run_srf_structured(data)
+            elif case == "srf_structured_fourier":
+                self._run_srf_fourier(data)
+            elif case == "condsrf_unstructured":
+                self._run_condsrf(data)
+            else:
+                raise ValueError(f"Unknown field benchmark case: {case}")
 
     def time_field_generation(self, data, backend, case, threads):
-        """Run one SRF or CondSRF case by label."""
-        with gstools_backend(_use_core(backend), threads):
-            if case == "srf_unstructured_randmeth":
-                self._run_srf_unstructured(data)
-            elif case == "srf_structured_randmeth":
-                self._run_srf_structured(data)
-            elif case == "srf_structured_fourier":
-                self._run_srf_fourier(data)
-            elif case == "condsrf_unstructured":
-                self._run_condsrf(data)
-            else:
-                raise ValueError(f"Unknown field benchmark case: {case}")
+        """Measure runtime of one SRF or CondSRF case."""
+        self._run_field(data, backend, case, threads)
 
     def peakmem_field_generation(self, data, backend, case, threads):
-        """Measure peak memory for one SRF or CondSRF case."""
-        with gstools_backend(_use_core(backend), threads):
-            if case == "srf_unstructured_randmeth":
-                self._run_srf_unstructured(data)
-            elif case == "srf_structured_randmeth":
-                self._run_srf_structured(data)
-            elif case == "srf_structured_fourier":
-                self._run_srf_fourier(data)
-            elif case == "condsrf_unstructured":
-                self._run_condsrf(data)
-            else:
-                raise ValueError(f"Unknown field benchmark case: {case}")
+        """Measure peak memory of one SRF or CondSRF case."""
+        self._run_field(data, backend, case, threads)
 
     def _run_srf_unstructured(self, data):
         """Run unstructured SRF generation with the RandMeth generator."""
