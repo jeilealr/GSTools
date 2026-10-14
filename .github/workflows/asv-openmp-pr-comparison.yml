@@ -41,7 +41,6 @@ jobs:
             pyproject.toml \
             asv.conf.json \
             asv.openmp.conf.json \
-            .github/workflows/benchmark-readiness.yml \
             .github/workflows/asv-openmp-pr-comparison.yml \
             .github/workflows/asv-benchmark-publish.yml
           then
@@ -120,6 +119,16 @@ jobs:
             --bench "^benchmark_" \
             --show-stderr
 
+      - name: Check Rust backend readiness
+        run: |
+          # The benchmark suite silently skips backends that cannot run in
+          # parallel. Probe the environment ASV just built so a broken Rust
+          # install fails this job instead of producing misleading
+          # thread-scaling results.
+          for py in .asv-openmp/env/*/bin/python; do
+            "$py" benchmarks/tools/check_backend_parallel_ready.py --verbose
+          done
+
       - name: Write informational ASV comparison
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
@@ -144,11 +153,8 @@ jobs:
           echo "ASV comparison exit status: $compare_status" \
             >> .asv-openmp/artifact/comparison.txt
 
-      - name: Build custom and native ASV reports
+      - name: Build native ASV report
         run: |
-          python benchmarks/tools/plot_case_backend_comparison.py \
-            --results-dir .asv-openmp/results \
-            --output .asv-openmp/artifact/index.html
           asv --config "$ASV_CONFIG" publish \
             --no-pull \
             --html-dir .asv-openmp/artifact/asv
@@ -174,6 +180,7 @@ jobs:
           python benchmarks/tools/render_benchmark_comment.py \
             --base "$BASE_SHA" \
             --head "$HEAD_SHA" \
+            --repository "$GITHUB_REPOSITORY" \
             --artifact-url "${ARTIFACT_URL:-}" \
             --comparison .asv-openmp/artifact/comparison.txt \
             --output /tmp/benchmark_comment.md
@@ -204,13 +211,17 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          ARTIFACT_URL: ${{ steps.upload.outputs.artifact-url }}
         run: |
+          # Hand over the PR number, the *benchmarked* base/head commits, and
+          # the comparison text. The comment workflow verifies the number and
+          # head against its triggering run. The base commit is recorded here
+          # rather than re-queried live, because the base branch tip can advance
+          # after the benchmark runs — a live .base.sha would then report a base
+          # that was never benchmarked.
           mkdir -p .asv-openmp/pr-context
-          printf '%s' "$PR_NUMBER"    > .asv-openmp/pr-context/pr_number.txt
-          printf '%s' "$BASE_SHA"     > .asv-openmp/pr-context/base_sha.txt
-          printf '%s' "$HEAD_SHA"     > .asv-openmp/pr-context/head_sha.txt
-          printf '%s' "$ARTIFACT_URL" > .asv-openmp/pr-context/artifact_url.txt
+          printf '%s' "$PR_NUMBER" > .asv-openmp/pr-context/pr_number.txt
+          printf '%s' "$BASE_SHA"  > .asv-openmp/pr-context/base_sha.txt
+          printf '%s' "$HEAD_SHA"  > .asv-openmp/pr-context/head_sha.txt
           cp .asv-openmp/artifact/comparison.txt \
              .asv-openmp/pr-context/comparison.txt 2>/dev/null \
             || printf '_Comparison output not available._' \
