@@ -7,9 +7,10 @@ often enough, but it is not a natural language for connected or curvilinear
 patterns such as channels, fractures, lenses, or object-like facies bodies.
 
 **Multiple Point Statistics (MPS)** uses a **training image (TI)** instead: a
-2D or 3D structured array containing patterns considered representative of the
-field to simulate. The TI may be categorical, such as integer facies codes, or
-continuous, such as permeability, porosity, elevation, or another property.
+N-dimensional structured array containing patterns considered representative
+of the field to simulate. The TI may be categorical, such as integer facies
+codes, or continuous, such as permeability, porosity, elevation, or another
+property. The examples in this gallery focus on 2D and 3D grids.
 
 Use MPS when the geometry of the pattern matters more than a variogram can
 express. If a covariance model already describes the field well, :any:`SRF`
@@ -58,27 +59,43 @@ distance metrics**.
 The next pages move from small synthetic images to the bundled Strebelle
 channel TI stored in ``input/strebelle_channel_ti.npz``. **A real training
 image: the Strebelle channels** repeats the conditional workflow on a classic
-MPS benchmark. **Nonstationary geometry with the Strebelle channels** and
-**Radial nonstationarity** keep the same TI but change the local data-event
+MPS benchmark, and **Direct Sampling parameters: n_neighbors, scan_fraction,
+threshold** then isolates the three quality/speed knobs and the DSBC-versus-DS
+choice on that image. **Nonstationary geometry with the Strebelle channels**
+and **Radial nonstationarity** keep the same TI but change the local data-event
 geometry with rotation and anisotropy maps.
 
 The remaining 2D examples broaden the data model. **Multivariate channels with
-a context variable** uses an exhaustive continuous context field to guide a
-categorical channel simulation. **Variation distance for continuous
-conditioning** then returns to continuous conditioning and shows why comparing
-local variation can be useful when hard data have a different absolute level
-than the TI. **Bivariate joint simulation from a channel TI** simulates
-categorical and continuous variables jointly from a Strebelle-derived bivariate
-TI. **Continuous conditioning with a bundled texture** uses the GAIA-UNIL
-``stone`` training image and compares the simulated and training-image
-histograms.
+a context variable** follows a published example and uses an exhaustive
+continuous context field to guide a categorical channel simulation. It
+simulates only the channel variable; **Bivariate joint simulation from a
+channel TI**, later in the gallery, jointly simulates both variables and
+provides a second paper-based reproducibility example. **Parallel execution and
+reproducibility** then shows that the Rust backend gives bit-identical
+realizations at any thread count, and how the ``seed`` / ``path_seed`` /
+``node_seed`` controls work. Rust is the programming language used to implement
+the MPS engine (`Rust <https://www.rust-lang.org/>`_).
+**Variation distance for continuous conditioning** then returns to continuous
+conditioning and shows why comparing local variation can be useful when hard
+data have a different absolute level than the TI. **Continuous conditioning
+with a bundled texture** uses the
+GAIA-UNIL ``stone`` training image and compares the simulated and training-image
+histograms. This is another reproduction of a published workflow. Its saved
+figure is displayed by default; regeneration took **157.7 seconds (about 2
+minutes 38 seconds)** on our machine using four threads and the example's
+sequential path.
 
 Finally, the 3D examples change the dimensionality rather than the variable
-type. **3D categorical simulation with folded facies** uses a larger binary
-GAIA-UNIL volume with validation plots for facies proportions and two-point
-correlation, while **Large 3D multi-facies channel simulation** uses a
-five-facies Fluvsim crop with sparse conditioning points and the same
-paper-style validation checks.
+type. **Large 3D multi-facies channel simulation** uses a five-facies GAIA-UNIL
+Fluvsim crop with sparse conditioning points and paper-style validation plots
+for facies proportions and two-point correlation, and **HESS Roussillon aquifer
+reproduction** closes the gallery with an end-to-end real-world reproduction
+combining a nonstationary training image, a 3D trend, rotation maps, and hard
+conditioning data. Both display saved figures by default, with expensive
+regeneration kept explicit. Full regeneration of the Fluvsim example took
+approximately **41 minutes on our machine with four threads** in the previous
+measured run; runtime varies with hardware and backend version. Its page gives
+the command to regenerate the figures.
 
 Examples
 --------

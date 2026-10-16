@@ -23,6 +23,7 @@
 # import sys
 import datetime
 import shutil
+import sys
 import warnings
 from pathlib import Path
 
@@ -32,9 +33,12 @@ warnings.filterwarnings(
     message="Matplotlib is currently using agg, which is a non-GUI backend, so cannot show the figure.",
 )
 
-# local module should not be added to sys path if it's installed on RTFD
-# see: https://stackoverflow.com/a/31882049/6696397
-# sys.path.insert(0, os.path.abspath("../../"))
+# Build documentation for this checkout, including with an uninstalled source
+# tree or an editable installation that points to another checkout.
+_SOURCE_DIR = Path(__file__).resolve().parents[2] / "src"
+if _SOURCE_DIR.is_dir():
+    sys.path.insert(0, str(_SOURCE_DIR))
+
 from gstools import __version__ as ver
 
 

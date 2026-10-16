@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Generate DSBC tuning candidates for the 3D MPS gallery examples."""
+"""Generate DSBC tuning candidates for the 3D Fluvsim MPS gallery example."""
 
 from __future__ import annotations
 
@@ -31,10 +31,6 @@ EXAMPLE_DIR = ROOT / "examples" / "13_mps"
 INPUT_DIR = EXAMPLE_DIR / "input"
 DEFAULT_OUTPUT_DIR = EXAMPLE_DIR / "output" / "tuning_3d_dsbc"
 
-FOLD_COLORS = ["#d8c69f", "#1d76a8"]
-FOLD_LABELS = ["0 background facies", "1 folded facies"]
-FOLD_CMAP = ListedColormap(FOLD_COLORS)
-
 FLUVSIM_COLORS = ["#d8c69f", "#1f78b4", "#74a661", "#b85c38", "#7b61a8"]
 FLUVSIM_LABELS = [
     "0 background",
@@ -45,25 +41,10 @@ FLUVSIM_LABELS = [
 ]
 FLUVSIM_CMAP = ListedColormap(FLUVSIM_COLORS)
 
-FOLD_SHAPE = (48, 48, 40)
 FLUVSIM_SHAPE = (48, 48, 32)
 THRESHOLD = 0.0
 
-FOLD_SEEDS = (10, 17, 24)
 FLUVSIM_SEEDS = (11, 18, 25)
-
-FOLD_CONFIGS = (
-    (48, 14, 0.00075),
-    (64, 14, 0.001),
-    (80, 18, 0.001),
-    (96, 18, 0.001),
-    (64, 22, 0.0015),
-    (80, 22, 0.0015),
-    (96, 22, 0.0015),
-    (80, 26, 0.002),
-    (96, 26, 0.002),
-    (128, 28, 0.0025),
-)
 
 FLUVSIM_CONFIGS = (
     (
@@ -150,6 +131,11 @@ FLUVSIM_CONFIGS = (
 
 MANIFEST_FIELDS = (
     "timestamp",
+    "num_threads",
+    "core_version",
+    "proportion_total_variation",
+    "correlation_mae",
+    "field_archive",
     "example",
     "run_id",
     "profile",
@@ -190,15 +176,20 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
         description=(
-            "Generate DSBC tuning images for the 3D Fold and Fluvsim MPS "
-            "examples."
+            "Generate DSBC tuning images for the 3D Fluvsim MPS example."
         )
     )
     parser.add_argument(
         "--examples",
-        choices=("fold", "fluvsim", "both"),
-        default="both",
+        choices=("fluvsim",),
+        default="fluvsim",
         help="Which example sweep to run.",
+    )
+    parser.add_argument(
+        "--profile",
+        choices=("light", "gallery"),
+        default="light",
+        help="Light historical sweep, or vary only the gallery scan budget.",
     )
     parser.add_argument(
         "--output-dir",
@@ -265,18 +256,32 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def build_candidates(example_choice: str, limit: int = None) -> List[Candidate]:
+def build_candidates(
+    example_choice: str, limit: int = None, profile="light"
+) -> List[Candidate]:
     """Build the selected candidate list."""
-    groups = []
-    if example_choice in {"fold", "both"}:
-        groups.append(("fold", build_fold_candidates()))
-    if example_choice in {"fluvsim", "both"}:
-        groups.append(("fluvsim", build_fluvsim_candidates()))
-
-    candidates = []
-    for _, group in groups:
-        candidates.extend(group if limit is None else group[:limit])
-    return candidates
+    if example_choice != "fluvsim":
+        raise ValueError(f"Unknown example: {example_choice!r}")
+    if profile == "gallery":
+        candidates = [
+            Candidate(
+                example="fluvsim",
+                run_id=f"gallery_f{fraction:g}_s{seed}",
+                profile="gallery_scan_budget",
+                seed=seed,
+                shape=(64, 64, 48),
+                n_neighbors=100,
+                max_radius=20,
+                scan_fraction=fraction,
+                cond_weight=3.0,
+                cond_counts=((0, 200), (1, 320), (2, 200), (3, 200), (4, 100)),
+            )
+            for fraction in (0.005, 0.01, 0.025, 0.05)
+            for seed in FLUVSIM_SEEDS
+        ]
+    else:
+        candidates = build_fluvsim_candidates()
+    return candidates if limit is None else candidates[:limit]
 
 
 def parse_shape_override(value: str = None):
@@ -292,33 +297,18 @@ def parse_shape_override(value: str = None):
     return shape
 
 
-def build_fold_candidates() -> List[Candidate]:
-    """Build Fold candidates from documented DSBC tuning ranges."""
-    candidates = []
-    for cfg_idx, (n_neighbors, max_radius, scan_fraction) in enumerate(
-        FOLD_CONFIGS, start=1
-    ):
-        for seed in FOLD_SEEDS:
-            candidates.append(
-                Candidate(
-                    example="fold",
-                    run_id=f"fold_c{cfg_idx:02d}_s{seed}",
-                    profile=f"fold_c{cfg_idx:02d}",
-                    seed=seed,
-                    shape=FOLD_SHAPE,
-                    n_neighbors=n_neighbors,
-                    max_radius=max_radius,
-                    scan_fraction=scan_fraction,
-                )
-            )
-    return candidates
-
-
 def build_fluvsim_candidates() -> List[Candidate]:
     """Build Fluvsim candidates with channel-weighted conditioning profiles."""
     candidates = []
     for cfg_idx, cfg in enumerate(FLUVSIM_CONFIGS, start=1):
-        profile, n_neighbors, max_radius, scan_fraction, cond_weight, counts = cfg
+        (
+            profile,
+            n_neighbors,
+            max_radius,
+            scan_fraction,
+            cond_weight,
+            counts,
+        ) = cfg
         for seed in FLUVSIM_SEEDS:
             candidates.append(
                 Candidate(
@@ -359,12 +349,9 @@ def is_finished(output_dir: Path, candidate: Candidate) -> bool:
 
 def load_training_image(example: str) -> np.ndarray:
     """Load the bundled training image for one example."""
-    if example == "fold":
-        path = INPUT_DIR / "gaia_unil_fold_categorical_3d.npz"
-    elif example == "fluvsim":
-        path = INPUT_DIR / "gaia_unil_fluvsim_5facies_crop.npz"
-    else:
+    if example != "fluvsim":
         raise ValueError(f"Unknown example: {example!r}")
+    path = INPUT_DIR / "gaia_unil_fluvsim_5facies_crop.npz"
 
     with np.load(path) as data:
         return data["facies"].astype(int)
@@ -465,23 +452,42 @@ def run_candidate_task(task):
     runtime = time.perf_counter() - started
 
     assert field.shape == candidate.shape
-    if candidate.example == "fold":
-        assert set(np.unique(field)) <= {0, 1}
+    unique_values = set(np.unique(field))
+    expected_values = {0, 1, 2, 3, 4}
+    assert unique_values <= expected_values
+    if candidate.shape == FLUVSIM_SHAPE:
+        assert unique_values == expected_values
     else:
-        unique_values = set(np.unique(field))
-        expected_values = {0, 1, 2, 3, 4}
-        assert unique_values <= expected_values
-        if candidate.shape == FLUVSIM_SHAPE:
-            assert unique_values == expected_values
-        else:
-            conditioned = {
-                facies for facies, count in actual_cond_counts.items() if count
-            }
-            assert conditioned <= unique_values
+        conditioned = {
+            facies for facies, count in actual_cond_counts.items() if count
+        }
+        assert conditioned <= unique_values
     if cond_idx is not None:
         assert np.all(
             field[cond_idx[:, 0], cond_idx[:, 1], cond_idx[:, 2]] == cond_val
         )
+
+    # Preserve arrays so quality can be revisited without another simulation.
+    archive = paths[0].with_name(f"{candidate.run_id}_field.npz")
+    np.savez_compressed(
+        archive, field=field, cond_idx=cond_idx, cond_val=cond_val
+    )
+    proportions = np.bincount(field.ravel(), minlength=5) / field.size
+    ti_proportions = np.bincount(ti_data.ravel(), minlength=5) / ti_data.size
+    correlation_error = []
+    max_lag = min(24, field.shape[0] - 1, ti_data.shape[0] - 1)
+    for facies in range(1, 5):
+        curves = []
+        for volume in (ti_data, field):
+            indicator = volume == facies
+            curve = [float(indicator.mean())]
+            curve.extend(
+                float((indicator[:-lag] & indicator[lag:]).mean())
+                for lag in range(1, max_lag + 1)
+            )
+            curve = np.asarray(curve)
+            curves.append(curve / curve[0] if curve[0] else curve)
+        correlation_error.append(float(np.abs(curves[0] - curves[1]).mean()))
 
     metadata = metadata_title(candidate, runtime, actual_cond_counts)
     image_3d, image_slices, image_combined = paths
@@ -498,9 +504,18 @@ def run_candidate_task(task):
     )
     plt.close("all")
 
+    import gstools_core
+
     facies_counts = count_values(field)
     row = {
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "num_threads": num_threads,
+        "core_version": gstools_core.__version__,
+        "proportion_total_variation": float(
+            np.abs(proportions - ti_proportions).sum() / 2
+        ),
+        "correlation_mae": json.dumps(correlation_error),
+        "field_archive": repo_path(archive),
         "example": candidate.example,
         "run_id": candidate.run_id,
         "profile": candidate.profile,
@@ -577,8 +592,8 @@ def decimate_volume(volume: np.ndarray, step: int) -> np.ndarray:
 def voxel_steps(example: str, fast_plot: bool) -> Tuple[int, int]:
     """Return TI and simulation voxel decimation steps."""
     if fast_plot:
-        return (8, 4) if example == "fold" else (5, 3)
-    return (5, 2) if example == "fold" else (3, 2)
+        return (5, 3)
+    return (3, 2)
 
 
 def cutaway_mask(shape: Tuple[int, int, int]) -> np.ndarray:
@@ -589,21 +604,6 @@ def cutaway_mask(shape: Tuple[int, int, int]) -> np.ndarray:
         & (iy < 0.48 * shape[1])
         & (iz > 0.42 * shape[2])
     )
-
-
-def plot_binary_voxels(ax, volume: np.ndarray, title: str) -> None:
-    """Plot a cutaway binary-facies voxel view."""
-    active = (volume == 1) & ~cutaway_mask(volume.shape)
-    colors = np.empty(volume.shape, dtype=object)
-    colors[:] = "#00000000"
-    colors[active] = FOLD_COLORS[1] + "cc"
-    ax.voxels(
-        active,
-        facecolors=colors,
-        edgecolor="#0b3f5755",
-        linewidth=0.02,
-    )
-    style_3d_axis(ax, volume.shape, title)
 
 
 def plot_multifacies_voxels(ax, volume: np.ndarray, title: str) -> None:
@@ -676,30 +676,17 @@ def plot_3d_only(
         fig.add_subplot(1, 2, 1, projection="3d"),
         fig.add_subplot(1, 2, 2, projection="3d"),
     ]
-    if candidate.example == "fold":
-        plot_binary_voxels(
-            axes[0],
-            decimate_volume(ti_data, step=ti_step),
-            "Training image, facies 1",
-        )
-        plot_binary_voxels(
-            axes[1],
-            decimate_volume(field, step=sim_step),
-            "Simulation, facies 1",
-        )
-        add_legend(fig, FOLD_COLORS, FOLD_LABELS, ncol=2)
-    else:
-        plot_multifacies_voxels(
-            axes[0],
-            decimate_volume(ti_data, step=ti_step),
-            "Training image, non-background facies",
-        )
-        plot_multifacies_voxels(
-            axes[1],
-            decimate_volume(field, step=sim_step),
-            "Simulation, non-background facies",
-        )
-        add_legend(fig, FLUVSIM_COLORS, FLUVSIM_LABELS, ncol=5)
+    plot_multifacies_voxels(
+        axes[0],
+        decimate_volume(ti_data, step=ti_step),
+        "Training image, non-background facies",
+    )
+    plot_multifacies_voxels(
+        axes[1],
+        decimate_volume(field, step=sim_step),
+        "Simulation, non-background facies",
+    )
+    add_legend(fig, FLUVSIM_COLORS, FLUVSIM_LABELS, ncol=5)
     fig.suptitle(metadata, fontsize=11)
     return fig
 
@@ -745,28 +732,16 @@ def plot_combined(
     )
     ax_ti_3d = fig.add_subplot(layout[0, 0:3], projection="3d")
     ax_sim_3d = fig.add_subplot(layout[0, 3:6], projection="3d")
-    if candidate.example == "fold":
-        plot_binary_voxels(
-            ax_ti_3d,
-            decimate_volume(ti_data, step=ti_step),
-            "Training image, facies 1",
-        )
-        plot_binary_voxels(
-            ax_sim_3d,
-            decimate_volume(field, step=sim_step),
-            "Simulation, facies 1",
-        )
-    else:
-        plot_multifacies_voxels(
-            ax_ti_3d,
-            decimate_volume(ti_data, step=ti_step),
-            "Training image, non-background facies",
-        )
-        plot_multifacies_voxels(
-            ax_sim_3d,
-            decimate_volume(field, step=sim_step),
-            "Simulation, non-background facies",
-        )
+    plot_multifacies_voxels(
+        ax_ti_3d,
+        decimate_volume(ti_data, step=ti_step),
+        "Training image, non-background facies",
+    )
+    plot_multifacies_voxels(
+        ax_sim_3d,
+        decimate_volume(field, step=sim_step),
+        "Simulation, non-background facies",
+    )
 
     ti_axes = [fig.add_subplot(layout[1, 2 * i : 2 * i + 2]) for i in range(3)]
     sim_axes = [
@@ -781,8 +756,6 @@ def plot_combined(
 
 def style_for_example(example: str):
     """Return cmap, labels, colors, and vmax for one example."""
-    if example == "fold":
-        return FOLD_CMAP, FOLD_LABELS, FOLD_COLORS, 1
     return FLUVSIM_CMAP, FLUVSIM_LABELS, FLUVSIM_COLORS, 4
 
 
@@ -831,7 +804,9 @@ def update_manifests(output_dir: Path, rows: List[Dict[str, object]]) -> None:
         writer = csv.DictWriter(file_handle, fieldnames=MANIFEST_FIELDS)
         writer.writeheader()
         for row in merged:
-            writer.writerow({field: row.get(field, "") for field in MANIFEST_FIELDS})
+            writer.writerow(
+                {field: row.get(field, "") for field in MANIFEST_FIELDS}
+            )
 
     with jsonl_tmp.open("w") as file_handle:
         for row in merged:
@@ -895,7 +870,9 @@ def selected_examples(candidates: Iterable[Candidate]) -> str:
     counts = {}
     for candidate in candidates:
         counts[candidate.example] = counts.get(candidate.example, 0) + 1
-    return ", ".join(f"{name}={count}" for name, count in sorted(counts.items()))
+    return ", ".join(
+        f"{name}={count}" for name, count in sorted(counts.items())
+    )
 
 
 def main(argv: Sequence[str] = None) -> int:
@@ -914,12 +891,17 @@ def main(argv: Sequence[str] = None) -> int:
         raise ValueError("--smoke-scan-fraction must be in (0, 1]")
 
     output_dir = args.output_dir.resolve()
-    candidates = build_candidates(args.examples, limit=args.limit)
+    candidates = build_candidates(
+        args.examples, limit=args.limit, profile=args.profile
+    )
     shape_override = parse_shape_override(args.smoke_shape)
-    smoke_mode = shape_override is not None or args.smoke_scan_fraction is not None
+    smoke_mode = (
+        shape_override is not None or args.smoke_scan_fraction is not None
+    )
     if shape_override is not None:
         candidates = [
-            replace(candidate, shape=shape_override) for candidate in candidates
+            replace(candidate, shape=shape_override)
+            for candidate in candidates
         ]
     if args.smoke_scan_fraction is not None:
         candidates = [
@@ -933,7 +915,9 @@ def main(argv: Sequence[str] = None) -> int:
     print(f"Selected candidates: {selected_examples(candidates)}", flush=True)
     print(f"Output directory: {output_dir}", flush=True)
     if shape_override is not None:
-        print(f"Smoke shape override: {shape_text(shape_override)}", flush=True)
+        print(
+            f"Smoke shape override: {shape_text(shape_override)}", flush=True
+        )
     if args.smoke_scan_fraction is not None:
         print(
             f"Smoke scan fraction override: {args.smoke_scan_fraction:g}",
@@ -995,13 +979,14 @@ def main(argv: Sequence[str] = None) -> int:
                 rows.append(row)
                 update_manifests(output_dir, [row])
                 print(
-                    f"Finished {row['run_id']} "
-                    f"in {row['runtime_seconds']}s",
+                    f"Finished {row['run_id']} in {row['runtime_seconds']}s",
                     flush=True,
                 )
     else:
         with ProcessPoolExecutor(max_workers=args.workers) as executor:
-            futures = [executor.submit(run_candidate_task, task) for task in tasks]
+            futures = [
+                executor.submit(run_candidate_task, task) for task in tasks
+            ]
             for future in as_completed(futures):
                 row = future.result()
                 if row is not None:
