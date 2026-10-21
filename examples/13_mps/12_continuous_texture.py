@@ -120,6 +120,7 @@ ti = gs.TrainingImage(
     categorical=False,
     distance="l4",
     n_neighbors=75,
+    cond_weight=2,
 )
 
 ###############################################################################
@@ -135,7 +136,7 @@ rand_ti_x = rng.randint(0, grid_size, n_cond)
 rand_ti_y = rng.randint(0, grid_size, n_cond)
 cond_val = ti_data[rand_ti_x, rand_ti_y]
 
-model = gs.MPSModel(ti, scan_fraction=0.4, threshold=0.01, cond_weight=2)
+model = gs.MPSModel(ti, scan_fraction=0.4, threshold=0.01)
 
 ds = gs.DirectSampling(model)
 ds.set_condition([cond_x, cond_y], cond_val)

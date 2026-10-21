@@ -161,10 +161,17 @@ anis = 1.0 - 0.65 * (radius / max_radius)
 generate_output = False
 if generate_output:
     output_dir.mkdir(exist_ok=True)
+    # Absolute per-axis scale: main axis 1.0, transversal axis the anis ratio.
+    scale = np.stack([np.ones_like(anis), anis], axis=-1)
     ds = gs.DirectSampling(
-        gs.MPSModel(ti, scan_fraction=scan_fraction, threshold=0.0)
+        gs.MPSModel(
+            ti,
+            scan_fraction=scan_fraction,
+            threshold=0.0,
+            rotation=rotation,
+            scale=scale,
+        )
     )
-    ds.set_nonstationary(rotation=rotation, anis=anis)
 
     print(f"Simulating radial nonstationary field ({sg_size}x{sg_size})...")
     field = ds([xs, ys], seed=simulation_seed, num_threads=8, path="random")

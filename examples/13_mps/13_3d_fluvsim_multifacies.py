@@ -309,13 +309,13 @@ ti = gs.TrainingImage(
     categorical=True,
     n_neighbors=N_NEIGHBORS,
     max_radius=MAX_RADIUS,
+    cond_weight=COND_WEIGHT,
 )
 model = gs.MPSModel(
     ti,
     scan_fraction=SCAN_FRACTION,
     threshold=THRESHOLD,
     boundary="partial",
-    cond_weight=COND_WEIGHT,
 )
 ds = gs.DirectSampling(model)
 

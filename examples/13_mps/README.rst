@@ -97,5 +97,15 @@ approximately **41 minutes on our machine with four threads** in the previous
 measured run; runtime varies with hardware and backend version. Its page gives
 the command to regenerate the figures.
 
+A final group returns to 2D to show the algorithm controls added on top of the
+basic model. **Post-processing: cleanup passes** re-opens an already-simulated
+field against a fully informed neighbourhood to relax away isolated-pixel
+artefacts (``post_processing``). **Zoned simulation** scans a different training
+image per region of the grid with :any:`Zone`. **Categorical penalty matrix**
+replaces the hard 0/1 facies mismatch with soft, possibly ordinal, costs on a
+:any:`Variable`. **TI scan order** contrasts the default sequential window scan
+with the ``scan_path="random"`` extension. Each one is deterministic for a fixed
+seed and bit-identical at any thread count.
+
 Examples
 --------

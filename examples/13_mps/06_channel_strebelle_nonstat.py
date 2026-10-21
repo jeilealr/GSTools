@@ -59,13 +59,21 @@ rotation = (gy / sg_size) * (np.pi / 4.0)
 anis = 0.8 + (gx / sg_size) * 0.4
 
 ###############################################################################
-# Simulate with the nonstationary maps attached to the generator. The maps
+# Simulate with the nonstationary maps attached to the model. The maps
 # reorient and rescale local data-event matching; they do not change the TI.
+# ``scale`` is the absolute per-axis dilation: the main axis stays 1.0 and the
+# transversal axis carries the local ``anis`` ratio.
 
+scale = np.stack([np.ones_like(anis), anis], axis=-1)
 ds = gs.DirectSampling(
-    gs.MPSModel(ti, scan_fraction=0.1, threshold=0.0)
+    gs.MPSModel(
+        ti,
+        scan_fraction=0.1,
+        threshold=0.0,
+        rotation=rotation,
+        scale=scale,
+    )
 )
-ds.set_nonstationary(rotation=rotation, anis=anis)
 
 print("Simulating nonstationary field...")
 field = ds([xs, ys], seed=42)
