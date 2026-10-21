@@ -684,16 +684,22 @@ class TestDirectSampling(unittest.TestCase):
         self.assertIn("DirectSampling", r)
 
     def test_properties(self):
+        # cond_weight now lives on the TI/Variable (univariate sugar), not MPSModel
+        ti = TrainingImage(
+            np.tile([0, 1], 10).astype(float),
+            categorical=True,
+            n_neighbors=8,
+            cond_weight=2.0,
+        )
         ds = DirectSampling(
             MPSModel(
-                self.ti1d,
+                ti,
                 scan_fraction=0.5,
                 threshold=0.05,
-                cond_weight=2.0,
                 boundary="partial",
             )
         )
-        self.assertIs(ds.ti, self.ti1d)
+        self.assertIs(ds.ti, ti)
         self.assertEqual(ds.n_neighbors, 8)
         self.assertAlmostEqual(ds.scan_fraction, 0.5)
         self.assertAlmostEqual(ds.threshold, 0.05)
@@ -908,9 +914,14 @@ class TestDirectSampling(unittest.TestCase):
         self.assertIs(gs.mps.Variable, Variable)
 
     def test_config_is_read_only_view(self):
-        model = MPSModel(
-            self.ti1d, threshold=0.3, scan_fraction=0.5, cond_weight=4.0
+        # cond_weight lives on the TI/Variable; threshold/scan_fraction on model.
+        ti = TrainingImage(
+            np.tile([0, 1], 10).astype(float),
+            categorical=True,
+            n_neighbors=8,
+            cond_weight=4.0,
         )
+        model = MPSModel(ti, threshold=0.3, scan_fraction=0.5)
         ds = DirectSampling(model)
         # Getters read straight from the shared model (no instance copy).
         self.assertAlmostEqual(ds.threshold, 0.3)
@@ -1569,12 +1580,15 @@ class TestMultivariateDirectSampling(unittest.TestCase):
                     rng.random((20, 20)) * 10.0,
                     categorical=False,
                     distance="l2",
+                    distance_power=1.0,
                 ),
                 Variable(
-                    "cat", rng.integers(0, 2, (20, 20)), categorical=True
+                    "cat",
+                    rng.integers(0, 2, (20, 20)),
+                    categorical=True,
+                    distance_power=1.0,
                 ),
-            ],
-            distance_power=1.0,
+            ]
         )
         ds = DirectSampling(MPSModel(ti, scan_fraction=0.3))
         field = ds([np.arange(8, dtype=float)] * 2, seed=3)
@@ -1660,7 +1674,13 @@ class TestMultivariateDirectSampling(unittest.TestCase):
 
 
 class TestNonstationarity(unittest.TestCase):
-    """Geometric non-stationarity for DirectSampling (set_nonstationary)."""
+    """Geometric non-stationarity via MPSModel(rotation=, scale=).
+
+    ``rotation`` follows the GSTools ``set_angles`` convention; ``scale`` is the
+    absolute per-axis dilation (``scale=[1, a, ...]`` is the absolute-scale
+    analogue of the former relative ``anis=a``). Resolved per node through
+    :func:`gstools.mps.nonstationary.resolve_spec`.
+    """
 
     def _make_ds(self, ti_shape=(20, 20), **kw):
         rng = np.random.default_rng(0)
@@ -1672,8 +1692,7 @@ class TestNonstationarity(unittest.TestCase):
         return gs.mps.DirectSampling(MPSModel(ti, **defaults)), ti
 
     def test_scalar_rotation_valid_values(self):
-        ds, ti = self._make_ds()
-        ds.set_nonstationary(rotation=np.pi / 4)
+        ds, ti = self._make_ds(rotation=np.pi / 4)
         pos = [np.arange(8, dtype=float)] * 2
         field = ds(pos, seed=0)
         self.assertEqual(field.shape, (8, 8))
@@ -1684,46 +1703,44 @@ class TestNonstationarity(unittest.TestCase):
         pos = [np.arange(10, dtype=float)] * 2
         f_plain = ds_plain(pos, seed=7)
 
-        ds_rot = gs.mps.DirectSampling(MPSModel(ti, scan_fraction=0.2))
-        ds_rot.set_nonstationary(rotation=np.pi / 4)
+        ds_rot = gs.mps.DirectSampling(
+            MPSModel(ti, scan_fraction=0.2, rotation=np.pi / 4)
+        )
         f_rot = ds_rot(pos, seed=7)
         self.assertFalse(np.array_equal(f_plain, f_rot))
 
     def test_array_rotation_map_runs(self):
-        ds, _ = self._make_ds()
         angle_map = np.linspace(0, np.pi / 2, 64).reshape(8, 8)
-        ds.set_nonstationary(rotation=angle_map)
+        ds, _ = self._make_ds(rotation=angle_map)
         field = ds([np.arange(8, dtype=float)] * 2, seed=1)
         self.assertEqual(field.shape, (8, 8))
         self.assertTrue(np.all(np.isin(field, [0, 1, 2])))
 
-    def test_anis_changes_output(self):
+    def test_scale_changes_output(self):
         ds_plain, ti = self._make_ds(ti_shape=(30, 30), n_neighbors=8)
         pos = [np.arange(10, dtype=float)] * 2
         f_plain = ds_plain(pos, seed=3)
 
-        ds_anis = gs.mps.DirectSampling(MPSModel(ti, scan_fraction=0.2))
-        ds_anis.set_nonstationary(anis=0.5)
-        f_anis = ds_anis(pos, seed=3)
-        self.assertFalse(np.array_equal(f_plain, f_anis))
+        ds_scale = gs.mps.DirectSampling(
+            MPSModel(ti, scan_fraction=0.2, scale=[1.0, 0.5])
+        )
+        f_scale = ds_scale(pos, seed=3)
+        self.assertFalse(np.array_equal(f_plain, f_scale))
 
-    def test_combined_rotation_anis_runs(self):
-        ds, _ = self._make_ds()
-        ds.set_nonstationary(rotation=np.pi / 6, anis=0.5)
+    def test_combined_rotation_scale_runs(self):
+        ds, _ = self._make_ds(rotation=np.pi / 6, scale=[1.0, 0.5])
         field = ds([np.arange(8, dtype=float)] * 2, seed=2)
         self.assertEqual(field.shape, (8, 8))
         self.assertTrue(np.all(np.isin(field, [0, 1, 2])))
 
     def test_conditioning_preserved(self):
-        ds, _ = self._make_ds(scan_fraction=0.3)
-        ds.set_nonstationary(rotation=np.pi / 4)
+        ds, _ = self._make_ds(scan_fraction=0.3, rotation=np.pi / 4)
         ds.set_condition([[4.0], [4.0]], [2])
         field = ds([np.arange(8, dtype=float)] * 2, seed=0)
         self.assertEqual(int(field[4, 4]), 2)
 
     def test_partial_boundary_runs(self):
-        ds, _ = self._make_ds(boundary="partial")
-        ds.set_nonstationary(rotation=np.pi / 4)
+        ds, _ = self._make_ds(boundary="partial", rotation=np.pi / 4)
         field = ds([np.arange(8, dtype=float)] * 2, seed=0)
         self.assertTrue(np.all(np.isin(field, [0, 1, 2])))
 
@@ -1731,8 +1748,9 @@ class TestNonstationarity(unittest.TestCase):
         rng = np.random.default_rng(0)
         data = rng.integers(0, 2, (12, 12, 12))
         ti = gs.mps.TrainingImage(data, n_neighbors=4)
-        ds = gs.mps.DirectSampling(MPSModel(ti, scan_fraction=0.1))
-        ds.set_nonstationary(rotation=np.pi / 4)
+        ds = gs.mps.DirectSampling(
+            MPSModel(ti, scan_fraction=0.1, rotation=np.pi / 4)
+        )
         field = ds([np.arange(5, dtype=float)] * 3, seed=0)
         self.assertEqual(field.shape, (5, 5, 5))
         self.assertTrue(np.all(np.isin(field, [0, 1])))
@@ -1743,25 +1761,27 @@ class TestNonstationarity(unittest.TestCase):
         rng = np.random.default_rng(0)
         data = rng.integers(0, 2, (4, 4))
         ti = gs.mps.TrainingImage(data)
-        ds = gs.mps.DirectSampling(MPSModel(ti, scan_fraction=1.0))
-        ds.set_nonstationary(rotation=np.pi / 2)
+        ds = gs.mps.DirectSampling(
+            MPSModel(ti, scan_fraction=1.0, rotation=np.pi / 2)
+        )
         field = ds([np.arange(6, dtype=float)] * 2, seed=0)
         self.assertTrue(np.all(np.isfinite(field)))
         self.assertTrue(np.all(np.isin(field, [0, 1])))
 
     def test_identity_matches_no_transform(self):
-        # θ=0, anis=1 must produce bit-identical output to the plain path.
+        # θ=0, scale=1 must produce bit-identical output to the plain path.
         ds_plain, ti = self._make_ds(ti_shape=(20, 20), n_neighbors=8)
         pos = [np.arange(8, dtype=float)] * 2
         f_plain = ds_plain(pos, seed=5)
 
-        ds_id = gs.mps.DirectSampling(MPSModel(ti, scan_fraction=0.2))
-        ds_id.set_nonstationary(rotation=0.0, anis=1.0)
+        ds_id = gs.mps.DirectSampling(
+            MPSModel(ti, scan_fraction=0.2, rotation=0.0, scale=1.0)
+        )
         f_id = ds_id(pos, seed=5)
         np.testing.assert_array_equal(f_plain, f_id)
 
     def test_multivariate_rotation_valid_output(self):
-        # Exercises the ds_simulate_mv transform path: shape, value subsets,
+        # Exercises the multivariate transform path: shape, value subsets,
         # and that rotation changes output vs no rotation (same seed).
         rng = np.random.default_rng(0)
         ti = gs.mps.TrainingImage(
@@ -1786,8 +1806,9 @@ class TestNonstationarity(unittest.TestCase):
         ds_plain = gs.mps.DirectSampling(MPSModel(ti, scan_fraction=0.2))
         result_plain = ds_plain(pos, seed=9)
 
-        ds_rot = gs.mps.DirectSampling(MPSModel(ti, scan_fraction=0.2))
-        ds_rot.set_nonstationary(rotation=np.pi / 4)
+        ds_rot = gs.mps.DirectSampling(
+            MPSModel(ti, scan_fraction=0.2, rotation=np.pi / 4)
+        )
         result_rot = ds_rot(pos, seed=9)
 
         self.assertEqual(result_rot["a"].shape, (8, 8))
@@ -1797,11 +1818,12 @@ class TestNonstationarity(unittest.TestCase):
         self.assertFalse(np.array_equal(result_plain["a"], result_rot["a"]))
 
     def test_flattened_rotation_map_raises(self):
-        # Finding #5: a per-node map passed flattened (length Nx*Ny) on a 2-D
-        # grid must raise, not silently apply only element [0].
-        ds, _ = self._make_ds(ti_shape=(20, 20))
-        ds.set_nonstationary(rotation=np.linspace(0, np.pi, 25))
-        with self.assertRaisesRegex(ValueError, "flattened|per-node"):
+        # A per-node map passed flattened (length Nx*Ny) on a 2-D grid must
+        # raise at resolve time, not silently apply only element [0].
+        ds, _ = self._make_ds(
+            ti_shape=(20, 20), rotation=np.linspace(0, np.pi, 25)
+        )
+        with self.assertRaisesRegex(ValueError, "flattened|per-node|no accepted"):
             ds([np.arange(5, dtype=float)] * 2, seed=0)
 
     def test_3d_stationary_rotation_triple_runs(self):
@@ -1811,8 +1833,9 @@ class TestNonstationarity(unittest.TestCase):
         ti = gs.mps.TrainingImage(
             rng.integers(0, 2, (12, 12, 12)), n_neighbors=4
         )
-        ds = gs.mps.DirectSampling(MPSModel(ti, scan_fraction=0.1))
-        ds.set_nonstationary(rotation=np.array([0.1, 0.2, 0.3]))
+        ds = gs.mps.DirectSampling(
+            MPSModel(ti, scan_fraction=0.1, rotation=np.array([0.1, 0.2, 0.3]))
+        )
         field = ds([np.arange(5, dtype=float)] * 3, seed=0)
         self.assertEqual(field.shape, (5, 5, 5))
         self.assertTrue(np.all(np.isin(field, [0, 1])))
@@ -2266,16 +2289,18 @@ class TestMVTransformsAndReporting(unittest.TestCase):
         """Different cond_weight values must yield different fields while honoring the conditioned node."""
         rng = np.random.default_rng(2)
         data = rng.integers(0, 3, (20, 20)).astype(float)
-        ti = TrainingImage(data, n_neighbors=8)
+        # cond_weight now lives on the TI/Variable (univariate sugar).
+        ti1 = TrainingImage(data, n_neighbors=8, cond_weight=1.0)
+        ti5 = TrainingImage(data, n_neighbors=8, cond_weight=5.0)
         pos = [np.arange(8, dtype=float)] * 2
         cond_pos = [[4.0], [4.0]]
         cond_val = [2]
 
-        ds1 = DirectSampling(MPSModel(ti, scan_fraction=0.3, cond_weight=1.0))
+        ds1 = DirectSampling(MPSModel(ti1, scan_fraction=0.3))
         ds1.set_condition(cond_pos, cond_val)
         f1 = ds1(pos, seed=0)
 
-        ds5 = DirectSampling(MPSModel(ti, scan_fraction=0.3, cond_weight=5.0))
+        ds5 = DirectSampling(MPSModel(ti5, scan_fraction=0.3))
         ds5.set_condition(cond_pos, cond_val)
         f5 = ds5(pos, seed=0)
 
@@ -2757,35 +2782,35 @@ class TestSimulationPath(unittest.TestCase):
 
 
 class TestCondWeightOverride(unittest.TestCase):
-    """cond_weight lives on MPSModel; DirectSampling is a read-only view."""
+    """cond_weight lives on the Variable/TI; DirectSampling is a read-only view."""
 
     def setUp(self):
         rng = np.random.default_rng(42)
         self.ti_data = rng.integers(0, 3, (20, 20))
 
     def test_shared_model_both_see_same_cond_weight(self):
-        """Two DirectSampling from the same MPSModel both read the same cond_weight."""
-        ti = TrainingImage(self.ti_data, n_neighbors=4)
-        model = MPSModel(ti, scan_fraction=0.5, cond_weight=1.0)
+        """Two DirectSampling from the same MPSModel both read the TI's cond_weight."""
+        ti = TrainingImage(self.ti_data, n_neighbors=4, cond_weight=1.0)
+        model = MPSModel(ti, scan_fraction=0.5)
         ds1 = DirectSampling(model)
         ds2 = DirectSampling(model)
 
-        # Both read from the shared model — no override mechanism.
+        # Both read the per-variable cond_weight off the shared TI.
         self.assertAlmostEqual(ds1.cond_weight, 1.0)
         self.assertAlmostEqual(ds2.cond_weight, 1.0)
-        self.assertAlmostEqual(model.cond_weight, 1.0)
+        self.assertAlmostEqual(ti.variable().cond_weight, 1.0)
 
-    def test_cond_weight_on_model_is_honored(self):
-        """Two DS with identical MPSModel(cond_weight=2) produce the same output."""
-        ti1 = TrainingImage(self.ti_data, n_neighbors=4)
-        ds1 = DirectSampling(MPSModel(ti1, scan_fraction=0.5, cond_weight=2.0))
+    def test_cond_weight_on_ti_is_honored(self):
+        """Two DS with identical TI(cond_weight=2) produce the same output."""
+        ti1 = TrainingImage(self.ti_data, n_neighbors=4, cond_weight=2.0)
+        ds1 = DirectSampling(MPSModel(ti1, scan_fraction=0.5))
         cpos = [np.array([5.0, 10.0]), np.array([5.0, 10.0])]
         cval = np.array([1.0, 2.0])
         ds1.set_condition(cpos, cval)
         out1 = ds1([np.arange(15, dtype=float)] * 2, seed=7)
 
-        ti2 = TrainingImage(self.ti_data, n_neighbors=4)
-        ds2 = DirectSampling(MPSModel(ti2, scan_fraction=0.5, cond_weight=2.0))
+        ti2 = TrainingImage(self.ti_data, n_neighbors=4, cond_weight=2.0)
+        ds2 = DirectSampling(MPSModel(ti2, scan_fraction=0.5))
         ds2.set_condition(cpos, cval)
         out2 = ds2([np.arange(15, dtype=float)] * 2, seed=7)
 
@@ -2793,8 +2818,8 @@ class TestCondWeightOverride(unittest.TestCase):
 
     def test_cond_weight_setter_raises(self):
         """DirectSampling.cond_weight is read-only; assignment raises AttributeError."""
-        ti = TrainingImage(self.ti_data, n_neighbors=4)
-        model = MPSModel(ti, scan_fraction=0.5, cond_weight=1.0)
+        ti = TrainingImage(self.ti_data, n_neighbors=4, cond_weight=1.0)
+        model = MPSModel(ti, scan_fraction=0.5)
         ds = DirectSampling(model)
         with self.assertRaises(AttributeError):
             ds.cond_weight = 3.5

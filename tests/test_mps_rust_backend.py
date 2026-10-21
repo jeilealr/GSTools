@@ -190,8 +190,10 @@ def test_nonstationary_explicit_path_uses_complete_engine(monkeypatch):
 
     monkeypatch.setattr(_simulate, "_mps_simulate_gsc", spy)
     ti = TrainingImage(_training_data(), categorical=True, n_neighbors=8)
-    ds = DirectSampling(MPSModel(ti, scan_fraction=0.3), seed=42)
-    ds.set_nonstationary(rotation=np.pi / 6, anis=0.8)
+    ds = DirectSampling(
+        MPSModel(ti, scan_fraction=0.3, rotation=np.pi / 6, scale=[1.0, 0.8]),
+        seed=42,
+    )
     shape = (9, 9)
     path = np.argwhere(np.ones(shape, dtype=bool))[::-1]
     result = ds(_positions(shape), path=path, store=False)
