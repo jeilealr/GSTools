@@ -30,10 +30,20 @@ Direct Sampling simulation following the gstools field interface.
    :toctree:
 
    DirectSampling
+
+Zonation
+^^^^^^^^
+Region-bound training images for zonated simulation.
+
+.. autosummary::
+   :toctree:
+
+   Zone
 """
 
 from gstools.mps.direct_sampling import DirectSampling
 from gstools.mps.model import MPSModel
 from gstools.mps.training_image import TrainingImage, Variable
+from gstools.mps.zone import Zone
 
-__all__ = ["DirectSampling", "MPSModel", "TrainingImage", "Variable"]
+__all__ = ["DirectSampling", "MPSModel", "TrainingImage", "Variable", "Zone"]

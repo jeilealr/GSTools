@@ -20,15 +20,16 @@ flat coordinate array per dimension, returning ``(n_nodes,)`` (broadcast across
 components) or ``(n_nodes, n_comp)`` (the trailing component axis is what
 per-node indexing consumes).
 
-This port keeps only the rotation/scale resolver (zonation is a later phase)
-and is **stricter** than the upstream source: all resolved values must be
-finite, and ``scale`` must additionally be strictly positive (the upstream
-``> 0`` check alone admits ``+inf``).
+It also resolves zonation (:func:`resolve_where` / :func:`build_zone_selector`,
+mapping each node to its ``Zone``), and is **stricter** than the upstream source
+on rotation/scale: all resolved values must be finite, and ``scale`` must
+additionally be strictly positive (the upstream ``> 0`` check alone admits
+``+inf``).
 """
 
 import numpy as np
 
-__all__ = ["resolve_spec"]
+__all__ = ["resolve_spec", "resolve_where", "build_zone_selector"]
 
 
 def _check_finite(arr, name):
@@ -158,3 +159,94 @@ def resolve_spec(
         f"{grid_shape + (n_comp,)!r} per-node components. Per-node maps must "
         "be shaped like the grid, not flattened."
     )
+
+
+def resolve_where(where, grid_shape, pos):
+    """Resolve a ``Zone.where`` spec to a boolean mask of the grid shape.
+
+    Parameters
+    ----------
+    where : numpy.ndarray of bool or callable
+        A boolean mask of ``grid_shape``, or a callable ``f(*pos) -> bool``
+        evaluated on flat coordinate arrays.
+    grid_shape : tuple of int
+        Simulation grid shape.
+    pos : tuple of numpy.ndarray
+        One flat coordinate array per dimension; callables are invoked as
+        ``f(*pos)``.
+
+    Returns
+    -------
+    numpy.ndarray of bool, shape grid_shape
+        Boolean mask indicating the region.
+    """
+    grid_shape = tuple(int(s) for s in grid_shape)
+    n_nodes = int(np.prod(grid_shape))
+    if callable(where):
+        mask = np.asarray(where(*pos))
+        if mask.dtype != np.bool_:
+            raise ValueError(
+                f"Zone: the where callable must return a boolean mask, got "
+                f"dtype {mask.dtype!r} — values are never silently coerced."
+            )
+        if mask.shape == (n_nodes,):
+            return mask.reshape(grid_shape)
+        if mask.shape == grid_shape:
+            return mask
+        raise ValueError(
+            f"Zone: the where callable must return shape ({n_nodes},) or "
+            f"{grid_shape!r}, got {mask.shape!r}."
+        )
+    mask = np.asarray(where)
+    if mask.dtype != np.bool_:
+        raise ValueError(
+            f"Zone: where must be a boolean array, got dtype {mask.dtype!r}."
+        )
+    if mask.shape != grid_shape:
+        raise ValueError(
+            f"Zone: where shape {mask.shape!r} does not match the simulation "
+            f"grid shape {grid_shape!r}."
+        )
+    return mask
+
+
+def build_zone_selector(zones, grid_shape, pos):
+    """Fold resolved zone masks into one integer selector over the grid.
+
+    Parameters
+    ----------
+    zones : list of Zone
+        Zones to fold into a selector.
+    grid_shape : tuple of int
+        Simulation grid shape.
+    pos : tuple of numpy.ndarray
+        One flat coordinate array per dimension; passed to
+        :func:`resolve_where` for each zone.
+
+    Returns
+    -------
+    numpy.ndarray of numpy.intp, shape grid_shape
+        ``0`` = primary TI, ``i + 1`` = ``zones[i]``.
+
+    Raises
+    ------
+    ValueError
+        When two zones' resolved regions overlap (deterministic — no silent
+        precedence order).
+    """
+    grid_shape = tuple(int(s) for s in grid_shape)
+    selector = np.zeros(grid_shape, dtype=np.intp)
+    covered = np.zeros(grid_shape, dtype=bool)
+    for i, zone in enumerate(zones):
+        mask = resolve_where(zone.where, grid_shape, pos)
+        overlap = covered & mask
+        if overlap.any():
+            raise ValueError(
+                f"MPSModel: zone {i}'s region overlaps an earlier zone at "
+                f"{int(overlap.sum())} node(s) (first at index "
+                f"{tuple(int(c) for c in np.argwhere(overlap)[0])}). Zone "
+                "regions must be disjoint."
+            )
+        covered |= mask
+        selector[mask] = i + 1
+    return selector
