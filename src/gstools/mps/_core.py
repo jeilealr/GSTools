@@ -26,8 +26,15 @@ _REQUIRED_EXPORTS = (
     "mps_dist_block_variation_masked",
     "mps_scan_node",
     "mps_scan_node_cat",
+    "mps_cleanup_pass",
+    "mps_api_version",
 )
 _MIN_VERSION = (1, 4, 0)
+# MPS native ABI revision this Python layer requires. The crate version can
+# stay 1.4.0 across an ABI change, so version alone is insufficient; the Core
+# exports ``mps_api_version()`` and we gate on it. Bump in lockstep with the
+# Rust ``mps_api_version_py`` whenever an MPS entry-point signature changes.
+_REQUIRED_MPS_API = 7
 _MSG = "GSTools MPS requires gstools-core>=1.4.0 with MPS support"
 
 
@@ -58,6 +65,18 @@ if _missing or _version_tuple(_version) < _MIN_VERSION:
     )
     raise ImportError(f"{_MSG}{_detail}.")
 
+# ABI-revision gate: a same-versioned Core built before the current MPS
+# entry-point signatures must be rejected with an actionable message rather
+# than failing later with an opaque argument/type error.
+_found_api = int(_gstools_core.mps_api_version())
+if _found_api < _REQUIRED_MPS_API:
+    raise ImportError(
+        f"{_MSG}: this GSTools needs MPS native ABI revision "
+        f">= {_REQUIRED_MPS_API}, but the installed gstools_core {_version} "
+        f"reports revision {_found_api}. Rebuild gstools-core from the matching "
+        "source (maturin build --release) and reinstall it."
+    )
+
 # Re-export the validated kernels so the MPS modules import them from here.
 mps_simulate = _gstools_core.mps_simulate
 mps_dist_block_cat = _gstools_core.mps_dist_block_cat
@@ -73,3 +92,5 @@ mps_dist_block_variation = _gstools_core.mps_dist_block_variation
 mps_dist_block_variation_masked = _gstools_core.mps_dist_block_variation_masked
 mps_scan_node = _gstools_core.mps_scan_node
 mps_scan_node_cat = _gstools_core.mps_scan_node_cat
+mps_cleanup_pass = _gstools_core.mps_cleanup_pass
+mps_api_version = _gstools_core.mps_api_version

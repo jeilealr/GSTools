@@ -9,10 +9,13 @@ The following classes and functions are provided
    DirectSampling
 """
 
+import warnings
+
 import numpy as np
 
 from gstools.field.base import Field
 from gstools.mps.model import MPSModel
+from gstools.mps.nonstationary import build_zone_selector, resolve_spec
 from gstools.mps.simulate import ds_simulate
 from gstools.normalizer.tools import apply_mean_norm_trend
 from gstools.random.rng import RNG
@@ -21,60 +24,13 @@ from gstools.tools.geometric import no_of_angles
 __all__ = ["DirectSampling"]
 
 
-def _resolve_nonstationary_map(param, sim_shape, n_stationary):
-    """Return ``None`` or an array broadcastable to ``sim_shape``.
-
-    Scalars and 0-d arrays are broadcast to the grid. A 1-D vector is a
-    *stationary* multi-component value (e.g. a 3-element Tait–Bryan angle triple
-    for a 3-D grid) and is accepted only when its length equals
-    ``n_stationary`` — the number of components a stationary value has for this
-    parameter and grid dimension. A *per-node* map must have leading dimensions
-    equal to ``sim_shape`` (i.e. a full-shape array, not a flattened vector).
-
-    Parameters
-    ----------
-    param : scalar or array-like or None
-        User-supplied rotation/anis value.
-    sim_shape : tuple
-        Simulation grid shape.
-    n_stationary : int
-        Component count of a stationary value for this parameter/dimension
-        (``no_of_angles(dim)`` for rotation, ``dim - 1`` for anis).
-
-    Raises
-    ------
-    ValueError
-        If a 1-D vector matches neither a stationary value nor the grid — the
-        common cause is a per-node map passed *flattened* instead of shaped
-        like the grid, which would otherwise silently apply only element [0].
-    """
-    if param is None:
-        return None
-    arr = np.asarray(param, dtype=np.float64)
-    if arr.ndim == 0 or arr.size == 1:
-        return np.full(sim_shape, float(arr.flat[0]))
-    if arr.ndim == 1:
-        # Only a genuine stationary multi-component value is accepted as 1-D.
-        # A per-node map is multi-dimensional (leading dims == grid); a 1-D
-        # array of any other length is almost certainly a flattened per-node
-        # map and would silently degrade to its first element — reject it.
-        if arr.size == n_stationary:
-            return arr
+def _check_finite_positions(pos):
+    """Raise ``ValueError`` if a conditioning position is NaN or +-inf."""
+    if not np.isfinite(pos).all():
         raise ValueError(
-            f"DirectSampling: 1-D non-stationary value of length {arr.size} matches neither a "
-            f"stationary value ({n_stationary} component(s) for a "
-            f"{len(sim_shape)}-D grid) nor a per-node map. For per-node values "
-            f"pass an array shaped like the grid {tuple(sim_shape)!r}, not a "
-            f"flattened vector."
+            "DirectSampling.set_condition: conditioning positions must be "
+            "finite."
         )
-    if arr.shape[: len(sim_shape)] == tuple(sim_shape):
-        return arr
-    raise ValueError(
-        f"DirectSampling: Non-stationary map shape {arr.shape!r} is incompatible with "
-        f"simulation grid shape {tuple(sim_shape)!r}. Pass a scalar or "
-        f"1-D vector for a stationary value, or an array whose leading "
-        f"dimensions match the grid."
-    )
 
 
 class DirectSampling(Field):
@@ -132,8 +88,6 @@ class DirectSampling(Field):
         self._mv_mean = {}
         self._mv_normalizer = {}
         self._mv_trend = {}
-        self._rotation = None
-        self._anis = None
         self.rng = RNG(None if np.isnan(seed) else int(seed))
         if model.ti.multivariate:
             for v in model.ti.variables:
@@ -228,13 +182,38 @@ class DirectSampling(Field):
             )
         name, save = self.get_store_config(store)
         pos, shape = self.pre_pos(pos, mesh_type)
-        # Stationary component counts disambiguate a 1-D value from a flattened
-        # per-node map: rotation has no_of_angles(dim) angles, anis has dim-1.
-        rotation_map = _resolve_nonstationary_map(
-            self._rotation, shape, no_of_angles(len(shape))
+        # Resolve the MPSModel's grid-independent rotation/scale specs to
+        # canonical per-node maps now that the grid is known (Mariethoz2010
+        # §6.2). Non-callable arrays are re-validated here against the grid
+        # shape, and callables are materialized and finiteness-checked.
+        # Coordinate callables receive one flat array per axis (meshgridded in
+        # C-order), so ``f(*grid_coords)`` yields one value per simulation node.
+        grid_coords = [
+            g.ravel() for g in np.meshgrid(*self.pos, indexing="ij")
+        ]
+        rotation_map, _ = resolve_spec(
+            self._mps_model.rotation,
+            shape,
+            no_of_angles(len(shape)),
+            grid_coords,
+            "rotation",
+            angles=True,
         )
-        anis_map = _resolve_nonstationary_map(
-            self._anis, shape, max(len(shape) - 1, 1)
+        scale_map, _ = resolve_spec(
+            self._mps_model.scale,
+            shape,
+            len(shape),
+            grid_coords,
+            "scale",
+            positive=True,
+        )
+        # Resolve the zone masks against this grid into an integer selector
+        # (0 = primary TI, i+1 = zones[i]); overlap/shape/dtype errors surface
+        # here. The native engine maps it to a per-node domain and scans each
+        # node's TI, with neighbours still gathered across zone boundaries.
+        zones = self._mps_model.zones
+        zone_selector = (
+            build_zone_selector(zones, shape, grid_coords) if zones else None
         )
         conditions = self._conditions_to_grid(self.pos)
         if not np.isnan(seed):
@@ -260,8 +239,11 @@ class DirectSampling(Field):
         if self._ti.multivariate:
             sim_conditions = conditions  # already {idx: {var: val}}
         else:
+            # Univariate: key conditions by the single variable's actual name
+            # (``None`` for the anonymous bare-array sugar, else the given name).
+            uv_name = self._ti.variables[0].name
             sim_conditions = (
-                {idx: {None: val} for idx, val in conditions.items()}
+                {idx: {uv_name: val} for idx, val in conditions.items()}
                 if conditions
                 else None
             )
@@ -273,12 +255,19 @@ class DirectSampling(Field):
             rng_path=rng_path,
             rng_nodes=rng_nodes,
             conditions=sim_conditions,
-            cond_weight=self.cond_weight,
             boundary=self.boundary,
             num_threads=n_threads,
             rotation_map=rotation_map,
-            anis_map=anis_map,
+            scale_map=scale_map,
             path=path,
+            scan_path=self._mps_model.scan_path,
+            zones=zones,
+            zone_selector=zone_selector,
+            post_processing=self._mps_model.post_processing,
+            post_processing_factor=self._mps_model.post_processing_factor,
+            post_processing_path=self._mps_model.post_processing_path,
+            post_processing_variables=self._mps_model.post_processing_variables,
+            post_processing_mask=self._mps_model.post_processing_mask,
         )
         # Branch only on the return type: multivariate → dict of named arrays;
         # univariate → bare array (unwrap the single None key).
@@ -311,7 +300,9 @@ class DirectSampling(Field):
                     fld, name=v.name, process=False, save=save
                 )
             return out
-        return self.post_field(result[None], name, post_process, save)
+        return self.post_field(
+            result[self._ti.variables[0].name], name, post_process, save
+        )
 
     def _conditions_to_grid(self, axes):
         """Snap conditioning points to nearest grid nodes (Mariethoz2010 §3 ¶12).
@@ -335,6 +326,22 @@ class DirectSampling(Field):
         """
         if self._cond_pos is None:
             return {}
+        # Points beyond half a cell outside the grid snap to its edge: warn.
+        outside = 0
+        for d, ax in enumerate(axes):
+            ax = np.asarray(ax, dtype=np.double)
+            tol = 0.5 * np.abs(np.diff(ax)).max() if len(ax) > 1 else 0.0
+            p = np.asarray(self._cond_pos[d], dtype=np.double)
+            outside |= (p < ax.min() - tol) | (p > ax.max() + tol)
+        if np.any(outside):
+            warnings.warn(
+                f"DirectSampling: {int(np.sum(outside))} conditioning "
+                "point(s) lie outside the simulation grid and were snapped "
+                "to its nearest edge node.",
+                UserWarning,
+                stacklevel=3,
+            )
+        n_collided = 0  # finite values landing on an occupied (node, variable)
         if self._ti.multivariate and isinstance(self._cond_val, dict):
             if not self._cond_val:
                 raise ValueError("DirectSampling: cond_val must not be empty")
@@ -350,19 +357,33 @@ class DirectSampling(Field):
                     val = self._cond_val[v][k]
                     if not np.isfinite(val):
                         continue
+                    if v in var_best:
+                        n_collided += 1
                     if v not in var_best or dist_sq < var_best[v][1]:
                         var_best[v] = (float(val), dist_sq)
-            return {
+            result = {
                 idx: {v: val for v, (val, _) in var_best.items()}
                 for idx, var_best in candidates.items()
             }
-        # univariate (unchanged)
-        candidates = {}  # idx -> (val, dist_sq)
-        for k in range(self._cond_val.shape[0]):
-            idx, dist_sq = self._snap_to_nearest(axes, k)
-            if idx not in candidates or dist_sq < candidates[idx][1]:
-                candidates[idx] = (self._cond_val[k], dist_sq)
-        return {idx: val for idx, (val, _) in candidates.items()}
+        else:
+            # univariate (NaN values were already dropped in set_condition)
+            candidates = {}  # idx -> (val, dist_sq)
+            for k in range(self._cond_val.shape[0]):
+                idx, dist_sq = self._snap_to_nearest(axes, k)
+                if idx in candidates:
+                    n_collided += 1
+                if idx not in candidates or dist_sq < candidates[idx][1]:
+                    candidates[idx] = (self._cond_val[k], dist_sq)
+            result = {idx: val for idx, (val, _) in candidates.items()}
+        if n_collided:
+            warnings.warn(
+                f"DirectSampling: {n_collided} conditioning value(s) collided "
+                "on an occupied grid node; the one closest to the node was "
+                "kept (the first one on ties).",
+                UserWarning,
+                stacklevel=3,
+            )
+        return result
 
     def _snap_to_nearest(self, axes, k):
         """Return (grid_index_tuple, dist_sq) for the k-th conditioning point."""
@@ -379,7 +400,8 @@ class DirectSampling(Field):
     def set_condition(self, cond_pos, cond_val):
         """Set the conditioning data for the simulation.
 
-        Conditioning weight is configured on the :class:`MPSModel` (``cond_weight=``).
+        Conditioning weight is configured per variable on the :class:`Variable`
+        (``cond_weight=``), or via the univariate :class:`TrainingImage` sugar.
 
         Parameters
         ----------
@@ -402,6 +424,7 @@ class DirectSampling(Field):
             cond_pos_arr = np.asarray(cond_pos, dtype=np.double).reshape(
                 self.dim, -1
             )
+            _check_finite_positions(cond_pos_arr)
             n_cond = len(next(iter(cond_val.values())))
             for v, arr in cond_val.items():
                 if len(arr) != n_cond:
@@ -429,6 +452,7 @@ class DirectSampling(Field):
             self._cond_pos, self._cond_val = _gs_set_condition(
                 cond_pos, cond_val, self.dim
             )
+            _check_finite_positions(self._cond_pos)
 
     def set_mv_transforms(self, mean=None, normalizer=None, trend=None):
         """Set per-variable post-processing transforms for multivariate simulations.
@@ -461,38 +485,6 @@ class DirectSampling(Field):
             self._mv_trend = {
                 v: _set_mean_trend(t, self.dim) for v, t in trend.items()
             }
-
-    def set_nonstationary(self, rotation=None, anis=None):
-        """Set per-node geometric transform for non-stationary simulation.
-
-        Transforms lag vectors from the simulation-grid frame into the training
-        image's own frame before each TI scan (Mariethoz2010 §6.2). Enables
-        spatially varying orientation and anisotropy without modifying the TI.
-
-        Parameters
-        ----------
-        rotation : float or numpy.ndarray, optional
-            Rotation angle(s) in radians. Scalar → stationary (same angle at
-            every node). Array whose leading dimensions match the simulation
-            grid shape → per-node angles. Convention matches
-            :class:`gstools.CovModel` ``angles`` (2-D: one angle; 3-D:
-            Tait–Bryan yaw/pitch/roll). ``None`` → no rotation applied.
-        anis : float or numpy.ndarray, optional
-            Anisotropy ratio(s). Scalar → stationary. Array → per-node. Values
-            less than 1 compress the TI search in transversal directions.
-            Convention matches :class:`gstools.CovModel` ``anis``.
-            ``None`` → isotropic.
-        """
-        if rotation is not None:
-            self._rotation = np.asarray(rotation, dtype=np.float64)
-        if anis is not None:
-            anis_arr = np.asarray(anis, dtype=np.float64)
-            if np.any(anis_arr <= 0):
-                raise ValueError(
-                    f"DirectSampling: anis must be positive everywhere, "
-                    f"got minimum value {float(anis_arr.min())!r}"
-                )
-            self._anis = anis_arr
 
     @property
     def mps_model(self):
@@ -537,8 +529,12 @@ class DirectSampling(Field):
 
     @property
     def cond_weight(self):
-        """:class:`float`: Conditioning-node weight. Read-only; set on the MPSModel."""
-        return self._mps_model.cond_weight
+        """:class:`float` or :class:`dict`: Conditioning-node weight per variable (scalar if all equal).
+
+        Read-only. Configure on the :class:`Variable` (``ti.variable(name).cond_weight``)
+        or via the univariate :class:`TrainingImage` ``cond_weight=`` sugar.
+        """
+        return self._collapse_per_var("cond_weight")
 
     @property
     def boundary(self):
@@ -570,16 +566,8 @@ class DirectSampling(Field):
             f"threshold={self.threshold}, ",
             f"boundary={self.boundary!r}",
         ]
-        if self._rotation is not None:
-            rot_val = (
-                float(self._rotation)
-                if self._rotation.ndim == 0
-                else self._rotation
-            )
-            parts.append(f", rotation={rot_val!r}")
-        if self._anis is not None:
-            anis_val = (
-                float(self._anis) if self._anis.ndim == 0 else self._anis
-            )
-            parts.append(f", anis={anis_val!r}")
+        if self._mps_model.rotation is not None:
+            parts.append(f", rotation={self._mps_model.rotation!r}")
+        if self._mps_model.scale is not None:
+            parts.append(f", scale={self._mps_model.scale!r}")
         return "".join(parts) + ")"

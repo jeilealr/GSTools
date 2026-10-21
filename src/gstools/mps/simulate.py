@@ -13,12 +13,20 @@ from gstools import config
 
 # MPS is Rust-only: the complete engine comes from gstools.mps._core, which
 # hard-imports and version-checks gstools_core (see RUST_ONLY_MIGRATION.md).
+from gstools.mps._core import mps_cleanup_pass as _mps_cleanup_pass_gsc
 from gstools.mps._core import mps_simulate as _mps_simulate_gsc
 from gstools.mps.neighbors import _lag_transform_matrix, _precompute_offsets
+from gstools.mps.training_image import (
+    _post_pass_n_neighbors,
+    _resolve_post_ti,
+)
 
 # Python precomputes optional per-node lag transform matrices before the
 # GIL-free Rust call.
 _MPS_RUST_ENGINE_STATS_HOOK = None
+# Called once per post-processing (cleanup) pass with {"used_threads": int};
+# lets tests confirm the native parallel branch engaged. ``None`` disables it.
+_MPS_CLEANUP_STATS_HOOK = None
 
 
 def _build_path(unknown, path, rng_path, sim_shape):
@@ -125,31 +133,56 @@ class _DirectSamplingEngine:
         rng_path,
         rng_nodes,
         conditions=None,
-        cond_weight=1.0,
         boundary="strict",
         rotation_map=None,
-        anis_map=None,
+        scale_map=None,
         path="random",
+        scan_path="sequential",
+        zones=None,
+        zone_selector=None,
+        post_processing=0,
+        post_processing_factor=1.0,
+        post_processing_path=None,
+        post_processing_variables=None,
+        post_processing_mask=None,
     ):
         self.training_image = training_image
+        self.zones = list(zones) if zones else []
+        self.zone_selector = zone_selector
         self.variables = [v.name for v in training_image.variables]
+        # Per-variable categorical penalty matrices (native ABI rev 3). A
+        # variable with a penalty_matrix uses metric kind 3; its CxC matrix is
+        # concatenated into penalty_flat with a per-variable start offset.
+        self.var_penalty = {
+            v.name: v.penalty_matrix for v in training_image.variables
+        }
         self.weights = (
             {
                 v.name: training_image.weights[v.name]
                 for v in training_image.variables
             }
             if training_image.multivariate
-            else {None: 1.0}
+            # Univariate: key by the single variable's actual name (``None`` for
+            # the anonymous bare-array sugar, or a user-given name).
+            else {training_image.variables[0].name: 1.0}
         )
         self.ti_shape = np.array(training_image.shape)
         self.sim_shape = sim_shape
         self.dim = len(sim_shape)
         self.threshold = threshold
         self.scan_fraction = scan_fraction
-        self.cond_weight = cond_weight
         self.boundary = boundary
+        self.random_scan = scan_path == "random"
+        # Per-variable spatial-decay exponent and conditioning-node weight,
+        # keyed by variable name (native ABI rev 2 consumes them per variable).
+        self.var_distance_power = {
+            v.name: v.distance_power for v in training_image.variables
+        }
+        self.var_cond_weight = {
+            v.name: v.cond_weight for v in training_image.variables
+        }
         self.rotation_map = rotation_map
-        self.anis_map = anis_map
+        self.scale_map = scale_map
 
         self.n_k = {v.name: v.n_neighbors for v in training_image.variables}
 
@@ -173,10 +206,46 @@ class _DirectSamplingEngine:
                     self.sg[v][idx] = val
                     self.is_cond[v][idx] = True
 
+        # Post-processing (Meerschman et al. 2013, Sect. 4): resolved once here.
+        # The cleanup passes run after the main path through the Rust
+        # ``mps_cleanup_pass`` engine (serial Gauss-Seidel reopen/resimulate).
+        self.post_processing = int(post_processing)
+        self.post_processing_factor = float(post_processing_factor)
+        self._rng_path = rng_path
+        self._rng_nodes = rng_nodes
+        # None inherits the main-path mode (an explicit main-path array has no
+        # meaning for a full-grid re-visit -> random); Me13 §4 does not
+        # prescribe the post-pass order, so the explicit option is an extension.
+        if post_processing_path is None:
+            post_processing_path = (
+                "sequential"
+                if isinstance(path, str) and path == "sequential"
+                else "random"
+            )
+        self._post_path = post_processing_path
+        # Post-pass TI: the primary's variables with any override's explicitly
+        # set search fields substituted in (data/kind preserved).
+        self._post_ti = _resolve_post_ti(
+            training_image, post_processing_variables or []
+        )
+        if self.post_processing > 0:  # fail before the main pass, not after
+            _post_pass_n_neighbors(self._post_ti, self.post_processing_factor)
+        self._post_max_radius_per_var = {
+            v.name: v.max_radius for v in self._post_ti.variables
+        }
+        self._post_processing_mask = post_processing_mask
+
         self.max_radius_per_var = {
             v.name: v.max_radius for v in training_image.variables
         }
-        _radii = [r for r in self.max_radius_per_var.values() if r is not None]
+        # The offset table is shared by the main and cleanup passes, so when
+        # post-processing runs it must also cover any (possibly larger) post-pass
+        # radius. Extending it only ever adds farther candidates the main path
+        # never reaches, so the post_processing=0 table is unchanged.
+        _radius_values = list(self.max_radius_per_var.values())
+        if self.post_processing > 0:
+            _radius_values += list(self._post_max_radius_per_var.values())
+        _radii = [r for r in _radius_values if r is not None]
         global_max_radius = max(_radii) if _radii else None
         max_off_int = (
             int(np.ceil(global_max_radius))
@@ -220,6 +289,67 @@ class _DirectSamplingEngine:
             v.name: v.variation_p_norm for v in training_image.variables
         }
 
+    def _lag_matrices_for(self, path):
+        """Per-node SG→TI transform matrices for ``path`` (empty if stationary)."""
+        if (self.rotation_map is None and self.scale_map is None) or not len(
+            path
+        ):
+            return np.empty((0, self.dim, self.dim), dtype=np.float64)
+        return np.ascontiguousarray(
+            np.stack(
+                [
+                    _lag_transform_matrix(
+                        self.dim, self.rotation_map, self.scale_map, node
+                    )
+                    for node in path
+                ]
+            )
+        )
+
+    def _node_domain_for(self, path):
+        """Per-path-node domain selector (0 = primary, k = zones[k-1])."""
+        if self.zones and self.zone_selector is not None:
+            return np.ascontiguousarray(
+                self.zone_selector[tuple(np.asarray(path).T)], dtype=np.int64
+            )
+        return np.zeros(len(path), dtype=np.int64)
+
+    def _pack_zones(self):
+        """Pack zone TIs column-wise (self.variables order) + offsets/shapes/d_max.
+
+        Zones share the primary's search config; only data/shape/d_max differ
+        per domain. Pass-invariant, so the main and cleanup passes reuse it.
+        """
+        n_zones = len(self.zones)
+        n_vars = len(self.variables)
+        zone_offsets = np.zeros(n_zones + 1, dtype=np.int64)
+        zone_shapes = np.zeros((n_zones, self.dim), dtype=np.int64)
+        zone_d_max = np.ones((n_zones, n_vars), dtype=np.float64)
+        zone_ti_parts = []
+        running = 0
+        for z, zone in enumerate(self.zones):
+            zti = zone.ti
+            rows = np.stack(
+                [
+                    np.asarray(zti.variable(v).data, dtype=np.float64).ravel()
+                    for v in self.variables
+                ],
+                axis=0,
+            )
+            zone_ti_parts.append(rows)
+            running += rows.shape[1]
+            zone_offsets[z + 1] = running
+            zone_shapes[z] = np.asarray(zti.shape, dtype=np.int64)
+            for vi, v in enumerate(self.variables):
+                dm = zti.variable(v).d_max
+                zone_d_max[z, vi] = 1.0 if dm is None else dm
+        zone_ti = (
+            np.ascontiguousarray(np.concatenate(zone_ti_parts, axis=1))
+            if zone_ti_parts
+            else np.empty((n_vars, 0), dtype=np.float64)
+        )
+        return zone_ti, zone_offsets, zone_shapes, zone_d_max
+
     def _run_rust_engine(self, n_threads):
         """Run the complete node path inside one GIL-free Rust call."""
         fields = np.ascontiguousarray(
@@ -232,7 +362,9 @@ class _DirectSamplingEngine:
         )
         metric_kinds = np.fromiter(
             (
-                0
+                3
+                if self.var_categorical[v] and self.var_penalty[v] is not None
+                else 0
                 if self.var_categorical[v]
                 else 1
                 if self.var_p_norm[v] is not None
@@ -241,6 +373,28 @@ class _DirectSamplingEngine:
             ),
             dtype=np.int64,
             count=len(self.variables),
+        )
+        # Pack per-variable penalty matrices into a flat buffer + offsets/ncat.
+        penalty_mats = [self.var_penalty[v] for v in self.variables]
+        penalty_ncat = np.fromiter(
+            (0 if m is None else m.shape[0] for m in penalty_mats),
+            dtype=np.int64,
+            count=len(self.variables),
+        )
+        penalty_offsets = np.zeros(len(self.variables), dtype=np.int64)
+        _flat_parts = []
+        _running = 0
+        for _i, _m in enumerate(penalty_mats):
+            penalty_offsets[_i] = _running
+            if _m is not None:
+                _flat_parts.append(
+                    np.ascontiguousarray(_m, dtype=np.float64).ravel()
+                )
+                _running += _m.size
+        penalty_flat = (
+            np.concatenate(_flat_parts)
+            if _flat_parts
+            else np.empty(0, dtype=np.float64)
         )
         p_norm = np.fromiter(
             (
@@ -254,24 +408,9 @@ class _DirectSamplingEngine:
             dtype=np.float64,
             count=len(self.variables),
         )
-        lag_matrices = (
-            np.ascontiguousarray(
-                np.stack(
-                    [
-                        _lag_transform_matrix(
-                            self.dim,
-                            self.rotation_map,
-                            self.anis_map,
-                            node,
-                        )
-                        for node in self.path
-                    ]
-                )
-            )
-            if (self.rotation_map is not None or self.anis_map is not None)
-            and len(self.path)
-            else np.empty((0, self.dim, self.dim), dtype=np.float64)
-        )
+        lag_matrices = self._lag_matrices_for(self.path)
+        node_domain = self._node_domain_for(self.path)
+        zone_ti, zone_offsets, zone_shapes, zone_d_max = self._pack_zones()
         (
             result,
             strict_fallbacks,
@@ -325,12 +464,30 @@ class _DirectSamplingEngine:
                 count=len(self.variables),
             ),
             p_norm,
+            penalty_flat,
+            penalty_offsets,
+            penalty_ncat,
             self.threshold,
             self.scan_fraction,
-            self.training_image.distance_power,
-            self.cond_weight,
+            self.random_scan,
+            # Per-variable (native ABI rev 2), indexed in self.variables order.
+            np.fromiter(
+                (self.var_distance_power[v] for v in self.variables),
+                dtype=np.float64,
+                count=len(self.variables),
+            ),
+            np.fromiter(
+                (self.var_cond_weight[v] for v in self.variables),
+                dtype=np.float64,
+                count=len(self.variables),
+            ),
             self.boundary == "partial",
             n_threads,
+            zone_ti,
+            zone_offsets,
+            zone_shapes,
+            zone_d_max,
+            node_domain,
         )
         for row, variable in enumerate(self.variables):
             self.sg[variable][...] = result[row].reshape(self.sim_shape)
@@ -372,7 +529,252 @@ class _DirectSamplingEngine:
             if num_threads is not None
             else (config.NUM_THREADS or 1)
         )
-        return self._run_rust_engine(n_threads)
+        self._run_rust_engine(n_threads)
+        self._run_post_passes(n_threads)
+        return self.sg
+
+    def _cleanup_var_arrays(self, ordered_vars, pass_n_k, weights):
+        """Pack the per-variable *effective* post-pass config as the arrays the
+        Rust cleanup engine consumes, in ``self.variables`` order.
+
+        Mirrors the per-variable packing in :meth:`_run_rust_engine`, but reads
+        from the resolved post-processing TI's :class:`Variable` objects so any
+        ``post_processing_variables`` override (distance kernel, penalty,
+        ``distance_power``/``cond_weight``, weight) and the divided
+        ``n_neighbors`` take effect.
+        """
+        names = self.variables
+        count = len(names)
+        metric_kinds = np.fromiter(
+            (
+                3
+                if v.categorical and v.penalty_matrix is not None
+                else 0
+                if v.categorical
+                else 1
+                if v.p_norm is not None
+                else 2
+                for v in ordered_vars
+            ),
+            dtype=np.int64,
+            count=count,
+        )
+        p_norm = np.fromiter(
+            (
+                1.0
+                if v.categorical
+                else v.p_norm
+                if v.p_norm is not None
+                else v.variation_p_norm
+                for v in ordered_vars
+            ),
+            dtype=np.float64,
+            count=count,
+        )
+        penalty_mats = [v.penalty_matrix for v in ordered_vars]
+        penalty_ncat = np.fromiter(
+            (0 if m is None else m.shape[0] for m in penalty_mats),
+            dtype=np.int64,
+            count=count,
+        )
+        penalty_offsets = np.zeros(count, dtype=np.int64)
+        flat_parts = []
+        running = 0
+        for i, m in enumerate(penalty_mats):
+            penalty_offsets[i] = running
+            if m is not None:
+                flat_parts.append(
+                    np.ascontiguousarray(m, dtype=np.float64).ravel()
+                )
+                running += m.size
+        penalty_flat = (
+            np.concatenate(flat_parts)
+            if flat_parts
+            else np.empty(0, dtype=np.float64)
+        )
+        return {
+            "n_neighbors": np.fromiter(
+                (pass_n_k[name] for name in names),
+                dtype=np.int64,
+                count=count,
+            ),
+            "max_radius": np.fromiter(
+                (
+                    np.nan
+                    if self._post_max_radius_per_var[name] is None
+                    else self._post_max_radius_per_var[name]
+                    for name in names
+                ),
+                dtype=np.float64,
+                count=count,
+            ),
+            "variable_weights": np.fromiter(
+                (weights[name] for name in names),
+                dtype=np.float64,
+                count=count,
+            ),
+            "metric_kinds": metric_kinds,
+            "has_nan": np.fromiter(
+                (v.has_nan for v in ordered_vars),
+                dtype=np.uint8,
+                count=count,
+            ),
+            "d_max": np.fromiter(
+                (1.0 if v.d_max is None else v.d_max for v in ordered_vars),
+                dtype=np.float64,
+                count=count,
+            ),
+            "p_norm": p_norm,
+            "penalty_flat": penalty_flat,
+            "penalty_offsets": penalty_offsets,
+            "penalty_ncat": penalty_ncat,
+            "distance_power": np.fromiter(
+                (v.distance_power for v in ordered_vars),
+                dtype=np.float64,
+                count=count,
+            ),
+            "cond_weight": np.fromiter(
+                (v.cond_weight for v in ordered_vars),
+                dtype=np.float64,
+                count=count,
+            ),
+        }
+
+    def _run_cleanup_pass(
+        self, order, u_start, u_fallback, pass_n_k, scan_frac, n_threads
+    ):
+        """One deterministic Gauss-Seidel cleanup pass through the Rust engine.
+
+        Reopens each node of ``order`` (its non-conditioned variables), scans
+        the fully-informed field, and writes the result back into ``self.sg``.
+        The native engine orders the sweep by a position dependency DAG, so the
+        result is bit-identical for any ``n_threads`` (serial == parallel).
+        """
+        names = self.variables
+        by_name = {v.name: v for v in self._post_ti.variables}
+        ordered_vars = [by_name[name] for name in names]
+        weights = (
+            {name: self._post_ti.weights[name] for name in names}
+            if self._post_ti.multivariate
+            else {names[0]: 1.0}
+        )
+        post_ti_matrix = np.ascontiguousarray(
+            np.stack(
+                [
+                    np.asarray(v.data, dtype=np.float64).ravel()
+                    for v in ordered_vars
+                ],
+                axis=0,
+            )
+        )
+        fields = np.ascontiguousarray(
+            np.stack([self.sg[v].reshape(-1) for v in names])
+        )
+        conditioned = np.ascontiguousarray(
+            np.stack([self.is_cond[v].reshape(-1) for v in names]).astype(
+                np.uint8
+            )
+        )
+        arrays = self._cleanup_var_arrays(ordered_vars, pass_n_k, weights)
+        lag_matrices = self._lag_matrices_for(order)
+        node_domain = self._node_domain_for(order)
+        zone_ti, zone_offsets, zone_shapes, zone_d_max = self._pack_zones()
+        result, strict_fallbacks, collapsed_lags, _used = (
+            _mps_cleanup_pass_gsc(
+                post_ti_matrix,
+                np.asarray(self.ti_shape, dtype=np.int64),
+                fields,
+                conditioned,
+                np.asarray(self.sim_shape, dtype=np.int64),
+                np.asarray(order, dtype=np.int64),
+                lag_matrices,
+                np.asarray(u_start, dtype=np.float64),
+                np.asarray(u_fallback, dtype=np.float64),
+                np.asarray(self.offset_arr, dtype=np.int64),
+                arrays["n_neighbors"],
+                arrays["max_radius"],
+                arrays["variable_weights"],
+                arrays["metric_kinds"],
+                arrays["has_nan"],
+                arrays["d_max"],
+                arrays["p_norm"],
+                arrays["penalty_flat"],
+                arrays["penalty_offsets"],
+                arrays["penalty_ncat"],
+                self.threshold,
+                scan_frac,
+                self.random_scan,
+                arrays["distance_power"],
+                arrays["cond_weight"],
+                self.boundary == "partial",
+                n_threads,
+                zone_ti,
+                zone_offsets,
+                zone_shapes,
+                zone_d_max,
+                node_domain,
+            )
+        )
+        for row, variable in enumerate(names):
+            self.sg[variable][...] = result[row].reshape(self.sim_shape)
+        # Effective thread count of the most recent pass (after the native
+        # small-path cutoff); lets callers/tests confirm the parallel branch ran.
+        self._cleanup_used_threads = int(_used)
+        if _MPS_CLEANUP_STATS_HOOK is not None:
+            _MPS_CLEANUP_STATS_HOOK({"used_threads": int(_used)})
+        if strict_fallbacks:
+            warnings.warn(
+                "gstools.mps: boundary='strict' could not fit the full data "
+                "event inside the TI during a post-processing pass; falling "
+                "back to partial mode (dropping the furthest neighbour(s)).",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+        if collapsed_lags:
+            warnings.warn(
+                "gstools.mps: anisotropy/rotation transform collapsed "
+                "neighbour lag(s) during a post-processing pass; the "
+                "duplicates are excluded from the data event.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+
+    def _run_post_passes(self, n_threads):
+        """Run ``post_processing`` deterministic cleanup passes (Me13 §4).
+
+        Eligible nodes are those with at least one non-conditioned variable,
+        intersected with ``post_processing_mask`` when given. ``n_neighbors``
+        and ``scan_fraction`` are divided by ``post_processing_factor``. Each
+        pass is bit-identical for any ``n_threads``. ``post_processing=0`` is a
+        true no-op: it draws no extra random numbers.
+        """
+        if self.post_processing <= 0:
+            return
+        resim = np.zeros(self.sim_shape, dtype=bool)
+        for v in self.variables:
+            resim |= ~self.is_cond[v]
+        if self._post_processing_mask is not None:
+            resim &= self._post_processing_mask
+        if not resim.any():
+            return
+        p_f = self.post_processing_factor
+        pass_n_k = _post_pass_n_neighbors(self._post_ti, p_f)
+        scan_frac = self.scan_fraction / p_f
+        for _ in range(self.post_processing):
+            if isinstance(self._post_path, str) and self._post_path == "same":
+                # Without a mask, resim is exactly the main path's unknown set,
+                # so filtering self.path preserves its order. With a mask, this
+                # narrows to the eligible subset, still in main-path order.
+                order = self.path[resim[tuple(self.path.T)]]
+            else:
+                order = _build_path(
+                    resim, self._post_path, self._rng_path, self.sim_shape
+                )
+            u_start = self._rng_nodes.uniform(size=len(order))
+            u_fallback = self._rng_nodes.uniform(size=(len(order), self.dim))
+            self._run_cleanup_pass(
+                order, u_start, u_fallback, pass_n_k, scan_frac, n_threads
+            )
 
 
 def ds_simulate(
@@ -383,12 +785,19 @@ def ds_simulate(
     rng_path,
     rng_nodes,
     conditions=None,
-    cond_weight=1.0,
     boundary="strict",
     num_threads=None,
     rotation_map=None,
-    anis_map=None,
+    scale_map=None,
     path="random",
+    scan_path="sequential",
+    zones=None,
+    zone_selector=None,
+    post_processing=0,
+    post_processing_factor=1.0,
+    post_processing_path=None,
+    post_processing_variables=None,
+    post_processing_mask=None,
 ):
     """Node-wise multivariate Direct Sampling (Mariethoz2010 §3, Eq. 8).
 
@@ -428,20 +837,20 @@ def ds_simulate(
         missing unknown nodes and duplicate rows raise ``ValueError``).
         Default: ``"random"``.
     conditions : dict, optional
-        ``{node_index: {variable: value}}`` conditioning data.
-    cond_weight : float, optional
-        Weight delta for conditioning nodes (Mariethoz2010 §3 ¶26).
+        ``{node_index: {variable: value}}`` conditioning data. Per-variable
+        conditioning-node weights are read from each :class:`Variable`.
     boundary : str, optional
         ``"strict"`` (default) or ``"partial"`` search-window strategy.
     num_threads : int or None, optional
         Threads for the node-wise DAG. ``None`` -> ``config.NUM_THREADS``.
     rotation_map : numpy.ndarray or None, optional
-        Per-node rotation angles, shape matching the simulation grid. ``None``
-        → no rotation (stationary). Use ``DirectSampling.set_nonstationary``
-        to produce this array from user-facing scalar or array inputs.
-    anis_map : numpy.ndarray or None, optional
-        Per-node anisotropy ratios, shape matching the simulation grid.
-        ``None`` → isotropic (stationary). All values must be positive.
+        Canonical per-node rotation map, shape ``grid_shape +
+        (no_of_angles(dim),)`` from :func:`gstools.mps.nonstationary.resolve_spec`.
+        ``None`` → no rotation (stationary).
+    scale_map : numpy.ndarray or None, optional
+        Canonical per-node scale map, shape ``grid_shape + (dim,)`` from
+        :func:`~gstools.mps.nonstationary.resolve_spec`. ``None`` → no dilation.
+        All values must be positive.
     Returns
     -------
     dict
@@ -455,10 +864,17 @@ def ds_simulate(
         rng_path,
         rng_nodes,
         conditions=conditions,
-        cond_weight=cond_weight,
         boundary=boundary,
         rotation_map=rotation_map,
-        anis_map=anis_map,
+        scale_map=scale_map,
         path=path,
+        scan_path=scan_path,
+        zones=zones,
+        zone_selector=zone_selector,
+        post_processing=post_processing,
+        post_processing_factor=post_processing_factor,
+        post_processing_path=post_processing_path,
+        post_processing_variables=post_processing_variables,
+        post_processing_mask=post_processing_mask,
     )
     return engine.run(num_threads=num_threads)
