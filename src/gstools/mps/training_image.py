@@ -47,10 +47,29 @@ def _data_range(arr):
 
     Returns the ``max - min`` spread of the finite values, or ``1.0`` when the
     array is constant or entirely undefined (avoids a zero/NaN normalizer).
+
+    The spread is computed as the difference of the extrema **after** each is
+    widened to a Python float (float64), so a low-precision input dtype cannot
+    overflow the subtraction (audit DS02): e.g. ``int8`` ``[-128, 127]`` yields
+    ``255`` rather than the ``1`` that ``int8(127) - int8(-128)`` wraps to, and
+    ``float32`` extrema do not saturate to ``inf``. A genuinely non-constant
+    range that still exceeds float64 is a hard error rather than a silent
+    ``inf`` normalizer that would collapse every distance to zero.
     """
     finite = arr[np.isfinite(arr)]
-    dmax = float(finite.max() - finite.min()) if finite.size else 0.0
-    return dmax if dmax > 0 else 1.0
+    if finite.size == 0:
+        return 1.0
+    low = float(np.min(finite))
+    high = float(np.max(finite))
+    dmax = high - low
+    if dmax == 0.0:
+        return 1.0
+    if not np.isfinite(dmax):
+        raise ValueError(
+            "TrainingImage: continuous data range is not finite (the spread of "
+            "the data exceeds float64); rescale the data before simulation."
+        )
+    return dmax
 
 
 def _parse_distance(distance):
@@ -624,13 +643,21 @@ class TrainingImage:
                 "Either specify weight on every Variable or on none."
             )
         else:
-            total = sum(raw)
-            if total <= 0:
+            # Normalize after scaling by the largest positive weight (audit
+            # DS15): summing raw weights first overflows to inf for large finite
+            # inputs such as [1e308, 1e308] and then normalizes to [0, 0],
+            # violating the sum-to-one joint-distance contract. Dividing by the
+            # max keeps every term in [0, 1]; the result is invariant to a
+            # common positive rescaling of the weights.
+            scale = max(raw)
+            if scale <= 0:
                 raise ValueError(
                     "TrainingImage: sum of weights must be positive."
                 )
+            scaled = [w / scale for w in raw]
+            total = sum(scaled)
             self._normalized_weights = {
-                v.name: v.weight / total for v in var_list
+                v.name: s / total for v, s in zip(var_list, scaled)
             }
 
     # ------------------------------------------------------------------
@@ -643,11 +670,21 @@ class TrainingImage:
         return self._has_nan
 
     @property
+    def _sole_variable(self):
+        """The single Variable of a univariate TI, by whatever key it has.
+
+        A univariate TI built from a named ``Variable`` is keyed by that name,
+        not ``None``, so the univariate conveniences must look the variable up
+        by identity rather than assuming the ``None`` key (audit DS12).
+        """
+        return next(iter(self._var_map.values()))
+
+    @property
     def data(self):
         """:class:`numpy.ndarray` or None: Raw data for univariate TIs; None for MV."""
         if self._multivariate:
             return None
-        return self._var_map[None].data
+        return self._sole_variable.data
 
     @property
     def ndim(self):
@@ -776,7 +813,7 @@ class TrainingImage:
                 "TrainingImage.categorical is not available for multivariate TIs. "
                 "Use ti.variable(name).categorical."
             )
-        return self._var_map[None].categorical
+        return self._sole_variable.categorical
 
     @property
     def distance_type(self):
@@ -786,7 +823,7 @@ class TrainingImage:
                 "TrainingImage.distance_type is not available for multivariate TIs. "
                 "Use ti.variable(name).distance."
             )
-        return self._var_map[None].distance
+        return self._sole_variable.distance
 
     @property
     def distance_power(self):
@@ -799,7 +836,7 @@ class TrainingImage:
                 "TrainingImage.distance_power is not available for multivariate "
                 "TIs. Use ti.variable(name).distance_power."
             )
-        return self._var_map[None].distance_power
+        return self._sole_variable.distance_power
 
     # ------------------------------------------------------------------
     # Distance
@@ -984,7 +1021,7 @@ class TrainingImage:
         if self._multivariate:
             names = [v.name for v in self._variables]
             return f"TrainingImage(variables={names!r}, shape={self.shape})"
-        v = self._var_map[None]
+        v = self._sole_variable
         return (
             f"TrainingImage(shape={self.shape}, "
             f"categorical={v.categorical}, "

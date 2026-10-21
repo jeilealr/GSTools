@@ -24,25 +24,41 @@ def _precompute_offsets(shape, max_offset=None):
     shape : tuple
         Simulation grid shape.
     max_offset : int, optional
-        Maximum offset in any dimension.
-        Default: ``max(shape)``.
+        Maximum offset in any dimension (a radius cap). ``None`` → unlimited,
+        i.e. each axis spans the full grid extent.
 
     Returns
     -------
     numpy.ndarray, shape (N, dim)
+
+    Notes
+    -----
+    The envelope is built **per axis**, capped at ``shape[d] - 1`` on axis ``d``
+    (audit DS06). An offset larger than ``shape[d] - 1`` can never land inside
+    the grid from any node, so excluding it never changes which neighbours the
+    engine finds, but it keeps a long thin grid such as ``(1000, 2, 2)`` from
+    attempting the ``max(shape)``-wide cube that would allocate hundreds of GB.
     """
     dim = len(shape)
-    if max_offset is None:
-        max_offset = max(shape)
-    estimated_elements = (2 * max_offset + 1) ** dim
+    # Per-axis cap: the grid extent, optionally tightened by the radius cap.
+    axis_caps = [
+        (s - 1) if max_offset is None else min(int(max_offset), s - 1)
+        for s in shape
+    ]
+    estimated_elements = 1
+    for cap in axis_caps:
+        estimated_elements *= 2 * cap + 1
     if estimated_elements > 5_000_000:
         raise ValueError(
             f"_precompute_offsets would allocate ~{estimated_elements * dim * 8 // 1_000_000} MB "
-            f"(max_offset={max_offset}, dim={dim}). Set max_radius to bound the "
+            f"(axis_caps={axis_caps}, dim={dim}). Set max_radius to bound the "
             "neighbourhood search radius."
         )
-    rng_vals = np.arange(-max_offset, max_offset + 1)
-    grid = np.array(np.meshgrid(*[rng_vals] * dim, indexing="ij"))
+    grid = np.array(
+        np.meshgrid(
+            *[np.arange(-cap, cap + 1) for cap in axis_caps], indexing="ij"
+        )
+    )
     offsets = grid.reshape(dim, -1).T
     offsets = offsets[np.any(offsets != 0, axis=1)]
     dist_sq = np.sum(offsets**2, axis=1)

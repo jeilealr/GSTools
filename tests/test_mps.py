@@ -1421,13 +1421,13 @@ class TestMultivariateDirectSampling(unittest.TestCase):
         )
         ds = DirectSampling(MPSModel(ti, scan_fraction=0.3))
         # cond_pos has 1 point but cond_val has 2 -> length mismatch
-        with self.assertRaisesRegex(ValueError, "mismatch"):
+        with self.assertRaisesRegex(ValueError, "conditioning-position count"):
             ds.set_condition(
                 cond_pos=[[3.0], [3.0]],
                 cond_val={"a": np.array([1, 0]), "b": np.array([1, 0])},
             )
         # per-variable arrays of different lengths
-        with self.assertRaisesRegex(ValueError, "same"):
+        with self.assertRaisesRegex(ValueError, "conditioning-position count"):
             ds.set_condition(
                 cond_pos=[[3.0, 4.0], [3.0, 4.0]],
                 cond_val={"a": np.array([1, 0]), "b": np.array([1])},
@@ -2143,11 +2143,11 @@ class TestNaNTrainingImage(unittest.TestCase):
 
 class TestPrecomputeOffsetsGuard(unittest.TestCase):
     def test_large_3d_grid_raises_valueerror(self):
-        # 200^3 with default max_offset=200 → (401)^3 > 5M → guard fires
+        # 200^3 with per-axis caps 199 → (399)^3 > 5M → guard fires
         with self.assertRaises(ValueError) as ctx:
             _precompute_offsets((200, 200, 200))
         msg = str(ctx.exception)
-        self.assertIn("max_offset", msg)
+        self.assertIn("axis_caps", msg)
         self.assertIn("max_radius", msg)
 
     def test_large_3d_grid_with_max_radius_ok(self):

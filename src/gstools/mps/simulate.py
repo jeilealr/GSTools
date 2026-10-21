@@ -181,6 +181,17 @@ class _DirectSamplingEngine:
         self.var_cond_weight = {
             v.name: v.cond_weight for v in training_image.variables
         }
+        # An exact identity transform (no rotation, unit scale everywhere) must
+        # reduce events the same way as an absent transform (audit DS07). The
+        # transformed route uses a geometric reduce-to-fit while the stationary
+        # route keeps the nearest-neighbour prefix, so they can retain different
+        # events despite the identity matrix. Collapsing a globally-identity map
+        # to ``None`` routes it through stationary handling and keeps identity
+        # bit-identical to no transform.
+        if rotation_map is not None and np.all(rotation_map == 0.0):
+            rotation_map = None
+        if scale_map is not None and np.all(scale_map == 1.0):
+            scale_map = None
         self.rotation_map = rotation_map
         self.scale_map = scale_map
 
@@ -233,6 +244,19 @@ class _DirectSamplingEngine:
         self._post_max_radius_per_var = {
             v.name: v.max_radius for v in self._post_ti.variables
         }
+        # The cleanup mask must match the grid exactly: NumPy would otherwise
+        # broadcast a (2,), (2,1) or scalar mask against the eligibility grid
+        # and silently select a column/row/everything, and a non-broadcastable
+        # shape would only fail after the main pass had consumed randomness
+        # (audit DS11). Validate here, before the main pass runs.
+        if post_processing_mask is not None and tuple(
+            np.shape(post_processing_mask)
+        ) != tuple(sim_shape):
+            raise ValueError(
+                "DirectSampling: post_processing_mask shape "
+                f"{np.shape(post_processing_mask)!r} must match the simulation "
+                f"grid shape {tuple(sim_shape)!r}."
+            )
         self._post_processing_mask = post_processing_mask
 
         self.max_radius_per_var = {
@@ -245,13 +269,15 @@ class _DirectSamplingEngine:
         _radius_values = list(self.max_radius_per_var.values())
         if self.post_processing > 0:
             _radius_values += list(self._post_max_radius_per_var.values())
-        _radii = [r for r in _radius_values if r is not None]
-        global_max_radius = max(_radii) if _radii else None
-        max_off_int = (
-            int(np.ceil(global_max_radius))
-            if global_max_radius is not None
-            else None
-        )
+        # Any unlimited (None) effective radius makes the shared envelope
+        # unlimited — bounded only per axis by the grid extent in
+        # ``_precompute_offsets`` (audit DS06). Dropping None and taking the max
+        # of the finite siblings would silently cap the unbounded variable's
+        # neighbourhood to a smaller radius.
+        if any(r is None for r in _radius_values):
+            max_off_int = None
+        else:
+            max_off_int = int(np.ceil(max(_radius_values)))
         self.offset_arr = _precompute_offsets(sim_shape, max_off_int)
 
         # Node path: every node with >= 1 uninformed variable.  Fully-conditioned
@@ -807,9 +833,14 @@ def ds_simulate(
     finds the TI cell ``y`` minimising the weighted distance ``Σ_k w_k d_k`` over
     all variables, and that one cell's whole vector ``{TI[v][y]}`` is copied to
     the node's *uninformed* variables. Because every variable at a node is drawn
-    from the same TI cell, the joint (cross-variable) relationship is reproduced
-    exactly. Variables already known at the node (only ever via conditioning
-    data) act as collocated ``h = 0`` constraints, weighted by ``cond_weight``.
+    from the same TI cell, the collocated cross-variable tuple pasted at that
+    node is exactly a tuple that occurs in the TI (when copied without variation
+    correction or retained partial conditioning). This preserves the local joint
+    relationship cell-by-cell; it does not by itself guarantee exact finite-
+    sample joint frequencies or higher-order multipoint statistics over the
+    realization (audit DS16). Variables already known at the node (only ever via
+    conditioning data) act as collocated ``h = 0`` constraints, weighted by
+    ``cond_weight``.
 
     Parameters
     ----------

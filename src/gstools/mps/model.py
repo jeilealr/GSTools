@@ -22,8 +22,22 @@ _VALID_POST_PATH = ("same", "random", "sequential")
 
 
 def _validate_post_processing(value):
-    """Validate post-processing pass count p >= 0 (Mariethoz2010 §4)."""
-    v = int(value)
+    """Validate the post-processing pass count: a non-negative integer.
+
+    Rejects a fractional value *before* truncating it (audit DS15): the earlier
+    ``int(value)`` silently turned ``0.9`` into ``0`` and ``1.9`` into ``1``
+    despite the integer-count API. ``bool`` is accepted as an explicit 0/1, and
+    NumPy integer types are supported (they are integer-valued floats).
+    """
+    if isinstance(value, bool):
+        return int(value)
+    numeric = float(value)
+    if not np.isfinite(numeric) or numeric != int(numeric):
+        raise ValueError(
+            f"MPSModel: post_processing must be a non-negative integer, "
+            f"got {value!r}"
+        )
+    v = int(numeric)
     if v < 0:
         raise ValueError(
             f"MPSModel: post_processing must be >= 0, got {value!r}"
@@ -165,9 +179,18 @@ def _validate_scan_fraction(value):
 def _validate_threshold(value):
     """Validate threshold: finite and >= 0, warn if > 1; return float.
 
+    ``None`` selects DSBC (best-candidate) mode and maps to the native
+    ``threshold <= 0`` sentinel, i.e. ``0.0`` (audit DS13; the PR #416 review
+    asked for the ``None``/zero distinction). ``0.0`` is also accepted and is
+    equivalent to ``None`` (both select DSBC) — a deliberate, documented
+    departure from the pure-Python reference, which rejects ``0`` to force
+    ``None``; keeping ``0`` preserves the existing backend default and API.
+
     NaN/inf are rejected up front (a NaN threshold would otherwise slip past
     the ``< 0`` / ``> 1`` comparisons; cf. GeoStat-Framework/GSTools#416).
     """
+    if value is None:
+        return 0.0
     v = float(value)
     if not np.isfinite(v):
         raise ValueError(f"MPSModel: threshold must be finite, got {value!r}")
@@ -304,9 +327,12 @@ class MPSModel:
         must share the primary TI's variable set and kinds. ``None`` → no zones.
         Default: ``None``.
     post_processing : :class:`int`, optional
-        Number of cleanup passes (Mariethoz2010 §4): each re-simulates already
-        simulated nodes with a fully informed neighbourhood to reduce noise.
-        ``0`` → no cleanup. Default: ``0``.
+        Number of cleanup passes (Meerschman et al. 2013, Sect. 4): each
+        re-simulates already-simulated nodes against a fully informed
+        neighbourhood *after* the main path, to reduce noise. This is the
+        repeated-sweep cleanup of Meerschman 2013, not Mariethoz 2010 §7
+        recursive syn-processing (which repairs neighbourhoods during the
+        simulation). ``0`` → no cleanup. Default: ``0``.
     post_processing_factor : :class:`float`, optional
         Divides ``scan_fraction`` and ``n_neighbors`` for the cleanup passes
         (``> 1`` cheaper, ``< 1`` more thorough). Must be finite and > 0.
@@ -449,32 +475,83 @@ class MPSModel:
 
     @zones.setter
     def zones(self, value):
-        self._zones = _validate_zones(value, self._ti)
+        new_zones = _validate_zones(value, self._ti)
+        # DS14: a later assignment must honour the same cleanup-override
+        # penalty-code invariant the constructor enforces, so re-screen the new
+        # zones against the resolved post-processing overrides. A rejected
+        # assignment leaves the previous configuration untouched.
+        _validate_post_processing_variables(
+            self._post_processing_variables, self._ti, new_zones
+        )
+        self._zones = new_zones
 
     @property
     def post_processing(self):
         """:class:`int`: Number of cleanup (post-processing) passes (``0`` → none)."""
         return self._post_processing
 
+    @post_processing.setter
+    def post_processing(self, value):
+        new_value = _validate_post_processing(value)
+        _validate_post_pass_effort(
+            self._ti,
+            new_value,
+            self._post_processing_factor,
+            self._post_processing_variables,
+        )
+        self._post_processing = new_value
+
     @property
     def post_processing_factor(self):
         """:class:`float`: Divisor for cleanup ``scan_fraction``/``n_neighbors`` effort."""
         return self._post_processing_factor
+
+    @post_processing_factor.setter
+    def post_processing_factor(self, value):
+        new_value = _validate_post_processing_factor(value)
+        _validate_post_pass_effort(
+            self._ti,
+            self._post_processing,
+            new_value,
+            self._post_processing_variables,
+        )
+        self._post_processing_factor = new_value
 
     @property
     def post_processing_path(self):
         """:class:`str`, array, or None: Cleanup visit order (``None`` → inherit main path)."""
         return self._post_processing_path
 
+    @post_processing_path.setter
+    def post_processing_path(self, value):
+        self._post_processing_path = _validate_post_processing_path(value)
+
     @property
     def post_processing_variables(self):
         """:class:`list` of :any:`Variable`: Per-variable cleanup overrides (``[]`` if none)."""
         return list(self._post_processing_variables)
 
+    @post_processing_variables.setter
+    def post_processing_variables(self, value):
+        new_variables = _validate_post_processing_variables(
+            value, self._ti, self._zones
+        )
+        _validate_post_pass_effort(
+            self._ti,
+            self._post_processing,
+            self._post_processing_factor,
+            new_variables,
+        )
+        self._post_processing_variables = new_variables
+
     @property
     def post_processing_mask(self):
         """:class:`numpy.ndarray` of bool or None: Which nodes are eligible for cleanup."""
         return self._post_processing_mask
+
+    @post_processing_mask.setter
+    def post_processing_mask(self, value):
+        self._post_processing_mask = _validate_post_processing_mask(value)
 
     def __repr__(self):
         args = [repr(self._ti)]
@@ -483,9 +560,28 @@ class MPSModel:
             threshold=0.0,
             boundary="strict",
             scan_path="sequential",
+            post_processing=0,
+            post_processing_factor=1.0,
         )
         for name, default in defaults.items():
             val = getattr(self, f"_{name}")
             if val != default:
                 args.append(f"{name}={val!r}")
+        # Cleanup path/overrides/mask and the nonstationary maps can make two
+        # materially different models look identical (audit DS16); show concise
+        # non-default markers without dumping full arrays.
+        if self._post_processing_path is not None:
+            args.append(f"post_processing_path={self._post_processing_path!r}")
+        if self._post_processing_variables:
+            args.append(
+                f"post_processing_variables=<{len(self._post_processing_variables)}>"
+            )
+        if self._post_processing_mask is not None:
+            args.append("post_processing_mask=<set>")
+        if self._zones:
+            args.append(f"zones=<{len(self._zones)}>")
+        if self._rotation is not None:
+            args.append("rotation=<set>")
+        if self._scale is not None:
+            args.append("scale=<set>")
         return f"MPSModel({', '.join(args)})"

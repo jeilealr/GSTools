@@ -24,6 +24,16 @@ from gstools.tools.geometric import no_of_angles
 __all__ = ["DirectSampling"]
 
 
+def _is_unset(value):
+    """True for an unset seed control: ``None`` or NaN (audit DS13)."""
+    if value is None:
+        return True
+    try:
+        return bool(np.isnan(value))
+    except (TypeError, ValueError):
+        return False
+
+
 def _check_finite_positions(pos):
     """Raise ``ValueError`` if a conditioning position is NaN or +-inf."""
     if not np.isfinite(pos).all():
@@ -88,7 +98,7 @@ class DirectSampling(Field):
         self._mv_mean = {}
         self._mv_normalizer = {}
         self._mv_trend = {}
-        self.rng = RNG(None if np.isnan(seed) else int(seed))
+        self.rng = RNG(None if _is_unset(seed) else int(seed))
         if model.ti.multivariate:
             for v in model.ti.variables:
                 if v.name in dir(self):
@@ -182,6 +192,15 @@ class DirectSampling(Field):
             )
         name, save = self.get_store_config(store)
         pos, shape = self.pre_pos(pos, mesh_type)
+        # Reject non-finite grid coordinates before snapping, coordinate maps or
+        # stored field metadata can use them (audit DS15). Nonuniform *finite*
+        # axes remain allowed; their spacing is interpreted in index space.
+        for axis in self.pos:
+            if not np.all(np.isfinite(np.asarray(axis, dtype=np.double))):
+                raise ValueError(
+                    "DirectSampling: simulation grid coordinates must be finite "
+                    "(NaN/inf axis values are not allowed)."
+                )
         # Resolve the MPSModel's grid-independent rotation/scale specs to
         # canonical per-node maps now that the grid is known (Mariethoz2010
         # §6.2). Non-callable arrays are re-validated here against the grid
@@ -216,16 +235,18 @@ class DirectSampling(Field):
             build_zone_selector(zones, shape, grid_coords) if zones else None
         )
         conditions = self._conditions_to_grid(self.pos)
-        if not np.isnan(seed):
+        # ``None`` is accepted as "unset" alongside ``nan`` for every seed
+        # control (audit DS13), so callers need not know the nan sentinel.
+        if not _is_unset(seed):
             self.rng.seed = int(seed)
         rng_path = (
             self.rng.random
-            if np.isnan(path_seed)
+            if _is_unset(path_seed)
             else RNG(int(path_seed)).random
         )
         rng_nodes = (
             self.rng.random
-            if np.isnan(node_seed)
+            if _is_unset(node_seed)
             else RNG(int(node_seed)).random
         )
         # Call-time num_threads overrides the instance default.
@@ -412,6 +433,10 @@ class DirectSampling(Field):
             ``{variable: numpy.ndarray}`` mapping (use ``numpy.nan`` for a
             variable that is not conditioned at a given point).
         """
+        # Conditioning updates are transactional (audit DS08): everything is
+        # converted and validated into locals first, and ``self._cond_pos`` /
+        # ``self._cond_val`` are reassigned only after every check passes, so a
+        # rejected update never corrupts the state a later simulation reuses.
         if self._ti.multivariate and isinstance(cond_val, dict):
             if not cond_val:
                 raise ValueError("DirectSampling: cond_val must not be empty")
@@ -425,22 +450,29 @@ class DirectSampling(Field):
                 self.dim, -1
             )
             _check_finite_positions(cond_pos_arr)
-            n_cond = len(next(iter(cond_val.values())))
-            for v, arr in cond_val.items():
-                if len(arr) != n_cond:
+            n_cond = cond_pos_arr.shape[1]
+            local_val = {}
+            for v, a in cond_val.items():
+                arr = np.asarray(a, dtype=np.double)
+                # Require exactly one scalar per conditioning position; reject an
+                # (N, k) array up front instead of failing later in snapping with
+                # an ambiguous-truth error (audit DS08).
+                if arr.ndim != 1:
                     raise ValueError(
-                        "DirectSampling: all cond_val arrays must have the same "
-                        f"length; got {n_cond} for {next(iter(cond_val))!r} but "
-                        f"{len(arr)} for {v!r}."
+                        f"DirectSampling: cond_val[{v!r}] must be a 1-D array "
+                        f"with one value per conditioning position; got shape "
+                        f"{arr.shape!r}."
                     )
-            if cond_pos_arr.shape[1] != n_cond:
-                raise ValueError(
-                    "DirectSampling: cond_pos and cond_val length mismatch."
-                )
+                if arr.shape[0] != n_cond:
+                    raise ValueError(
+                        "DirectSampling: all cond_val arrays must match the "
+                        f"conditioning-position count ({n_cond}); got "
+                        f"{arr.shape[0]} for {v!r}."
+                    )
+                local_val[v] = arr
+            self._check_penalty_codes(local_val)  # DS09
             self._cond_pos = cond_pos_arr
-            self._cond_val = {
-                v: np.asarray(a, dtype=np.double) for v, a in cond_val.items()
-            }
+            self._cond_val = local_val
         elif self._ti.multivariate:
             raise ValueError(
                 "DirectSampling: cond_val must be a dict {variable: array} "
@@ -449,10 +481,56 @@ class DirectSampling(Field):
         else:
             from gstools.krige.tools import set_condition as _gs_set_condition
 
-            self._cond_pos, self._cond_val = _gs_set_condition(
+            # Validate into locals BEFORE storing so a non-finite position does
+            # not leave invalid conditioning installed (audit DS08 univariate).
+            local_pos, local_val = _gs_set_condition(
                 cond_pos, cond_val, self.dim
             )
-            _check_finite_positions(self._cond_pos)
+            _check_finite_positions(local_pos)
+            uv_name = self._ti.variables[0].name
+            self._check_penalty_codes(
+                {uv_name: np.asarray(local_val, dtype=np.double)}
+            )  # DS09
+            self._cond_pos, self._cond_val = local_pos, local_val
+
+    def _check_penalty_codes(self, values_by_name):
+        """Screen hard category codes against active penalty matrices (DS09).
+
+        A categorical penalty matrix is indexed by the hard code during the
+        scan, so a non-integer, negative, or out-of-range code would silently
+        become a full-mismatch (or, for the raw kernel, an invalid index). The
+        effective matrices are the primary TI's and any cleanup
+        ``post_processing_variables`` override's; a finite hard value must be a
+        valid code ``[0, C)`` of each.
+        """
+        from gstools.mps.training_image import _check_category_codes
+
+        checks = {}
+        for var in self._ti.variables:
+            if var.penalty_matrix is not None:
+                checks.setdefault(var.name, []).append(
+                    (var.penalty_matrix.shape[0], "penalty_matrix")
+                )
+        for ov in self._mps_model.post_processing_variables:
+            if ov.penalty_matrix is not None:
+                checks.setdefault(ov.name, []).append(
+                    (
+                        ov.penalty_matrix.shape[0],
+                        "post_processing penalty_matrix",
+                    )
+                )
+        for name, matrix_checks in checks.items():
+            if name not in values_by_name:
+                continue
+            vals = np.asarray(values_by_name[name], dtype=np.double)
+            finite = vals[np.isfinite(vals)]
+            for ncat, label in matrix_checks:
+                _check_category_codes(
+                    finite,
+                    ncat,
+                    f"DirectSampling.set_condition: conditioning code for "
+                    f"{name!r} (checked against {label})",
+                )
 
     def set_mv_transforms(self, mean=None, normalizer=None, trend=None):
         """Set per-variable post-processing transforms for multivariate simulations.
