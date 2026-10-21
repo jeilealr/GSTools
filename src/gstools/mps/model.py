@@ -4,6 +4,7 @@ import warnings
 
 import numpy as np
 
+from gstools.mps._validation import exact_count
 from gstools.mps.training_image import (
     TrainingImage,
     Variable,
@@ -27,22 +28,9 @@ def _validate_post_processing(value):
     Rejects a fractional value *before* truncating it (audit DS15): the earlier
     ``int(value)`` silently turned ``0.9`` into ``0`` and ``1.9`` into ``1``
     despite the integer-count API. ``bool`` is accepted as an explicit 0/1, and
-    NumPy integer types are supported (they are integer-valued floats).
+    NumPy integer types are supported without conversion through float64.
     """
-    if isinstance(value, bool):
-        return int(value)
-    numeric = float(value)
-    if not np.isfinite(numeric) or numeric != int(numeric):
-        raise ValueError(
-            f"MPSModel: post_processing must be a non-negative integer, "
-            f"got {value!r}"
-        )
-    v = int(numeric)
-    if v < 0:
-        raise ValueError(
-            f"MPSModel: post_processing must be >= 0, got {value!r}"
-        )
-    return v
+    return exact_count(value, minimum=0, context="MPSModel: post_processing")
 
 
 def _validate_post_processing_factor(value):
@@ -310,9 +298,16 @@ class MPSModel:
         Training image (univariate or multivariate).
     scan_fraction : :class:`float`, optional
         Fraction of the TI to scan per node (capped at the valid search
-        window). Must be in (0, 1]. Default: 1.0.
-    threshold : :class:`float`, optional
-        Distance threshold for early acceptance. 0.0 → DSBC mode. Default: 0.0.
+        window). For a nonempty window, the budget is
+        max(1, min(window size, floor(fraction * selected TI size))). Zones use
+        their own TI size. Must be in (0, 1]. Default: 1.0.
+    threshold : float or None, optional
+        Default 0.0 (or None): select the lowest-distance selectable candidate
+        within the scan budget; an exact zero match may stop early. For finite
+        positive t, accept the first distance strictly below t, otherwise the
+        best visited candidate. Ties retain the first minimum. This is not an
+        exact-only rule or necessarily a full-TI scan. Hard data are preserved
+        independently of threshold.
     boundary : :class:`str`, optional
         Search-window strategy: ``"strict"`` (default) or ``"partial"``.
     scan_path : :class:`str`, optional
@@ -336,6 +331,9 @@ class MPSModel:
     post_processing_factor : :class:`float`, optional
         Divides ``scan_fraction`` and ``n_neighbors`` for the cleanup passes
         (``> 1`` cheaper, ``< 1`` more thorough). Must be finite and > 0.
+        Counts round to nearest (ties to even), floored at one; requested
+        variation counts must remain at least two. Actual common support may
+        contain one point. Candidate budgets remain capped by the valid window.
         Default: ``1.0``.
     post_processing_path : :class:`str`, array-like, or None, optional
         Cleanup visit order: ``None`` → inherit the main-path mode; ``"same"``
@@ -349,13 +347,16 @@ class MPSModel:
         Which simulation-grid nodes are eligible for cleanup update (shape
         checked at call time). ``None`` → all simulated nodes. Default: ``None``.
     rotation : scalar, array-like, or callable, optional
-        Grid-independent non-stationary rotation spec (Tait-Bryan angles;
+        Grid-independent non-stationary rotation spec (radians, GSTools
+        Tait-Bryan ordering;
         ``no_of_angles(dim)`` components). Resolved per node at call time by
         :func:`gstools.mps.nonstationary.resolve_spec`. Undefined in 1-D.
         ``None`` → no rotation. Default: ``None``.
     scale : scalar, array-like, or callable, optional
         Grid-independent non-stationary scale spec (``dim`` components; a
-        scalar dilates all axes). Must be strictly positive. Resolved per node
+        scalar dilates all axes). Positive dimensionless SG-to-TI lag factors;
+        offsets/radii use grid-index units, not physical coordinate spacing.
+        Resolved per node
         at call time. ``None`` → no scaling. Default: ``None``.
     """
 
@@ -425,7 +426,10 @@ class MPSModel:
 
     @property
     def threshold(self):
-        """:class:`float`: Distance threshold for early acceptance."""
+        """float: Zero/None selects the best visited candidate; positive values
+        accept the first distance strictly below the threshold. Scan budget
+        limits the examined candidates; exact-zero matches may stop early.
+        """
         return self._threshold
 
     @threshold.setter

@@ -48,6 +48,7 @@ dependencies = [
     "hankel>=1.0.0",
     "meshio>=5.1.0",
     "numpy>=1.20.0",
+    "packaging>=20",
     "pyevtk>=1.1.1",
     "scipy>=1.1.0",
 ]
@@ -65,8 +66,8 @@ doc = [
     "sphinxcontrib-youtube>=1.1",
 ]
 plotting = ["matplotlib>=3.7", "pyvista>=0.40"]
-# Rust backend. Optional accelerator for SRF/kriging; REQUIRED for MPS Direct
-# Sampling (>=1.4.0 is the release that ships the MPS kernels).
+# Compatibility extra: Core is already a mandatory dependency above.
+# Retained so existing installs using gstools[rust] continue to work.
 rust = ["gstools_core>=1.4.0"]
 benchmark = ["asv"]
 test = ["pytest-cov>=3"]

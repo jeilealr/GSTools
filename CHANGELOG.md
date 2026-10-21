@@ -11,7 +11,18 @@ All notable changes to **GSTools** will be documented in this file.
   the Rust kernels are the MPS numerical backend
   - the default Rust call owns neighbour selection, distance scanning, value
     retrieval, simulation-grid writes, and deterministic node-level Rayon scheduling
-  - repeated runs are bit-identical across Rust thread counts for fixed seeds
+  - repeated runs are bit-identical across Rust thread counts for fixed controls
+    within a fixed supported build and dependency environment
+  - DS now opts into the SeedSequence/MT19937 contract
+    `ds-seedsequence-mt19937-v1`, replacing the limited 16-bit child-seed mapping;
+    seeded DS realizations intentionally change, while non-DS RNG defaults remain
+    unchanged. At call time `seed=None` resets the master from entropy; omitted
+    seed/NaN continues it. Pin source revisions, NumPy, and seed controls when
+    comparing results
+  - `threshold=0.0` remains the default best-in-budget mode and accepts `None`
+    equivalently; `Zone` remains available through `gstools.mps.Zone`
+  - native DS inputs and retained numerical helpers receive consistent boundary
+    validation; unsupported lossy integer TI inputs require rescaling or recoding
   - remove the Python node scheduler and per-node progress callback; all MPS
     simulations now run through the complete Rust engine
   - exact categorical golden fields should be generated with the Rust engine;

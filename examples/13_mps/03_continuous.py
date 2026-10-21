@@ -13,9 +13,10 @@ The distance metric then selects how two continuous neighborhoods are compared:
   match even when the local mean shifts.
 
 We keep ``threshold=0.0`` for all three runs. This is the DSBC setting: DS
-scans the requested fraction of the training image and takes the best candidate
-found. That keeps this first continuous example focused on the metric choice
-instead of threshold tuning.
+takes the best selectable candidate within the configured scan budget,
+with an early exit for an exact zero-distance match. ``None`` is equivalent.
+That keeps this first continuous example focused on the metric choice instead
+of threshold tuning.
 
 No conditioning data are used here. The goal is to isolate one new concept:
 how continuous data events are compared. The Strebelle channel page combines
@@ -44,15 +45,13 @@ metrics = [
 ]
 fields = {}
 for distance, label in metrics:
-    ti = gs.TrainingImage(
+    ti = gs.mps.TrainingImage(
         ti_data,
         categorical=False,
         distance=distance,
         n_neighbors=12,
     )
-    ds = gs.DirectSampling(
-        gs.MPSModel(ti, scan_fraction=0.3, threshold=0.0)
-    )
+    ds = gs.DirectSampling(gs.MPSModel(ti, scan_fraction=0.3, threshold=0.0))
     fields[label] = ds(grid, seed=3)
 
 ###############################################################################
@@ -79,6 +78,7 @@ fig.colorbar(im, ax=axes, shrink=0.8)
 
 ###############################################################################
 # The L1 and L2 realizations are similar because both favor nearby continuous
-# values, although L2 gives slightly smoother matches in this run. Variation
-# distance focuses on local changes around each neighborhood's mean, so its
-# pattern differs and its red/blue contrast is less pronounced than in the TI.
+# values. Variation distance compares local changes around means on common
+# finite support and shifts pasted values by the same mean difference; outputs
+# can exceed the TI range. These plots illustrate individual realizations, not
+# an ensemble claim about smoothness or marginal distributions.

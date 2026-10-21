@@ -42,13 +42,15 @@ data simply add measured values that must be honored.
 Three parameters control the quality and runtime tradeoff:
 
 * ``n_neighbors`` (``n``): the maximum number of known neighbors in each data
-  event. Larger values preserve richer patterns but cost more.
+  event. Larger values can capture richer patterns but cost more.
 * ``scan_fraction`` (``f``): the fraction of the TI search examined for each
-  simulated node, subject to the valid candidate positions for the current data
-  event. Larger values search harder but run slower.
+  simulated node, measured relative to selected TI size and capped by the valid
+  candidate window. Larger values search harder but run slower.
 * ``threshold`` (``t``): an early-acceptance distance. Start with
-  ``threshold=0.0`` (DSBC), which scans the requested fraction and takes the
-  best candidate found; exact matches are still accepted immediately. Tune
+  ``threshold=0.0`` (DSBC), or equivalent ``None``, which takes the best
+  selectable candidate within its budget; exact zero-distance matches can
+  stop early. Positive thresholds accept strictly below the threshold, falling
+  back to the best visited candidate if none qualifies. Tune
   positive thresholds only when this is not sufficient.
 
 The gallery is ordered as a learning path. Start with **A first Direct Sampling
@@ -72,7 +74,8 @@ simulates only the channel variable; **Bivariate joint simulation from a
 channel TI**, later in the gallery, jointly simulates both variables and
 provides a second paper-based reproducibility example. **Parallel execution and
 reproducibility** then shows that the Rust backend gives bit-identical
-realizations at any thread count, and how the ``seed`` / ``path_seed`` /
+realizations across thread counts within a fixed supported build and dependency
+environment, and how the ``seed`` / ``path_seed`` /
 ``node_seed`` controls work. Rust is the programming language used to implement
 the MPS engine (`Rust <https://www.rust-lang.org/>`_).
 **Variation distance for continuous conditioning** then returns to continuous
@@ -99,13 +102,17 @@ the command to regenerate the figures.
 
 A final group returns to 2D to show the algorithm controls added on top of the
 basic model. **Post-processing: cleanup passes** re-opens an already-simulated
-field against a fully informed neighbourhood to relax away isolated-pixel
-artefacts (``post_processing``). **Zoned simulation** scans a different training
+field against the current neighborhood to revisit local matches (``post_processing``). **Zoned simulation** scans a different training
 image per region of the grid with :any:`Zone`. **Categorical penalty matrix**
 replaces the hard 0/1 facies mismatch with soft, possibly ordinal, costs on a
 :any:`Variable`. **TI scan order** contrasts the default sequential window scan
 with the ``scan_path="random"`` extension. Each one is deterministic for a fixed
-seed and bit-identical at any thread count.
+seed within a fixed build/dependency environment, including across thread
+counts. These illustrative fields do not establish ensemble statistical fidelity.
+
+See :ref:`mps-contracts` for exact scan budgets, zero/None thresholds,
+grid-index units, radians, cleanup and Field post-processing, zone semantics,
+and the SeedSequence reproducibility contract.
 
 Examples
 --------

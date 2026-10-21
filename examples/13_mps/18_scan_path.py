@@ -10,13 +10,13 @@ window is visited is the **scan path**.
 ``scan_path="sequential"`` (the default, Mariethoz et al., 2010, para [19])
 walks the window in raster order from a per-node random start. ``"random"`` (a
 GSTools extension) visits distinct window cells in a node-local random order, so
-the accepted candidate is drawn more uniformly from the matching cells rather
-than favouring whichever appears first in raster order. Set it on
+the visited candidate prefix avoids the raster ordering. Threshold acceptance
+and ties still select according to that visited order. Set it on
 :class:`MPSModel`.
 
 Both modes are fully deterministic for a fixed seed and give bit-identical
-results at any thread count; they differ only in which equally-good TI cell a
-node settles on.
+results across thread counts within a fixed build and dependency environment.
+Different visited sets can change the best distance as well as tie selection.
 """
 
 from pathlib import Path
@@ -36,7 +36,7 @@ example_dir = (
 with np.load(example_dir / "input" / "strebelle_channel_ti.npz") as data:
     ti_arr = data["array1"].astype(int)
 
-ti = gs.TrainingImage(ti_arr, categorical=True, n_neighbors=16)
+ti = gs.mps.TrainingImage(ti_arr, categorical=True, n_neighbors=16)
 grid = [np.arange(64, dtype=float), np.arange(64, dtype=float)]
 
 field_seq = gs.DirectSampling(
@@ -46,8 +46,9 @@ field_rnd = gs.DirectSampling(
     gs.MPSModel(ti, scan_fraction=0.1, threshold=0.0, scan_path="random")
 )(grid, seed=99)
 
-# Same seed, same geometry, but a different TI cell accepted at some nodes.
-assert not np.array_equal(field_seq, field_rnd)
+# Different candidate orders can select different anchors, but different fields
+# are not a required invariant (for example, a constant TI always agrees).
+print("scan modes differ:", not np.array_equal(field_seq, field_rnd))
 
 # Each mode is reproducible on its own.
 field_rnd_again = gs.DirectSampling(
@@ -67,6 +68,6 @@ ax1.set_title("scan_path='random'")
 fig.tight_layout()
 
 ###############################################################################
-# Both realizations reproduce the channel statistics; the random scan can reduce
-# a mild raster-order bias in which TI cell is chosen among several equally good
-# matches. The sequential default remains the Mariethoz reference behaviour.
+# These realizations illustrate candidate-order differences. Statistical
+# fidelity needs ensemble evidence; this comparison does not establish it.
+# The sequential default remains the Mariethoz reference scan order.

@@ -14,6 +14,7 @@ import warnings
 import numpy as np
 
 from gstools.field.base import Field
+from gstools.mps._validation import _validate_float64_integers, exact_count
 from gstools.mps.model import MPSModel
 from gstools.mps.nonstationary import build_zone_selector, resolve_spec
 from gstools.mps.simulate import ds_simulate
@@ -43,6 +44,46 @@ def _check_finite_positions(pos):
         )
 
 
+def _condition_values(values, variable):
+    """Convert hard data without silently dropping infinities or integer bits."""
+    _validate_float64_integers(
+        values, variable.categorical, "DirectSampling conditioning values"
+    )
+    result = np.asarray(values, dtype=np.double)
+    if np.isinf(result).any():
+        raise ValueError(
+            "DirectSampling: conditioning values must not contain infinity; "
+            "use NaN for unconditioned values."
+        )
+    return result
+
+
+def _warn_nonuniform_axes(axes):
+    """Warn when index-space searches differ from physical-space distances."""
+    steps = []
+    for dim, axis in enumerate(axes):
+        axis = np.asarray(axis, dtype=np.double)
+        if axis.size < 2:
+            continue
+        diffs = np.diff(axis)
+        if not np.allclose(diffs, diffs[0]):
+            warnings.warn(
+                f"DirectSampling: axis {dim} is not uniformly spaced. DS "
+                "works in grid-index space (cells), ignoring physical spacing.",
+                UserWarning,
+                stacklevel=3,
+            )
+            return
+        steps.append(abs(diffs[0]))
+    if len(steps) > 1 and not np.allclose(steps, steps[0]):
+        warnings.warn(
+            "DirectSampling: grid axes have unequal spacing. DS works in "
+            "grid-index space (cells), ignoring physical spacing.",
+            UserWarning,
+            stacklevel=3,
+        )
+
+
 class DirectSampling(Field):
     """Multiple Point Statistics simulation using Direct Sampling.
 
@@ -58,13 +99,18 @@ class DirectSampling(Field):
         maximum search radius live on each :class:`Variable` inside the
         :class:`TrainingImage`. Build one with
         ``MPSModel(ti, scan_fraction=…, threshold=…)``.
-    seed : int or nan, optional
-        Master RNG seed. Default: nan.
+    seed : int, None or nan, optional
+        Master RNG seed. ``None`` or the default ``nan`` initializes from
+        fresh entropy. DS uses spawned SeedSequences and MT19937 streams.
 
     Notes
     -----
-    Runtime thread count is set via :attr:`num_threads` or passed to
-    :meth:`__call__`.
+    Thread resolution uses call-time ``num_threads``, then the instance
+    setting, then :any:`gstools.config.NUM_THREADS`, then one thread when
+    unset/falsy. Paths shorter than 512 nodes run serially. Within a fixed
+    supported build and dependency environment, fixed inputs and seed controls
+    are intended to give identical results across DS thread counts. This does
+    not promise bitwise identity across platforms or algorithm releases.
 
     See Also
     --------
@@ -98,7 +144,9 @@ class DirectSampling(Field):
         self._mv_mean = {}
         self._mv_normalizer = {}
         self._mv_trend = {}
-        self.rng = RNG(None if _is_unset(seed) else int(seed))
+        self.rng = RNG(
+            None if _is_unset(seed) else int(seed), seed_sequence=True
+        )
         if model.ti.multivariate:
             for v in model.ti.variables:
                 if v.name in dir(self):
@@ -132,12 +180,15 @@ class DirectSampling(Field):
         pos : :class:`list`, optional
             The position tuple, containing main direction and transversal
             directions. Only structured grids are supported.
-        seed : :class:`int`, optional
-            Seed for the RNG. If ``np.nan``, the current seed is kept.
+        seed : :class:`int`, :any:`None` or nan, optional
+            Reset the master sequence with an integer. Omitted/``np.nan``
+            continues its existing sequence; ``None`` resets it from fresh
+            entropy. This differs from the constructor, where both unset
+            forms initialize a fresh sequence.
             Default: ``np.nan``
         path_seed : :class:`int` or :any:`numpy.nan`, optional
             Seed controlling the order in which simulation grid nodes are
-            visited. If ``np.nan`` (default), derived from the master RNG
+            visited. If ``np.nan`` (default) or ``None``, derived from the master RNG
             together with ``node_seed``. Fix this while varying ``node_seed``
             to study the effect of TI search randomness under a constant
             visit order, or vice versa.  Only has an effect when
@@ -145,7 +196,10 @@ class DirectSampling(Field):
             Default: ``np.nan``
         node_seed : :class:`int` or :any:`numpy.nan`, optional
             Seed controlling the TI scan entry point and fallback cell for
-            every node. If ``np.nan`` (default), derived from the master RNG.
+            every node. If ``np.nan`` (default) or ``None``, derived from the
+            master RNG. Equal explicit path/node seeds intentionally initialize
+            equal control streams; separate controls do not guarantee statistical
+            independence for every user-chosen pair.
             Default: ``np.nan``
         path : :class:`str` or array-like, optional
             Node visit order.  ``"random"`` (default) shuffles the unknown
@@ -162,7 +216,11 @@ class DirectSampling(Field):
             Default: ``"structured"``
         post_process : :class:`bool`, optional
             Whether to apply post-processing transformations (mean,
-            normalizer, trend) to the field. Default: :any:`True`
+            normalizer, trend) to the raw field. This does not disable DS
+            cleanup passes configured by ``MPSModel(post_processing=...)``.
+            Hard-data preservation refers to the raw DS field; these downstream
+            transformations can change its displayed numeric values.
+            Default: :any:`True`
         store : :class:`bool` or :class:`str`, optional
             Whether to store the field (``True``), not store it (``False``),
             or store it under a custom name (string).
@@ -201,6 +259,7 @@ class DirectSampling(Field):
                     "DirectSampling: simulation grid coordinates must be finite "
                     "(NaN/inf axis values are not allowed)."
                 )
+        _warn_nonuniform_axes(self.pos)
         # Resolve the MPSModel's grid-independent rotation/scale specs to
         # canonical per-node maps now that the grid is known (Mariethoz2010
         # §6.2). Non-callable arrays are re-validated here against the grid
@@ -234,24 +293,40 @@ class DirectSampling(Field):
         zone_selector = (
             build_zone_selector(zones, shape, grid_coords) if zones else None
         )
+        # Settings may have changed since set_condition. Reject invalid active
+        # matrices before acquiring streams or entering native simulation.
+        if self._cond_val is not None:
+            values = (
+                self._cond_val
+                if self._ti.multivariate
+                else {self._ti.variables[0].name: self._cond_val}
+            )
+            self._check_penalty_codes(
+                values,
+                include_cleanup=self._mps_model.post_processing > 0,
+            )
         conditions = self._conditions_to_grid(self.pos)
-        # ``None`` is accepted as "unset" alongside ``nan`` for every seed
-        # control (audit DS13), so callers need not know the nan sentinel.
-        if not _is_unset(seed):
+        # Validate the effective thread setting before acquiring control streams.
+        n_threads = (
+            num_threads if num_threads is not None else self._num_threads
+        )
+        if n_threads is not None:
+            n_threads = exact_count(
+                n_threads, minimum=0, context="DirectSampling.num_threads"
+            )
+        if seed is None:
+            self.rng.seed = None
+        elif not _is_unset(seed):
             self.rng.seed = int(seed)
         rng_path = (
             self.rng.random
             if _is_unset(path_seed)
-            else RNG(int(path_seed)).random
+            else RNG(int(path_seed), seed_sequence=True).random
         )
         rng_nodes = (
             self.rng.random
             if _is_unset(node_seed)
-            else RNG(int(node_seed)).random
-        )
-        # Call-time num_threads overrides the instance default.
-        n_threads = (
-            num_threads if num_threads is not None else self._num_threads
+            else RNG(int(node_seed), seed_sequence=True).random
         )
         # ds_simulate now accepts both univariate and multivariate TIs directly.
         # Univariate TIs produce {None: array}; multivariate produce {name: array}.
@@ -453,7 +528,7 @@ class DirectSampling(Field):
             n_cond = cond_pos_arr.shape[1]
             local_val = {}
             for v, a in cond_val.items():
-                arr = np.asarray(a, dtype=np.double)
+                arr = _condition_values(a, self._ti.variable(v))
                 # Require exactly one scalar per conditioning position; reject an
                 # (N, k) array up front instead of failing later in snapping with
                 # an ambiguous-truth error (audit DS08).
@@ -484,7 +559,9 @@ class DirectSampling(Field):
             # Validate into locals BEFORE storing so a non-finite position does
             # not leave invalid conditioning installed (audit DS08 univariate).
             local_pos, local_val = _gs_set_condition(
-                cond_pos, cond_val, self.dim
+                cond_pos,
+                _condition_values(cond_val, self._ti.variables[0]),
+                self.dim,
             )
             _check_finite_positions(local_pos)
             uv_name = self._ti.variables[0].name
@@ -493,7 +570,7 @@ class DirectSampling(Field):
             )  # DS09
             self._cond_pos, self._cond_val = local_pos, local_val
 
-    def _check_penalty_codes(self, values_by_name):
+    def _check_penalty_codes(self, values_by_name, include_cleanup=True):
         """Screen hard category codes against active penalty matrices (DS09).
 
         A categorical penalty matrix is indexed by the hard code during the
@@ -505,13 +582,24 @@ class DirectSampling(Field):
         """
         from gstools.mps.training_image import _check_category_codes
 
+        for vals in values_by_name.values():
+            if np.isinf(np.asarray(vals, dtype=np.double)).any():
+                raise ValueError(
+                    "DirectSampling: conditioning values must not contain "
+                    "infinity; use NaN for unconditioned values."
+                )
         checks = {}
         for var in self._ti.variables:
             if var.penalty_matrix is not None:
                 checks.setdefault(var.name, []).append(
                     (var.penalty_matrix.shape[0], "penalty_matrix")
                 )
-        for ov in self._mps_model.post_processing_variables:
+        overrides = (
+            self._mps_model.post_processing_variables
+            if include_cleanup
+            else []
+        )
+        for ov in overrides:
             if ov.penalty_matrix is not None:
                 checks.setdefault(ov.name, []).append(
                     (
@@ -634,7 +722,13 @@ class DirectSampling(Field):
 
     @num_threads.setter
     def num_threads(self, value):
-        self._num_threads = None if value is None else int(value)
+        self._num_threads = (
+            None
+            if value is None
+            else exact_count(
+                value, minimum=0, context="DirectSampling.num_threads"
+            )
+        )
 
     def __repr__(self):
         parts = [

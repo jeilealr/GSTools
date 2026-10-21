@@ -1,28 +1,30 @@
 r"""
 Direct Sampling parameters: ``n_neighbors``, ``scan_fraction``, ``threshold``
-----------------------------------------------------------------------------
+----------------------------------------------------------------------------------
 
 The previous pages introduced these settings; see the gallery introduction for
 their definitions. This page varies each one on the Strebelle channel TI so you
 can see how it changes the result and runtime.
 
 * ``n_neighbors`` (``n``) — how many already-known cells form each data event.
-  More neighbors preserve richer, better-connected patterns, but cost more per
-  node.
-* ``scan_fraction`` (``f``) — the fraction of the TI search window examined per
-  simulated node. A larger fraction searches harder (closer to exhaustive) and
-  runs slower.
+  More neighbors can capture richer patterns, but cost more per node; better
+  connectivity is not guaranteed.
+* ``scan_fraction`` (``f``) — the budget relative to the selected TI size,
+  capped by the valid search window and floored at one candidate. Larger
+  budgets can examine more candidates and cost more.
 * ``threshold`` (``t``) — the acceptance mode:
 
   - ``t = 0.0`` is **DSBC** (Direct Sampling Best Candidate, recommended): scan
-    the requested fraction and keep the **best** match found (an exact match is
-    still accepted immediately).
+    the configured budget and keep the **best** selectable match visited
+    (an exact zero-distance match is accepted immediately). ``None`` is
+    equivalent; this is neither an exact-only nor necessarily a full-TI scan.
   - ``t > 0`` is **DS greedy**: accept the **first** candidate whose distance is
-    below ``t``. It can stop earlier per node, but the result depends on a
+    strictly below ``t``, or keep the best visited if none qualifies. It can
+    stop earlier per node, but the result depends on a
     well-chosen threshold; DSBC usually needs no such tuning.
 
 A fourth knob, ``max_radius``, caps how far neighbors may sit from the
-simulated node; it is left at its default here.
+simulated node in grid-index units; it is left at its default here.
 """
 
 import time
@@ -59,7 +61,9 @@ grid = [np.arange(sg_size, dtype=float), np.arange(sg_size, dtype=float)]
 
 def run(n_neighbors, scan_fraction, threshold):
     """Simulate one field and return ``(field, runtime_seconds)``."""
-    ti = gs.TrainingImage(ti_arr, categorical=True, n_neighbors=n_neighbors)
+    ti = gs.mps.TrainingImage(
+        ti_arr, categorical=True, n_neighbors=n_neighbors
+    )
     ds = gs.DirectSampling(
         gs.MPSModel(ti, scan_fraction=scan_fraction, threshold=threshold)
     )

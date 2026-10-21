@@ -2,22 +2,28 @@ r"""
 Post-processing: cleanup passes
 -------------------------------
 
-A fast Direct Sampling run (small ``scan_fraction``, random path) reproduces the
-overall channel geometry but leaves local artefacts: isolated pixels and frayed
-channel edges where an early, poorly-informed node locked in a value that later
-neighbours never got to challenge.
+A fast Direct Sampling run (small ``scan_fraction``, random path) can leave
+local artefacts: early nodes use a less-informed event than later nodes.
 
 **Post-processing** (Meerschman et al., 2013, Sect. 4) addresses this. After the
 main path completes, each cleanup pass re-opens every simulated node against a
 *fully informed* neighbourhood -- it now sees the values on *all* sides, not
 only the ones drawn before it -- and re-draws it from the training image. Hard
-conditioning data are never changed. A few passes relax the field toward a
-locally more consistent realization.
+conditioning components are never changed in the raw DS field. Cleanup can
+change distributions and connectivity; it does not guarantee improvement of
+every statistic.
 
 Set it with :class:`MPSModel`'s ``post_processing`` (number of passes) and
 ``post_processing_factor`` (divides the per-pass neighbourhood/scan effort).
 The passes run in the Rust engine over a dependency DAG, so the result is
-bit-identical for any thread count.
+bit-identical across thread counts within a fixed supported build and
+dependency environment. ``post_processing_mask`` restricts eligible nodes;
+partially conditioned components remain fixed. Effective cleanup variables
+inherit the primary settings unless explicitly overridden.
+
+``post_processing`` is separate from call-time ``post_process=False``: the
+latter disables the Field mean/normalizer/trend pipeline, not DS cleanup. A
+downstream Field transformation can change displayed conditioning values.
 """
 
 from pathlib import Path
@@ -39,7 +45,7 @@ example_dir = (
 with np.load(example_dir / "input" / "strebelle_channel_ti.npz") as data:
     ti_arr = data["array1"].astype(int)
 
-ti = gs.TrainingImage(ti_arr, categorical=True, n_neighbors=16)
+ti = gs.mps.TrainingImage(ti_arr, categorical=True, n_neighbors=16)
 grid = [np.arange(64, dtype=float), np.arange(64, dtype=float)]
 
 ###############################################################################
@@ -56,7 +62,8 @@ field_clean = gs.DirectSampling(gs.MPSModel(ti, post_processing=3, **common))(
 
 ###############################################################################
 # Count isolated pixels (a cell whose four neighbours all disagree with it) as a
-# simple proxy for local artefacts. Cleanup should reduce them.
+# descriptive measure using four face-neighbors and excluding boundary cells.
+# Its before/after change is an observation, not an algorithmic guarantee.
 
 
 def isolated_pixels(field):
@@ -71,7 +78,6 @@ def isolated_pixels(field):
 raw_isolated = isolated_pixels(field_raw)
 clean_isolated = isolated_pixels(field_clean)
 print(f"isolated pixels: raw={raw_isolated}, cleaned={clean_isolated}")
-assert clean_isolated <= raw_isolated
 
 ###############################################################################
 # Plot the raw realization next to the cleaned one.
@@ -85,8 +91,10 @@ ax1.set_title(f"3 cleanup passes ({clean_isolated} isolated px)")
 fig.tight_layout()
 
 ###############################################################################
-# The cleaned field keeps the same channel layout but with fewer speckles and
-# smoother channel boundaries. More passes relax it further; a larger
-# ``post_processing_factor`` trades fidelity for speed on the (typically many)
-# cleanup visits. ``post_processing=0`` (the default) is a true no-op, bit-for-
-# bit identical to omitting the parameter.
+# Inspect both the visual change and the printed counts for these realizations.
+# A larger ``post_processing_factor`` divides the requested neighbor count
+# (rounded, minimum one; requested variation count at least two) and scan
+# fraction; the candidate budget remains capped by the valid window. Additional
+# passes can alter scientific statistics as well as isolated pixels.
+# ``post_processing=0`` (the default) is a true no-op, bit-for-bit identical to
+# omitting the parameter.

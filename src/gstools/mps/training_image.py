@@ -29,6 +29,7 @@ from gstools.mps._core import (
     mps_dist_block_variation,
     mps_dist_block_variation_masked,
 )
+from gstools.mps._validation import _validate_float64_integers, exact_count
 from gstools.mps.distance import compute_node_weights
 
 __all__ = ["Variable", "TrainingImage"]
@@ -48,8 +49,8 @@ def _data_range(arr):
     Returns the ``max - min`` spread of the finite values, or ``1.0`` when the
     array is constant or entirely undefined (avoids a zero/NaN normalizer).
 
-    The spread is computed as the difference of the extrema **after** each is
-    widened to a Python float (float64), so a low-precision input dtype cannot
+    Integer extrema are subtracted as Python integers before float conversion.
+    Floating extrema are each widened before subtraction, so their dtype cannot
     overflow the subtraction (audit DS02): e.g. ``int8`` ``[-128, 127]`` yields
     ``255`` rather than the ``1`` that ``int8(127) - int8(-128)`` wraps to, and
     ``float32`` extrema do not saturate to ``inf``. A genuinely non-constant
@@ -59,9 +60,10 @@ def _data_range(arr):
     finite = arr[np.isfinite(arr)]
     if finite.size == 0:
         return 1.0
-    low = float(np.min(finite))
-    high = float(np.max(finite))
-    dmax = high - low
+    if np.issubdtype(arr.dtype, np.integer):
+        dmax = float(int(np.max(finite)) - int(np.min(finite)))
+    else:
+        dmax = float(np.max(finite)) - float(np.min(finite))
     if dmax == 0.0:
         return 1.0
     if not np.isfinite(dmax):
@@ -124,9 +126,7 @@ def _parse_distance(distance):
 
 def _validate_n_neighbors(value, variation_p_norm):
     """Validate n_neighbors >= 1 (and >= 2 under distance='variation')."""
-    v = int(value)
-    if v < 1:
-        raise ValueError(f"Variable: n_neighbors must be >= 1, got {value!r}.")
+    v = exact_count(value, minimum=1, context="Variable: n_neighbors")
     if variation_p_norm is not None and v < 2:
         raise ValueError(
             "Variable: distance='variation' requires n_neighbors >= 2 "
@@ -146,6 +146,8 @@ def _check_category_codes(values, n_cat, context):
     ``context`` prefixes the error message with what was checked.
     """
     finite_vals = np.asarray(values, dtype=np.double)
+    if np.isinf(finite_vals).any():
+        raise ValueError(f"{context}: infinite category values are invalid.")
     finite_vals = finite_vals[np.isfinite(finite_vals)]
     if not finite_vals.size:
         return
@@ -274,6 +276,9 @@ class Variable:
         # of a writable base is not safe to share, so the flag is never
         # inferred from ``flags.writeable``. has_nan/d_max are still recomputed.
         data_arr = np.asarray(data)
+        _validate_float64_integers(
+            data_arr, bool(categorical), f"Variable {name!r}"
+        )
         self._data = data_arr if _trusted else np.array(data_arr, copy=True)
         if (
             np.issubdtype(self._data.dtype, np.floating)
@@ -302,9 +307,11 @@ class Variable:
                 f"Variable: cond_weight must be finite and >= 0, got "
                 f"{cond_weight!r}."
             )
-        if max_radius is not None and float(max_radius) <= 0:
+        if max_radius is not None and not (
+            np.isfinite(float(max_radius)) and float(max_radius) > 0
+        ):
             raise ValueError(
-                f"Variable: max_radius must be a positive float, got {max_radius!r}."
+                f"Variable: max_radius must be a finite positive float or None, got {max_radius!r}."
             )
         self._max_radius = None if max_radius is None else float(max_radius)
         self._has_nan = _any_float_nan(self._data)
@@ -355,6 +362,10 @@ class Variable:
                 f"array, got shape {mat.shape!r}."
             )
         n_cat = mat.shape[0]
+        if n_cat == 0:
+            raise ValueError(
+                "Variable: penalty_matrix must have at least one category."
+            )
         diag = np.diagonal(mat)
         bad_diag = np.flatnonzero(diag != 0.0)
         if bad_diag.size:
@@ -852,6 +863,7 @@ class TrainingImage:
         all_de_ti,
         w,
         has_nan=False,
+        penalty_matrix=None,
     ):
         """Select and call the right vectorized distance function.
 
@@ -865,13 +877,16 @@ class TrainingImage:
         all_de_ti : numpy.ndarray, shape (max_scan, n)
         w : numpy.ndarray, shape (n,)
         has_nan : bool, optional
-            Enable per-row exclusion of undefined (NaN) TI positions, with
-            per-row weight renormalization. Default ``False``.
+            Force masked comparison; NaNs in supplied events enable it
+            automatically. Comparable weights are renormalized per candidate.
+            A masked candidate with zero weight support has infinite distance.
 
         Returns
         -------
         numpy.ndarray, shape (max_scan,)
-            Distance in [0, 1] for each candidate.
+            Per-candidate distance. With normalized weights, categorical and
+            variation scores lie in [0, 1]. Lp scores can exceed one for SG
+            values outside the TI range. No comparable masked weight gives inf.
         """
         # Route to the Rust block-distance kernels. The kernels normally gather
         # candidates from a flat TI via base + lag indices; here `all_de_ti` is
@@ -888,6 +903,23 @@ class TrainingImage:
         base = np.arange(m, dtype=np.int64) * n
         lags = np.arange(n, dtype=np.int64)
         w = np.asarray(w, dtype=np.float64)
+        if categorical and penalty_matrix is not None:
+            _check_category_codes(de, len(penalty_matrix), "SG event")
+            _check_category_codes(block, len(penalty_matrix), "TI event")
+            support = np.isfinite(block)
+            # NaNs have no matrix index: use zero only for the unused lookup.
+            codes = np.where(support, block, 0).astype(np.intp)
+            cost = penalty_matrix[de.astype(np.intp)[None, :], codes]
+            total = np.sum(np.where(support, cost * w, 0.0), axis=1)
+            if has_nan:
+                surviving = np.sum(support * w, axis=1)
+                return np.divide(
+                    total,
+                    surviving,
+                    out=np.full(m, np.inf),
+                    where=surviving > 0,
+                )
+            return total
         if categorical:
             kernel = (
                 mps_dist_block_cat_masked if has_nan else mps_dist_block_cat
@@ -915,7 +947,8 @@ class TrainingImage:
         """Adjust matched TI value before assignment to SG.
 
         For ``distance="variation"``, applies the mean-shift correction
-        (Mariethoz2010 Eq. 9): Z(x_i) = Z(y) − Z̄(y) + Z̄(x_i).
+        (Mariethoz2010 Eq. 9) over the common finite SG/TI support.
+        Empty common support applies zero shift; nonfinite arithmetic raises.
         For all other metrics returns *ti_val* unchanged.
 
         Parameters
@@ -934,19 +967,38 @@ class TrainingImage:
         -------
         float
         """
-        v = self._var_map[var]
+        v = (
+            self.variable()
+            if var is None and len(self._variables) == 1
+            else self.variable(var)
+        )
         if v.variation_p_norm is None or v.categorical:
             return ti_val
-        data_event_sim = np.asarray(data_event_sim, dtype=np.float64)
-        data_event_ti = np.asarray(data_event_ti, dtype=np.float64)
-        if data_event_sim.size == 0 or data_event_ti.size == 0:
-            return ti_val
-        ti_mean = (
-            np.nanmean(data_event_ti)
-            if np.isfinite(data_event_ti).any()
-            else 0.0
-        )
-        return float(ti_val - ti_mean + np.nanmean(data_event_sim))
+        sim = np.asarray(data_event_sim, dtype=np.float64)
+        ti = np.asarray(data_event_ti, dtype=np.float64)
+        if sim.ndim != 1 or sim.shape != ti.shape:
+            raise ValueError(
+                "adjust_value: events must be equal-length 1-D arrays"
+            )
+        if (
+            np.isinf(sim).any()
+            or np.isinf(ti).any()
+            or not np.isfinite(ti_val)
+        ):
+            raise ValueError(
+                "adjust_value: infinite events or nonfinite center"
+            )
+        support = np.isfinite(sim) & np.isfinite(ti)
+        with np.errstate(over="ignore", invalid="ignore"):
+            shift = (
+                np.mean(sim[support] - ti[support]) if support.any() else 0.0
+            )
+            result = float(ti_val + shift)
+        if not np.isfinite(result):
+            raise ValueError(
+                "adjust_value: mean shift/result exceeds float64; rescale data"
+            )
+        return result
 
     def vec_distance_var(
         self,
@@ -954,7 +1006,7 @@ class TrainingImage:
         de_sim,
         all_de_ti,
         cond_mask=None,
-        cond_weight=1.0,
+        cond_weight=None,
         lag_norms=None,
         weights=None,
         has_nan=False,
@@ -973,39 +1025,92 @@ class TrainingImage:
         all_de_ti : array-like, shape (max_scan, n)
             TI data events for every scan candidate.
         cond_mask : array-like of bool, optional
-        cond_weight : float, optional
+        cond_weight : float or None, optional
+            Conditioning multiplier; None uses the Variable configuration.
         lag_norms : array-like, shape (n,), optional
         weights : numpy.ndarray, optional
             Pre-computed node weights. If given, skips the internal
             ``compute_node_weights`` call.
         has_nan : bool, optional
-            Enable per-row exclusion of undefined (NaN) TI positions, with
-            per-row weight renormalization. Default ``False``.
+            Force masked comparison; NaNs in supplied events enable it
+            automatically. Comparable weights are renormalized per candidate.
+            A masked candidate with zero weight support has infinite distance.
 
         Returns
         -------
         numpy.ndarray, shape (max_scan,)
-            Distance in [0, 1] for each candidate.
+            Per-candidate distance. With normalized weights, categorical and
+            variation scores lie in [0, 1]. Lp scores can exceed one for SG
+            values outside the TI range. No comparable masked weight gives inf.
         """
-        v = self._var_map[var]  # var is a str or None (univariate internal)
-        # Categorical distance only uses !=, which is dtype-agnostic; skip the
-        # float64 allocation on the categorical path and keep it for continuous.
-        if v.categorical:
-            de_sim = np.asarray(de_sim)
-            all_de_ti = np.asarray(all_de_ti)
-        else:
-            de_sim = np.asarray(de_sim, dtype=np.float64)
-            all_de_ti = np.asarray(all_de_ti, dtype=np.float64)
+        v = (
+            self.variable()
+            if var is None and len(self._variables) == 1
+            else self.variable(var)
+        )
+        _validate_float64_integers(de_sim, v.categorical, "SG event")
+        _validate_float64_integers(all_de_ti, v.categorical, "TI events")
+        de_sim = np.asarray(de_sim, dtype=np.float64)
+        all_de_ti = np.asarray(all_de_ti, dtype=np.float64)
+        if (
+            de_sim.ndim != 1
+            or all_de_ti.ndim != 2
+            or all_de_ti.shape[1] != de_sim.size
+        ):
+            raise ValueError(
+                "vec_distance_var: expected (n,) event and (candidates, n) block"
+            )
+        if np.isinf(de_sim).any() or np.isinf(all_de_ti).any():
+            raise ValueError(
+                "vec_distance_var: infinite event values are invalid"
+            )
         n = len(de_sim)
-        if n == 0:
-            return np.zeros(len(all_de_ti))
+        if cond_weight is None:
+            cond_weight = v.cond_weight
+        if not np.isfinite(cond_weight) or cond_weight < 0:
+            raise ValueError(
+                "vec_distance_var: cond_weight must be finite and nonnegative"
+            )
+        for name, value in (
+            ("cond_mask", cond_mask),
+            ("lag_norms", lag_norms),
+            ("weights", weights),
+        ):
+            if value is not None and np.shape(value) != (n,):
+                raise ValueError(
+                    f"vec_distance_var: {name} must have shape ({n},)"
+                )
+        if lag_norms is not None and (
+            not np.isfinite(lag_norms).all()
+            or np.any(np.asarray(lag_norms) < 0)
+        ):
+            raise ValueError(
+                "vec_distance_var: lag_norms must be finite and nonnegative"
+            )
         w = (
-            weights
+            np.asarray(weights, dtype=float)
             if weights is not None
             else compute_node_weights(
                 n, lag_norms, v.distance_power, cond_mask, cond_weight
             )
         )
+        with np.errstate(over="ignore"):
+            finite_total = np.isfinite(w.sum())
+        if not np.isfinite(w).all() or np.any(w < 0) or not finite_total:
+            raise ValueError(
+                "vec_distance_var: weights must be finite and nonnegative"
+            )
+        defined = np.isfinite(de_sim)
+        if not defined.all():
+            de_sim, all_de_ti, w = (
+                de_sim[defined],
+                all_de_ti[:, defined],
+                w[defined],
+            )
+            has_nan = True
+        if de_sim.size == 0:
+            return np.zeros(len(all_de_ti))
+        # Missingness belongs to the supplied block, not only the original TI.
         return self._dispatch_metric(
             v.categorical,
             v.p_norm,
@@ -1014,7 +1119,8 @@ class TrainingImage:
             de_sim,
             all_de_ti,
             w,
-            has_nan=has_nan,
+            has_nan=has_nan or np.isnan(all_de_ti).any(),
+            penalty_matrix=v.penalty_matrix,
         )
 
     def __repr__(self):

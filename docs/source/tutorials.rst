@@ -25,6 +25,7 @@ explore its whole beauty and power.
    examples/11_plurigaussian/index
    examples/12_sum_model/index
    examples/13_mps/index
+   mps_contracts
    examples/00_misc/index
 
 .. only:: html

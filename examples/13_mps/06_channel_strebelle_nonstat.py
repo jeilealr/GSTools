@@ -40,7 +40,7 @@ with np.load(data_path) as data:
     ti_arr = data["array1"].astype(int)
 source = "Strebelle (2002) via bundled GeoDataSets asset"
 
-ti = gs.TrainingImage(ti_arr, categorical=True, n_neighbors=30)
+ti = gs.mps.TrainingImage(ti_arr, categorical=True, n_neighbors=30)
 print(f"TI {ti.shape} ({source}), sand fraction = {ti_arr.mean():.3f}")
 
 ###############################################################################
@@ -51,7 +51,8 @@ xs = np.arange(sg_size, dtype=float)
 ys = np.arange(sg_size, dtype=float)
 gx, gy = np.meshgrid(xs, ys, indexing="ij")
 
-# Rotation varies smoothly along the y-axis from 0 to 45 degrees.
+# Rotation inputs are radians: here they vary along y from 0 toward pi/4
+# (45 degrees). Neighborhood geometry and radii use grid-index units.
 rotation = (gy / sg_size) * (np.pi / 4.0)
 
 # Anisotropy varies along the x-axis. Values above one stretch the local search
@@ -62,7 +63,9 @@ anis = 0.8 + (gx / sg_size) * 0.4
 # Simulate with the nonstationary maps attached to the model. The maps
 # reorient and rescale local data-event matching; they do not change the TI.
 # ``scale`` is the absolute per-axis dilation: the main axis stays 1.0 and the
-# transversal axis carries the local ``anis`` ratio.
+# transversal axis carries the local ``anis`` ratio. The positive factors are
+# dimensionless. Physical axes still control coordinates and callable inputs;
+# nonuniform spacing does not change this into a physical-distance search.
 
 scale = np.stack([np.ones_like(anis), anis], axis=-1)
 ds = gs.DirectSampling(
@@ -86,7 +89,9 @@ fig, (ax0, ax1) = plt.subplots(1, 2, figsize=(11, 5.5))
 ax0.imshow(ti_arr[:sg_size, :sg_size], cmap=cmap, origin="lower")
 ax0.set_title("Training image (crop)")
 ax1.imshow(field, cmap=cmap, origin="lower")
-ax1.set_title("Nonstationary DS realization\n(varying rotation and anisotropy)")
+ax1.set_title(
+    "Nonstationary DS realization\n(varying rotation and anisotropy)"
+)
 fig.tight_layout()
 
 ###############################################################################

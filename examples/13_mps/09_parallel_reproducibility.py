@@ -8,24 +8,25 @@ deterministic *independently of the thread count*. The engine builds a
 dependency directed acyclic graph (DAG) over the simulation path
 and parallelizes the work across threads without changing the visit order or
 the candidate choices, so the same seed produces **bit-identical** output
-regardless of the thread count. Threads change only the runtime, never the
-result.
+regardless of the thread count within a fixed build and dependency
+environment. This does not promise bitwise identity across operating systems,
+compiler/dependency versions, or algorithm releases.
 
 This matters in practice: you can develop and debug a simulation serially, then
 run it with more threads for speed, and still get exactly the field you
 validated. This page demonstrates both halves of that promise on the bundled
-Strebelle channel TI — the wall-clock speedup, and the bit-for-bit equality of
-the realizations.
+Strebelle channel TI — measured runtime and bit-for-bit equality. A speedup
+is workload-dependent and is not guaranteed.
 
 The speedup depends on the machine and on the simulation workload. A demanding
 run may benefit from more threads, up to the available physical cores, while a
 small or simple run may see little benefit because there is less work to
-parallelize. We sweep 1, 2, and 4 threads here.
+parallelize. Paths shorter than 512 nodes run serially; dependency levels can
+also limit useful concurrency. We sweep 1, 2, and 4 threads here.
 
-Two ways to set the thread count:
-
-* per call: ``ds(grid, seed=..., num_threads=n)`` (used here), or
-* globally: ``gs.config.NUM_THREADS = n`` for every subsequent simulation.
+Thread resolution uses the call-time ``num_threads`` (used here), then the
+instance setting, then ``gs.config.NUM_THREADS``. The current unset/falsy
+fallback is one thread.
 
 .. note::
 
@@ -62,7 +63,7 @@ if not data_path.exists():
 with np.load(data_path) as data:
     ti_arr = data["array1"].astype(int)
 
-ti = gs.TrainingImage(ti_arr, categorical=True, n_neighbors=20)
+ti = gs.mps.TrainingImage(ti_arr, categorical=True, n_neighbors=20)
 
 ###############################################################################
 # Simulate the **same seed** at several thread counts and time each run. The
@@ -87,19 +88,21 @@ for n_threads in thread_counts:
 ###############################################################################
 # **Reproducibility check.** Every realization must be exactly equal to the
 # serial one — not merely close. A single ``array_equal`` over all thread counts
-# proves the bit-identical guarantee for this seed.
+# verifies equality for this seed, workload, build, and dependency environment.
 
 reference = fields[1]
 all_identical = all(
     np.array_equal(reference, fields[n]) for n in thread_counts
 )
 print(f"All thread counts produced identical output: {all_identical}")
-assert all_identical, "Parallel output differs from serial — this must not happen."
+assert all_identical, (
+    "Parallel output differs from serial — this must not happen."
+)
 
 ###############################################################################
 # Plot the (identical) realization next to the runtime vs. thread-count curve.
 # The left panel is the field every thread count produced; the right panel is
-# the speedup you gain for free.
+# the measured runtime, which may or may not decrease with more workers.
 
 cmap = ListedColormap(["#c9a96e", "#2b6cb0"])  # shale / sand
 fig, (ax_field, ax_time) = plt.subplots(1, 2, figsize=(11, 5.0))
@@ -123,8 +126,8 @@ ax_time.grid(True, alpha=0.3)
 fig.tight_layout()
 
 ###############################################################################
-# **Seed control.** ``seed`` is a master seed that drives two independent
-# streams, which you can also set separately:
+# **Seed control.** DS uses the opt-in SeedSequence/MT19937 stream contract.
+# ``seed`` is a master seed that supplies two separately controlled streams:
 #
 # * ``path_seed`` — the random order in which nodes are visited, and
 # * ``node_seed`` — the TI scan start positions and fallback draws.
@@ -132,11 +135,23 @@ fig.tight_layout()
 # Passing the same seeds reproduces a run exactly (just like across thread
 # counts above); changing only ``path_seed`` gives a *different but still
 # reproducible* realization. Splitting the seeds is handy for ablation tests —
-# hold the path fixed and vary the TI scan randomness, or vice versa.
+# hold the path controls fixed and vary node randomness, or vice versa. Equal
+# explicit role seeds may initialize equal streams; final fields also depend
+# on path order and previously simulated values.
+#
+# An omitted master seed or NaN continues the sequence; an integer resets it,
+# and call-time ``seed=None`` resets from fresh entropy. For path/node controls,
+# omitted, NaN, or None derive a stream from the master. This SeedSequence DS
+# mapping intentionally changes historical seeded fields; non-DS defaults stay
+# unchanged. See the Direct Sampling controls and reproducibility tutorial.
 
 ds = gs.DirectSampling(gs.MPSModel(ti, scan_fraction=0.1, threshold=0.0))
 field_a = ds(grid, path_seed=1, node_seed=2, num_threads=4)
 field_b = ds(grid, path_seed=1, node_seed=2, num_threads=4)
 field_c = ds(grid, path_seed=9, node_seed=2, num_threads=4)
-print(f"same path_seed/node_seed reproduce: {np.array_equal(field_a, field_b)}")
-print(f"different path_seed changes result: {not np.array_equal(field_a, field_c)}")
+print(
+    f"same path_seed/node_seed reproduce: {np.array_equal(field_a, field_b)}"
+)
+print(
+    f"different path_seed changes result: {not np.array_equal(field_a, field_c)}"
+)

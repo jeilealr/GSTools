@@ -746,9 +746,10 @@ class TestDirectSampling(unittest.TestCase):
     def test_regression_1d(self):
         ds = DirectSampling(MPSModel(self.ti1d, scan_fraction=1.0))
         field = ds([self.x1d], seed=42)
-        self.assertAlmostEqual(field[0], 1.0)
-        self.assertAlmostEqual(field[5], 0.0)
-        self.assertAlmostEqual(field[9], 0.0)
+        # Intentional DS10 stream change: ds-seedsequence-mt19937-v1.
+        self.assertAlmostEqual(field[0], 0.0)
+        self.assertAlmostEqual(field[5], 1.0)
+        self.assertAlmostEqual(field[9], 1.0)
 
     def test_regression_2d(self):
         ds = DirectSampling(MPSModel(self.ti2d, scan_fraction=1.0))
@@ -767,10 +768,10 @@ class TestDirectSampling(unittest.TestCase):
         self.assertTrue(np.allclose(fa, fb))
         # Different seed → different output
         self.assertFalse(np.allclose(fa, fc))
-        # Pin two values for seed=99; stable across NumPy versions because DS
-        # uses RandomState (MT19937) throughout, matching the rest of GSTools.
+        # Pin the ds-seedsequence-mt19937-v1 stream in this environment.
+        # No cross-NumPy-version field identity is promised.
         self.assertAlmostEqual(fa[0, 0], 0.0)
-        self.assertAlmostEqual(fa[3, 4], 0.0)
+        self.assertAlmostEqual(fa[3, 4], 1.0)
 
     def test_conditioning_honored(self):
         ds = DirectSampling(MPSModel(self.ti1d, scan_fraction=1.0))
@@ -1823,7 +1824,9 @@ class TestNonstationarity(unittest.TestCase):
         ds, _ = self._make_ds(
             ti_shape=(20, 20), rotation=np.linspace(0, np.pi, 25)
         )
-        with self.assertRaisesRegex(ValueError, "flattened|per-node|no accepted"):
+        with self.assertRaisesRegex(
+            ValueError, "flattened|per-node|no accepted"
+        ):
             ds([np.arange(5, dtype=float)] * 2, seed=0)
 
     def test_3d_stationary_rotation_triple_runs(self):
@@ -1842,6 +1845,7 @@ class TestNonstationarity(unittest.TestCase):
 
 
 class TestFullArraySnapshot(unittest.TestCase):
+    # Goldens regenerated for ds-seedsequence-mt19937-v1 (DS10).
     """Bit-identical full-array regression pins — the step-by-step acceptance gate.
 
     These arrays are captured from the pre-refactoring engine with fixed seeds and
@@ -1879,7 +1883,7 @@ class TestFullArraySnapshot(unittest.TestCase):
         f = ds([self.x1d], seed=42)
         np.testing.assert_array_equal(
             f,
-            [1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0],
+            [0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0],
             err_msg="snap_uni_1d seed=42",
         )
         # seed=99
@@ -1910,12 +1914,12 @@ class TestFullArraySnapshot(unittest.TestCase):
         np.testing.assert_array_equal(
             f,
             [
-                [0.0, 1.0, 0.0, 1.0, 0.0, 1.0],
                 [1.0, 0.0, 1.0, 0.0, 1.0, 0.0],
                 [0.0, 1.0, 0.0, 1.0, 0.0, 1.0],
                 [1.0, 0.0, 1.0, 0.0, 1.0, 0.0],
                 [0.0, 1.0, 0.0, 1.0, 0.0, 1.0],
                 [1.0, 0.0, 1.0, 0.0, 1.0, 0.0],
+                [0.0, 1.0, 0.0, 1.0, 0.0, 1.0],
             ],
             err_msg="snap_uni_2d_checker seed=99",
         )
@@ -1926,12 +1930,12 @@ class TestFullArraySnapshot(unittest.TestCase):
         np.testing.assert_array_equal(
             f,
             [
-                [0.0, 0.0, 2.0, 0.0, 2.0, 2.0],
-                [0.0, 0.0, 2.0, 2.0, 0.0, 2.0],
-                [2.0, 0.0, 1.0, 0.0, 1.0, 0.0],
-                [2.0, 0.0, 1.0, 2.0, 0.0, 0.0],
-                [2.0, 0.0, 1.0, 1.0, 2.0, 1.0],
-                [2.0, 2.0, 0.0, 2.0, 1.0, 0.0],
+                [1.0, 2.0, 2.0, 1.0, 2.0, 2.0],
+                [2.0, 0.0, 1.0, 2.0, 2.0, 1.0],
+                [1.0, 2.0, 2.0, 0.0, 0.0, 2.0],
+                [2.0, 0.0, 1.0, 2.0, 1.0, 2.0],
+                [0.0, 2.0, 2.0, 2.0, 1.0, 2.0],
+                [1.0, 1.0, 2.0, 2.0, 1.0, 1.0],
             ],
             err_msg="snap_uni_rand seed=42",
         )
@@ -1942,24 +1946,24 @@ class TestFullArraySnapshot(unittest.TestCase):
         np.testing.assert_array_equal(
             res["a"],
             [
-                [2.0, 1.0, 2.0, 0.0, 2.0, 0.0],
-                [2.0, 2.0, 2.0, 1.0, 2.0, 1.0],
-                [1.0, 0.0, 0.0, 1.0, 2.0, 2.0],
-                [2.0, 1.0, 0.0, 0.0, 1.0, 1.0],
-                [0.0, 1.0, 2.0, 1.0, 2.0, 2.0],
-                [0.0, 0.0, 0.0, 1.0, 1.0, 2.0],
+                [1.0, 1.0, 1.0, 2.0, 2.0, 0.0],
+                [0.0, 0.0, 1.0, 2.0, 2.0, 1.0],
+                [2.0, 2.0, 0.0, 1.0, 0.0, 0.0],
+                [2.0, 2.0, 1.0, 1.0, 2.0, 1.0],
+                [0.0, 1.0, 2.0, 1.0, 0.0, 1.0],
+                [2.0, 2.0, 2.0, 1.0, 1.0, 2.0],
             ],
             err_msg="snap_mv var=a seed=42",
         )
         np.testing.assert_array_equal(
             res["b"],
             [
-                [1.0, 1.0, 0.0, 0.0, 1.0, 1.0],
-                [0.0, 0.0, 0.0, 0.0, 0.0, 1.0],
-                [0.0, 0.0, 0.0, 0.0, 0.0, 1.0],
-                [1.0, 1.0, 0.0, 1.0, 0.0, 0.0],
-                [0.0, 0.0, 0.0, 0.0, 1.0, 0.0],
-                [0.0, 0.0, 1.0, 0.0, 0.0, 0.0],
+                [0.0, 1.0, 1.0, 0.0, 1.0, 0.0],
+                [1.0, 0.0, 0.0, 0.0, 0.0, 1.0],
+                [0.0, 0.0, 1.0, 1.0, 0.0, 1.0],
+                [1.0, 0.0, 0.0, 1.0, 0.0, 1.0],
+                [0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+                [0.0, 0.0, 1.0, 1.0, 0.0, 1.0],
             ],
             err_msg="snap_mv var=b seed=42",
         )
@@ -2286,7 +2290,7 @@ class TestMVTransformsAndReporting(unittest.TestCase):
         )
 
     def test_cond_weight_changes_output(self):
-        """Different cond_weight values must yield different fields while honoring the conditioned node."""
+        """Conditioning weights change event ranking while hard data stay fixed."""
         rng = np.random.default_rng(2)
         data = rng.integers(0, 3, (20, 20)).astype(float)
         # cond_weight now lives on the TI/Variable (univariate sugar).
@@ -2304,11 +2308,18 @@ class TestMVTransformsAndReporting(unittest.TestCase):
         ds5.set_condition(cond_pos, cond_val)
         f5 = ds5(pos, seed=0)
 
-        # the two fields must differ (cond_weight propagates through the distance)
-        self.assertFalse(
-            np.array_equal(f1, f5),
-            msg="cond_weight=1.0 and cond_weight=5.0 produced identical output; cond_weight has no effect.",
-        )
+        # A finite categorical field may coincide despite changed weights.
+        # Pin an independent event where conditioning changes the winning match:
+        # candidate A only misses the hard neighbour; B misses both soft ones.
+        event = np.array([0.0, 0.0, 0.0])
+        candidates = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 1.0]])
+        mask = np.array([True, False, False])
+        d1 = ti1.vec_distance_var(None, event, candidates, cond_mask=mask)
+        d5 = ti5.vec_distance_var(None, event, candidates, cond_mask=mask)
+        np.testing.assert_allclose(d1, [1 / 3, 2 / 3])
+        np.testing.assert_allclose(d5, [5 / 7, 2 / 7])
+        self.assertEqual(int(np.argmin(d1)), 0)
+        self.assertEqual(int(np.argmin(d5)), 1)
         # the conditioned node must keep its value in both runs
         self.assertEqual(int(f1[4, 4]), 2)
         self.assertEqual(int(f5[4, 4]), 2)
@@ -2712,14 +2723,14 @@ class TestSimulationPath(unittest.TestCase):
         field = ds([np.arange(8, dtype=float)] * 2, seed=42)
         expected = np.array(
             [
-                [0.0, 1.0, 1.0, 2.0, 2.0, 0.0, 2.0, 1.0],
-                [2.0, 0.0, 0.0, 2.0, 1.0, 0.0, 0.0, 1.0],
-                [0.0, 2.0, 1.0, 2.0, 2.0, 2.0, 0.0, 2.0],
+                [2.0, 0.0, 0.0, 0.0, 0.0, 2.0, 2.0, 2.0],
                 [2.0, 2.0, 0.0, 2.0, 2.0, 0.0, 1.0, 1.0],
-                [1.0, 2.0, 1.0, 1.0, 2.0, 1.0, 2.0, 0.0],
-                [2.0, 2.0, 2.0, 2.0, 2.0, 0.0, 0.0, 0.0],
-                [2.0, 1.0, 0.0, 1.0, 2.0, 1.0, 2.0, 1.0],
-                [1.0, 1.0, 1.0, 0.0, 2.0, 2.0, 0.0, 2.0],
+                [2.0, 2.0, 0.0, 0.0, 0.0, 2.0, 0.0, 1.0],
+                [2.0, 2.0, 0.0, 1.0, 2.0, 0.0, 0.0, 0.0],
+                [2.0, 2.0, 0.0, 1.0, 1.0, 0.0, 1.0, 1.0],
+                [0.0, 2.0, 2.0, 0.0, 2.0, 1.0, 0.0, 2.0],
+                [0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 2.0, 2.0],
+                [0.0, 1.0, 1.0, 0.0, 2.0, 2.0, 0.0, 0.0],
             ]
         )
         np.testing.assert_array_equal(field, expected)

@@ -7,7 +7,13 @@ The :ref:`Continuous variables and distance metrics example
 without conditioning. Here we return to conditioning and focus on the
 ``"variation"`` distance: the TI has local fluctuations around zero, while the
 conditioning data include a large-scale trend. Comparing local variation
-rather than absolute level makes that mismatch meaningful for matching.
+rather than absolute level makes that mismatch meaningful for matching. Both
+event means use common finite support. The weighted Lp distance divides
+centered residuals by ``2*d_max`` and clips at one; a positive threshold is
+easier to satisfy with this denominator than with ``d_max``. Thresholds are
+not directly transferable between differently normalized metrics. Pasted
+values shift by the same common-support mean difference and can exceed the
+TI range.
 """
 
 from pathlib import Path
@@ -43,7 +49,7 @@ x = y = np.arange(grid_size, dtype=float)
 ###############################################################################
 # Use the variation distance for continuous data-event comparisons.
 
-ti = gs.TrainingImage(
+ti = gs.mps.TrainingImage(
     ti_data,
     categorical=False,
     distance="variation",
@@ -62,8 +68,8 @@ cond_val = 100 + 10 * (cond_x / grid_size) + rng.normal(0, 1.5, n_cond)
 
 ###############################################################################
 # Simulate with the continuous variation distance. A moderate neighborhood and
-# a half-TI scan make the realization less noisy while keeping this page
-# runnable as a normal gallery example.
+# a budget of half the TI size (capped by the valid window) keep the example
+# runnable. Their effect on texture needs ensemble assessment.
 model = gs.MPSModel(ti, scan_fraction=0.5, threshold=0.01)
 
 ds = gs.DirectSampling(model)
@@ -145,6 +151,8 @@ fig.colorbar(im_c, cax=cax_val, label="Conditioned value")
 
 ###############################################################################
 # The hard data follow a smooth increase from left to right, and the simulation
-# reproduces that trend while retaining local texture from the TI. Variation
+# can follow that trend while drawing local fluctuations from the TI. Assess
+# centered/detrended statistics over realizations rather than requiring raw TI
+# marginals for this shifted case. Variation
 # distance helps because the conditioning values have a very different
 # absolute level from the training image.

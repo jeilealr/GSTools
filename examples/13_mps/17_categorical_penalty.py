@@ -15,7 +15,9 @@ The diagonal is zero (an exact match is free) and off-diagonal entries lie in
 ``(0, 1]``. The matrix may be asymmetric; the orientation is ``T[sim, ti]``.
 
 Here we build an ordinal 3-facies TI and compare a plain run with one that makes
-neighbouring facies cheap and the 0<->2 jump expensive.
+mismatches between nearby ordinal labels cheap and 0<->2 mismatches expensive.
+These compare corresponding data-event values; they do not prohibit adjacent
+category pairs in the simulated grid.
 """
 
 import matplotlib.pyplot as plt
@@ -44,7 +46,7 @@ ti_arr = np.digitize(smooth, edges).astype(int)  # values in {0, 1, 2}
 # ``penalty_matrix`` differs between the two training images.
 
 plain_var = gs.mps.Variable(None, ti_arr, categorical=True, n_neighbors=16)
-# Near-miss (|i-j| == 1) is cheap; the 0<->2 jump is maximally expensive.
+# Mismatching labels one level apart is cheap; a 0<->2 event mismatch has cost 1.
 penalty = np.array(
     [
         [0.0, 0.3, 1.0],
@@ -59,22 +61,23 @@ penalty_var = gs.mps.Variable(
 grid = [np.arange(60, dtype=float), np.arange(60, dtype=float)]
 kw = dict(scan_fraction=0.2, threshold=0.0)
 field_plain = gs.DirectSampling(
-    gs.MPSModel(gs.TrainingImage(plain_var), **kw)
+    gs.MPSModel(gs.mps.TrainingImage(plain_var), **kw)
 )(grid, seed=11)
 field_penalty = gs.DirectSampling(
-    gs.MPSModel(gs.TrainingImage(penalty_var), **kw)
+    gs.MPSModel(gs.mps.TrainingImage(penalty_var), **kw)
 )(grid, seed=11)
 
-# The penalty matrix changes the scan, hence the realization.
-assert not np.array_equal(field_plain, field_penalty)
+# Compare the realizations; distinct settings need not yield distinct fields.
+print("fields differ:", not np.array_equal(field_plain, field_penalty))
 
 
 ###############################################################################
-# Count "ordinal violations": adjacent cells two facies apart (a 0 touching a
-# 2). The penalty makes such contacts expensive to reproduce.
+# Count face-adjacent contacts two facies apart (a 0 touching a 2). This matrix
+# changes event mismatch costs, not adjacency energies. The counts describe
+# these particular realizations; assess direction and magnitude over an ensemble.
 
 
-def ordinal_violations(field):
+def ordinal_contacts(field):
     v = 0
     for shift in ((1, 0), (0, 1)):
         v += int(np.sum(np.abs(np.diff(field, axis=shift[0])) == 2))
@@ -83,8 +86,8 @@ def ordinal_violations(field):
 
 print(
     "0<->2 contacts:",
-    f"plain={ordinal_violations(field_plain)}",
-    f"penalty={ordinal_violations(field_penalty)}",
+    f"plain={ordinal_contacts(field_plain)}",
+    f"penalty={ordinal_contacts(field_penalty)}",
 )
 
 ###############################################################################
@@ -102,7 +105,7 @@ for ax, img, title in zip(
 fig.tight_layout()
 
 ###############################################################################
-# With the penalty matrix the scan prefers candidates that keep neighbouring
-# facies ordinally consistent, so the realization shows cleaner facies
-# transitions and fewer abrupt 0<->2 contacts. An all-ones off-diagonal matrix
-# reproduces the plain 0/1 behaviour exactly.
+# The cost matrix makes some category mismatches less important than others.
+# Spatial transition statistics can change indirectly; no adjacent pair is
+# forbidden and fewer 0<->2 contacts are not guaranteed. An all-ones off-diagonal
+# matrix reproduces plain 0/1 mismatch costs exactly.

@@ -9,10 +9,11 @@ para [40]) lets a region scan its own training image instead of the primary one.
 A :class:`~gstools.mps.Zone` pairs a training image with a region -- a boolean
 mask or a coordinate callable. Pass a list of zones to :class:`MPSModel`; a node
 inside a zone's region scans that zone's TI, every other node scans the primary.
-Only the scanned TI changes per zone (its data, shape, and value range);
-``n_neighbors``, ``max_radius``, the distance kernel, and the weights always come
-from the primary TI, and neighbours are still gathered across zone boundaries so
-the two patterns stitch together coherently.
+The selected domain supplies its TI data, shape, value range, and missingness.
+``n_neighbors``, ``max_radius``, distance settings, and weights come from the
+effective primary or cleanup configuration; a zone TI's unused search settings
+are not activated. Neighbors can cross zone boundaries, allowing interaction
+without guaranteeing seamless connectivity.
 
 Here the primary TI has horizontal-ish channels (the Strebelle image) and the
 top half of the grid uses the transpose, giving vertical channels there.
@@ -36,8 +37,10 @@ example_dir = (
 with np.load(example_dir / "input" / "strebelle_channel_ti.npz") as data:
     ti_arr = data["array1"].astype(int)
 
-primary = gs.TrainingImage(ti_arr, categorical=True, n_neighbors=16)
-zone_ti = gs.TrainingImage(ti_arr.T.copy(), categorical=True, n_neighbors=16)
+primary = gs.mps.TrainingImage(ti_arr, categorical=True, n_neighbors=16)
+zone_ti = gs.mps.TrainingImage(
+    ti_arr.T.copy(), categorical=True, n_neighbors=16
+)
 
 ###############################################################################
 # The region: the top half of the simulation grid. ``Zone`` accepts a boolean
@@ -70,8 +73,7 @@ fig.tight_layout()
 
 ###############################################################################
 # The lower half shows horizontal channels (primary TI) and the upper half
-# vertical channels (zone TI), yet the two regions connect across the boundary
-# because the data event is gathered from the grid regardless of zone. Zonation
-# only changes *which* TI a node scans; the random path, RNG use, and thread
-# scheduling are untouched, so the output stays deterministic and thread-count
-# invariant.
+# vertical channels (zone TI). Events can use neighbors across the boundary.
+# Assess zone interiors and boundary bands separately over an ensemble rather
+# than inferring connectivity from one image. Fixed controls remain repeatable
+# across thread counts within a fixed build and dependency environment.

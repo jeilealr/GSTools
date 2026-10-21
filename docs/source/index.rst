@@ -105,12 +105,16 @@ To (re)install it explicitly:
 
     pip install "gstools-core>=1.4.0"
 
-GSTools-Core runs in parallel automatically, without having to provide OpenMP
-or a local C compiler. The number of parallel threads can be set with the
-global variable :code:`config.NUM_THREADS`; if not set, all available cores are
-used.
+GSTools-Core supports parallel execution without OpenMP or a local C compiler.
+For non-DS routines, the number of parallel threads can be set with
+:code:`config.NUM_THREADS`; the unset default uses the available cores.
 
 MPS Direct Sampling requires GSTools-Core >= 1.4.0 and its MPS kernels.
+DS resolves the thread count from the call, the instance, then
+``config.NUM_THREADS``, falling back to one thread when unset. Small DS paths
+can run serially even when several workers are requested. See
+:ref:`mps-contracts` for DS controls, grid-index units, and the scope of seeded
+reproducibility.
 
 
 Citation
