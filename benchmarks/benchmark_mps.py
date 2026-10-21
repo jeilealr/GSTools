@@ -61,6 +61,7 @@ DS_CASES = (
     "cat_dsbc_hiscan",  # categorical TI=60×60, SG=30×30, n=12, f=0.8, t=0.0  (high scan)
     "cat_dsbc_highk",  # categorical TI=60×60, SG=30×30, n=24, f=0.3, t=0.0  (more neighbors)
     "cat_dsbc_cond",  # categorical TI=60×60, SG=30×30, n=12, f=0.3, t=0.0, conditioned
+    "cat_dsbc_cleanup",  # categorical TI=60×60, SG=30×30, n=12, f=0.3, t=0.0, post_processing=3
 )
 
 # Full parameter specification for each DS case.
@@ -145,6 +146,17 @@ _DS_SPECS = {
         "threshold": 0.0,
         "conditioned": True,
         "n_cond": 30,
+    },
+    "cat_dsbc_cleanup": {
+        "ti_shape": (60, 60),
+        "sg_shape": (30, 30),
+        "categorical": True,
+        "distance": "l1",
+        "n_neighbors": 12,
+        "scan_fraction": 0.3,
+        "threshold": 0.0,
+        "conditioned": False,
+        "post_processing": 3,
     },
 }
 
@@ -338,6 +350,7 @@ class DirectSamplingBenchmarks:
             ti,
             scan_fraction=spec["scan_fraction"],
             threshold=spec["threshold"],
+            post_processing=spec.get("post_processing", 0),
         )
         self.ds = DirectSampling(model)
         self.grid = [np.arange(s, dtype=float) for s in spec["sg_shape"]]
