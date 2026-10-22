@@ -16,7 +16,7 @@ import warnings
 import numpy as np
 
 # MPS is Rust-only: the block-distance kernels come from gstools.mps._core,
-# which hard-imports and version-checks gstools_core (see RUST_ONLY_MIGRATION.md).
+# which hard-imports and version-checks gstools_core.
 from gstools.mps._core import (
     mps_dist_block_cat,
     mps_dist_block_cat_masked,

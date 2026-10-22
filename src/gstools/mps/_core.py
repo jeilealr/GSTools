@@ -32,10 +32,13 @@ _REQUIRED_EXPORTS = (
     "mps_api_version",
 )
 _MIN_VERSION = Version("1.4.0")
-# MPS native ABI revision this Python layer requires. The crate version can
-# stay 1.4.0 across an ABI change, so version alone is insufficient; the Core
-# exports ``mps_api_version()`` and we gate on it. Bump in lockstep with the
-# Rust ``mps_api_version_py`` whenever an MPS entry-point signature changes.
+# MPS native ABI revision this Python layer requires. The DS-backend release is
+# intentionally also versioned 1.4.0 (the same string as the historical,
+# pre-MPS published gstools-core), so the package version alone CANNOT
+# distinguish this corrected Core from the old one. The exact ``mps_api_version``
+# check below is therefore the real compatibility distinguisher and must be
+# retained until a future release bumps the crate version. Bump in lockstep with
+# the Rust ``mps_api_version_py`` whenever an MPS entry-point signature changes.
 _REQUIRED_MPS_API = 7
 _MSG = "GSTools MPS requires gstools-core>=1.4.0 with MPS support"
 

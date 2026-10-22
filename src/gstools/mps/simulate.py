@@ -12,7 +12,7 @@ import numpy as np
 from gstools import config
 
 # MPS is Rust-only: the complete engine comes from gstools.mps._core, which
-# hard-imports and version-checks gstools_core (see RUST_ONLY_MIGRATION.md).
+# hard-imports and version-checks gstools_core (MPS is Rust-only).
 from gstools.mps._core import mps_cleanup_pass as _mps_cleanup_pass_gsc
 from gstools.mps._core import mps_simulate as _mps_simulate_gsc
 from gstools.mps.neighbors import _lag_transform_matrix, _precompute_offsets

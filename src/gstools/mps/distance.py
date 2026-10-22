@@ -3,7 +3,7 @@
 The vectorized pattern distances themselves (categorical / L1 / L2 / Lp /
 variation) are computed by the Rust backend (``gstools_core.mps_dist_block_*``);
 this module keeps only the shared spatial-decay weighting used to build a data
-event. See ``RUST_ONLY_MIGRATION.md`` for the Rust-only backend change.
+event (MPS is Rust-only; the native kernels compute the pattern distances).
 """
 
 import numpy as np
@@ -51,21 +51,52 @@ def compute_node_weights(
         nz = norms != 0.0
         raw_w[nz] = norms[nz] ** (-distance_power)
 
-    if cond_mask is not None:
+    cm = None if cond_mask is None else np.asarray(cond_mask, dtype=bool)
+    if cm is not None:
         # ``raw_w`` is a freshly allocated array (np.ones above, modified in
         # place), so no defensive copy is needed before scaling.
-        raw_w[np.asarray(cond_mask, dtype=bool)] *= cond_weight
+        raw_w[cm] *= cond_weight
 
-    total = raw_w.sum()
-    if total == 0.0:
-        # Every neighbour was zeroed out — the canonical case is an all-
-        # conditioning data event with cond_weight == 0 (δ_c = 0 → conditioning
-        # ignored entirely, Me13 p.323 → unconditional behaviour). Returning
-        # zero weights makes the data event non-informative so the node is drawn
-        # unconditionally, rather than re-weighting the ignored nodes uniformly.
+    with np.errstate(over="ignore", invalid="ignore"):
+        total = raw_w.sum()
+    if np.isfinite(total) and total > 0.0:
+        # Ordinary path — bit-identical to the historical behaviour. The robust
+        # path below only runs when this direct normalization is degenerate.
+        return raw_w / total
+
+    # Degenerate direct sum (finding F1): the raw weights overflowed to +inf
+    # (e.g. a large finite ``cond_weight``) or every positive weight underflowed
+    # to 0 (e.g. a large ``distance_power``). Both can arise from valid finite
+    # inputs and must not collapse to a uniform or all-zero event, which would
+    # discard the requested relative weighting / data-event information.
+    #
+    # A node is a *structural* zero only by intent: a conditioning node with
+    # ``cond_weight == 0`` (δ_c = 0 → conditioning ignored, Me13 p.323). If every
+    # node is structural (the canonical all-conditioning, zero-weight event),
+    # keep the established all-zero, non-informative result.
+    structural_zero = (
+        np.zeros(n, dtype=bool)
+        if cm is None or cond_weight != 0.0
+        else cm
+    )
+    active = ~structural_zero
+    if not active.any():
         return np.zeros(n, dtype=np.float64)
-    if not np.isfinite(total):
-        # Defensive: non-finite weight sum should be unreachable for grid lags
-        # (‖h‖ >= 1) — fall back to uniform rather than emit NaNs.
-        return np.full(n, 1.0 / n, dtype=np.float64)
-    return raw_w / total
+
+    # Rebuild the weights in the log domain so neither extreme overflows: a node
+    # weight is ``r_i**(-power) * c_i`` with ``r_i = 1`` for the zero-lag
+    # baseline. Subtract the min log-lag before scaling and the max log-weight
+    # before exponentiating; underflowed entries become an exact 0 (the correct
+    # float64 limit), and at least one active entry stays at unit scale.
+    log_lag = np.zeros(n, dtype=np.float64)
+    if lag_norms is not None and distance_power != 0.0:
+        norms = np.asarray(lag_norms, dtype=np.float64)
+        nz = norms != 0.0
+        log_lag[nz] = np.log(norms[nz])
+    log_w = -distance_power * (log_lag - log_lag[active].min())
+    if cm is not None and cond_weight > 0.0:
+        log_w[cm] += np.log(cond_weight)
+    log_w[structural_zero] = -np.inf
+    log_w -= log_w[active].max()
+    weights = np.where(active, np.exp(log_w), 0.0)
+    return weights / weights.sum()

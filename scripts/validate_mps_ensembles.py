@@ -99,7 +99,15 @@ def construct(case):
     return ds, ti
 
 
-def metrics(field, categorical):
+def metrics(field, categorical, categories=()):
+    """Per-realization metrics with a FIXED category schema (finding F2).
+
+    ``categories`` is the declared category universe for this variable (from the
+    TI/zone TIs, fixed before sampling). Every category emits the same keys in
+    every realization — an absent category reports ``fraction = 0`` and empty
+    connectivity rather than vanishing from the row, so the summary cannot
+    ``KeyError`` on, or silently drop, a category that a later realization omits.
+    """
     out = dict(
         mean=float(np.mean(field)),
         variance=float(np.var(field)),
@@ -109,23 +117,40 @@ def metrics(field, categorical):
         semivar_y=float(0.5 * np.mean(np.diff(field, axis=1) ** 2)),
     )
     if categorical:
-        for category in np.unique(field):
+        for category in categories:
             mask = field == category
-            components, count = label(mask)  # face-connected 4-neighbour
-            sizes = np.bincount(components.ravel())[1:]
-            a, b = set(components[0]) - {0}, set(components[-1]) - {0}
-            out.update(
-                {
-                    f"fraction_{int(category)}": float(mask.mean()),
-                    f"largest_{int(category)}": float(sizes.max() / field.size)
-                    if count
-                    else 0.0,
-                    f"span_x_{int(category)}": float(bool(a & b)),
-                }
-            )
+            if mask.any():
+                components, count = label(mask)  # face-connected 4-neighbour
+                sizes = np.bincount(components.ravel())[1:]
+                a, b = set(components[0]) - {0}, set(components[-1]) - {0}
+                largest = float(sizes.max() / field.size) if count else 0.0
+                span = float(bool(a & b))
+            else:
+                largest, span = 0.0, 0.0
+            out[f"fraction_{int(category)}"] = float(mask.mean())
+            out[f"largest_{int(category)}"] = largest
+            out[f"span_x_{int(category)}"] = span
         out["contact_x"] = float(np.mean(field[1:] != field[:-1]))
         out["contact_y"] = float(np.mean(field[:, 1:] != field[:, :-1]))
     return out
+
+
+def category_universe(ti, zones, name):
+    """Sorted integer category universe for a variable, declared before sampling.
+
+    Union of the finite category codes in the primary TI variable and every
+    zone TI's matching variable, so a category that is rare or absent in a given
+    realization still has a fixed schema slot (finding F2).
+    """
+    sources = [ti.variable(name) if ti.multivariate else ti.variable()]
+    for zone in zones:
+        zt = zone.ti
+        sources.append(zt.variable(name) if zt.multivariate else zt.variable())
+    values = np.concatenate(
+        [np.asarray(src.data, dtype=float).ravel() for src in sources]
+    )
+    finite = values[np.isfinite(values)]
+    return sorted({int(round(c)) for c in np.unique(finite)})
 
 
 def main():
@@ -133,6 +158,12 @@ def main():
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--count", type=int, default=100)
     args = parser.parse_args()
+    # Validate the count BEFORE creating the study directory (finding F2). The
+    # sample-SD Monte Carlo interval needs at least two realizations; one
+    # realization is a smoke profile with intervals disabled.
+    if args.count < 1:
+        parser.error(f"--count must be >= 1, got {args.count}")
+    intervals_enabled = args.count >= 2
     args.out.mkdir(parents=True, exist_ok=False)
     design = dict(
         cases=CASES,
@@ -158,11 +189,30 @@ def main():
         interpretation="Diagnostic flags fixed before sampling; not calibrated scientific equivalence limits. No release-ready conclusion. TI whole-grid metrics have different support; finite-grid variability not calibrated.",
         intervals="Mean +/-1.96 sample_SD/sqrt(realizations); approximate Monte Carlo intervals, no multiple-comparison equivalence claim.",
     )
+    # Declare the per-case category universe BEFORE sampling (finding F2), so
+    # the metric schema is fixed independently of any realization's draw.
+    universes = {}
+    for case in CASES:
+        _ds, _ti = construct(case)
+        zones = _ds.mps_model.zones
+        case_universe = {}
+        for v in _ti.variables:
+            if v.categorical:
+                key = v.name if case == "mixed" else "field"
+                case_universe[key] = category_universe(_ti, zones, v.name)
+        universes[case] = case_universe
+    design["category_universes"] = universes
     (args.out / "design.json").write_text(json.dumps(design, indent=2))
+    # Provenance written up front with a running status (finding F2); the
+    # completed manifest below overwrites it on success.
+    (args.out / "manifest.json").write_text(
+        json.dumps({"status": "running", "count": args.count}, indent=2)
+    )
     rows, summaries, flags, timing = [], {}, [], {}
     grid = [np.arange(24)] * 2
     for case in CASES:
         ds, ti = construct(case)
+        case_universe = universes[case]
         start = time.monotonic()
         case_rows = []
         for i in range(args.count):
@@ -220,7 +270,9 @@ def main():
                     {
                         name + "_" + key: value
                         for key, value in metrics(
-                            f, variable.categorical
+                            f,
+                            variable.categorical,
+                            case_universe.get(name, ()),
                         ).items()
                     }
                 )
@@ -247,13 +299,21 @@ def main():
                     )
                 )
         summary = {}
-        for key in case_rows[0]:
+        # Iterate the union of all realizations' keys, not the first row's
+        # (finding F2): with the fixed schema every row shares keys, but the
+        # union is robust and also covers the case-specific extra columns.
+        metric_keys = sorted(set().union(*(r.keys() for r in case_rows)))
+        for key in metric_keys:
             if key in ("case", "realization", "path_seed", "node_seed"):
                 continue
             values = np.array([r[key] for r in case_rows])
-            mean, error = (
-                values.mean(),
-                1.96 * values.std(ddof=1) / np.sqrt(len(values)),
+            mean = values.mean()
+            # One realization has no sample SD; report the mean with an
+            # undefined (NaN) interval rather than dividing by zero.
+            error = (
+                1.96 * values.std(ddof=1) / np.sqrt(len(values))
+                if intervals_enabled
+                else float("nan")
             )
             summary[key] = dict(
                 mean=float(mean),
@@ -275,7 +335,7 @@ def main():
                     )
                 )
             if variable.categorical:
-                for category in np.unique(finite):
+                for category in case_universe.get(name, ()):
                     key = name + "_fraction_" + str(int(category))
                     difference = abs(
                         summary.get(key, {"mean": 0.0})["mean"]
@@ -328,6 +388,10 @@ def main():
             ["git", "rev-parse", "HEAD"], cwd=root, text=True
         ).strip(),
         script_hash=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+        status="completed",
+        outcome="diagnostic_only",
+        count=args.count,
+        intervals_enabled=intervals_enabled,
     )
     (args.out / "manifest.json").write_text(json.dumps(manifest, indent=2))
     (args.out / "REPORT.txt").write_text(
