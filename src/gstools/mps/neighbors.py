@@ -33,8 +33,8 @@ def _precompute_offsets(shape, max_offset=None):
 
     Notes
     -----
-    The envelope is built **per axis**, capped at ``shape[d] - 1`` on axis ``d``
-    (audit DS06). An offset larger than ``shape[d] - 1`` can never land inside
+    The envelope is built **per axis**, capped at ``shape[d] - 1`` on axis ``d``.
+    An offset larger than ``shape[d] - 1`` can never land inside
     the grid from any node, so excluding it never changes which neighbours the
     engine finds, but it keeps a long thin grid such as ``(1000, 2, 2)`` from
     attempting the ``max(shape)``-wide cube that would allocate hundreds of GB.

@@ -1,14 +1,7 @@
-"""Central gstools_core import + MPS capability check.
+"""Validate Core package version, required exports, and MPS call compatibility.
 
-MPS Direct Sampling is Rust-only: it requires ``gstools_core`` (>= 1.4.0, the
-release that first shipped the MPS kernels). This module hard-imports the core,
-validates its version *and* that every required MPS export is present, then
-re-exports the kernels. A single, explicit error is raised for both failure
-modes — core missing, or an older core without the MPS exports.
-
-The package declares Core as a mandatory dependency. The MPS interface gate
-additionally rejects stale or incompatible local binaries even when their
-package metadata reports a suitable version.
+Direct Sampling requires the Rust extension. Interface revision checks protect
+call signatures; exact build identity requires source and binary hashes.
 """
 
 from packaging.version import InvalidVersion, Version
@@ -32,13 +25,9 @@ _REQUIRED_EXPORTS = (
     "mps_api_version",
 )
 _MIN_VERSION = Version("1.4.0")
-# MPS native ABI revision this Python layer requires. The DS-backend release is
-# intentionally also versioned 1.4.0 (the same string as the historical,
-# pre-MPS published gstools-core), so the package version alone CANNOT
-# distinguish this corrected Core from the old one. The exact ``mps_api_version``
-# check below is therefore the real compatibility distinguisher and must be
-# retained until a future release bumps the crate version. Bump in lockstep with
-# the Rust ``mps_api_version_py`` whenever an MPS entry-point signature changes.
+# Check call-interface compatibility in addition to the package version.
+# Reject unsupported signatures before dispatching to native entry points.
+# The interface revision identifies a contract, not a unique binary build.
 _REQUIRED_MPS_API = 7
 _MSG = "GSTools MPS requires gstools-core>=1.4.0 with MPS support"
 

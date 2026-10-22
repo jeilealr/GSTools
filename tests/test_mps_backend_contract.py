@@ -1,17 +1,8 @@
-"""Port-contract guards for the Rust-only MPS backend.
+"""Architecture contracts for the Rust-only Direct Sampling backend.
 
-These lock in the invariants that the port of Niklas's features
-(``docs/NIKLAS_FEATURE_PORT_PLAN.md``) must never break:
-
-1. the deleted Python scheduler modules stay gone,
-2. ``DirectSampling.__call__`` exposes no ``progress`` hook (there is no
-   per-node Python callback path anymore), and
-3. a single ``DirectSampling`` call runs exactly one complete Rust-engine
-   pass (no hidden Python scheduler loop, no extra passes).
-
-They are deliberately cheap and import-light so they act as a fast tripwire
-if a future feature accidentally reintroduces a Python numerical path.
-"""
+The main simulation with cleanup disabled makes one native engine call.
+Cleanup requests legitimately add native cleanup passes. No Python scheduler
+or per-node progress callback is part of this interface."""
 
 import importlib
 import inspect
@@ -44,8 +35,8 @@ def test_direct_sampling_has_no_progress_hook():
     )
 
 
-def test_single_rust_engine_pass_per_call():
-    """One DirectSampling call == exactly one complete Rust-engine pass."""
+def test_single_main_rust_engine_pass_without_cleanup():
+    """With cleanup disabled, one call makes one main Rust-engine pass."""
     captured = []
     simulate._MPS_RUST_ENGINE_STATS_HOOK = captured.append
     try:

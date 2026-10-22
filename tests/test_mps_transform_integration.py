@@ -1,11 +1,4 @@
-"""Phase 3 regressions: MPSModel.rotation/scale drive the simulation.
-
-Before the reconciliation, ``MPSModel(rotation=, scale=)`` was validated but
-ignored (``DirectSampling.set_nonstationary`` drove a parallel ``anis`` path).
-These lock in that the model specs now reach the engine via
-:func:`gstools.mps.nonstationary.resolve_spec`, and that scalar / stationary
-component-vector / callable forms of the *same* rotation agree end to end.
-"""
+"""Model rotation and scale propagation into native simulation."""
 
 import numpy as np
 import pytest
@@ -19,7 +12,9 @@ def _ti():
 
 
 def _run(**model_kw):
-    ds = gs.mps.DirectSampling(gs.mps.MPSModel(_ti(), scan_fraction=0.3, **model_kw))
+    ds = gs.mps.DirectSampling(
+        gs.mps.MPSModel(_ti(), scan_fraction=0.3, **model_kw)
+    )
     return ds([np.arange(10, dtype=float)] * 2, seed=4)
 
 
@@ -34,7 +29,7 @@ def test_scalar_vector_callable_rotation_agree():
 
 
 def test_rotation_actually_changes_output_vs_plain():
-    # The core Phase-3 fix: a model rotation must reach the engine.
+    # A model rotation must reach the engine.
     f_plain = _run()
     f_rot = _run(rotation=np.pi / 4)
     assert not np.array_equal(f_plain, f_rot)
@@ -43,7 +38,11 @@ def test_rotation_actually_changes_output_vs_plain():
 def test_callable_scale_changes_output():
     f_plain = _run()
     # anisotropic absolute scale via a callable (compress axis 1)
-    f_scale = _run(scale=lambda x, y: np.stack([np.ones_like(x), 0.5 * np.ones_like(y)], axis=-1))
+    f_scale = _run(
+        scale=lambda x, y: np.stack(
+            [np.ones_like(x), 0.5 * np.ones_like(y)], axis=-1
+        )
+    )
     assert not np.array_equal(f_plain, f_scale)
 
 

@@ -60,11 +60,11 @@ def compute_node_weights(
     with np.errstate(over="ignore", invalid="ignore"):
         total = raw_w.sum()
     if np.isfinite(total) and total > 0.0:
-        # Ordinary path — bit-identical to the historical behaviour. The robust
-        # path below only runs when this direct normalization is degenerate.
+        # Direct normalization preserves the ordinary-case arithmetic order.
+        # Use relative log weights only when the direct sum is degenerate.
         return raw_w / total
 
-    # Degenerate direct sum (finding F1): the raw weights overflowed to +inf
+    # Degenerate direct sum: the raw weights overflowed to +inf
     # (e.g. a large finite ``cond_weight``) or every positive weight underflowed
     # to 0 (e.g. a large ``distance_power``). Both can arise from valid finite
     # inputs and must not collapse to a uniform or all-zero event, which would

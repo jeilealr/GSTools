@@ -1,10 +1,4 @@
-"""Phase 4 regressions: native categorical penalty-matrix distance.
-
-The Rust engine applies ``T[sim_code, ti_code]`` (zero diagonal, off-diagonal in
-(0, 1], asymmetric allowed) in place of the 0/1 categorical mismatch. These
-check the end-to-end simulation behaviour; the exact kernel arithmetic is pinned
-by the Rust unit tests ``penalty_cost_*`` / ``categorical_penalty_*``.
-"""
+"""Categorical penalty distances and multivariate integration."""
 
 import numpy as np
 

@@ -18,13 +18,13 @@ hard data, then writes generated TI, input-map, 2D-result, facies/vertical,
 For normal documentation/gallery execution this file only displays the saved
 figures. Regenerate them explicitly with::
 
-    python examples/13_mps/12_roussillon_hess_reproduction.py small \
+    python examples/13_mps/15_roussillon_hess_reproduction.py small \
         --archive /private/tmp/roussillon_mps_2020_dallalba.zip \
         --realizations 2 --num-threads 4
 
 After a run exists, redraw only the figures with::
 
-    python examples/13_mps/12_roussillon_hess_reproduction.py figures \
+    python examples/13_mps/15_roussillon_hess_reproduction.py figures \
         --archive /private/tmp/roussillon_mps_2020_dallalba.zip
 
 If the archive is missing, the command downloads it automatically. For
@@ -103,7 +103,7 @@ def show_saved_figure(path, figsize):
     if not path.exists():
         raise FileNotFoundError(
             f"Missing precomputed figure: {path}. Run:\n"
-            "python examples/13_mps/12_roussillon_hess_reproduction.py small "
+            "python examples/13_mps/15_roussillon_hess_reproduction.py small "
             "--archive /private/tmp/roussillon_mps_2020_dallalba.zip "
             "--realizations 2 --num-threads 4"
         )

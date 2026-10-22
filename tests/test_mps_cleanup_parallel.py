@@ -1,4 +1,4 @@
-"""Phase 8 regressions: deterministic parallel post-processing (cleanup).
+"""Contracts for deterministic parallel post-processing (cleanup).
 
 The native cleanup pass (ABI rev 7) runs over a position-oriented dependency
 DAG with the same level scheduler as the main engine, so its output is

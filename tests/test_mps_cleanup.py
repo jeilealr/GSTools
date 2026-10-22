@@ -1,12 +1,6 @@
-"""Phase 7 regressions: post-processing (cleanup) configuration + execution.
+"""Cleanup configuration and execution contracts.
 
-Locks in the MPSModel post-processing parameters, all their validators, the
-``_resolve_post_ti`` / ``_post_pass_n_neighbors`` helpers, the
-``Variable._explicit`` tracking that override resolution relies on, and the
-native serial Gauss-Seidel cleanup pass (ABI rev 6): oracle equivalence, hard
-data preservation, mask freezing, metric-override paste rule, the
-``post_processing=0`` no-op, and reproducibility.
-"""
+Covers overrides, sweep equivalence, masks, hard data, and zero-pass behavior."""
 
 import numpy as np
 import pytest
@@ -23,7 +17,7 @@ def _ti(**kw):
     return gs.mps.TrainingImage(np.zeros((20, 20)), n_neighbors=16, **kw)
 
 
-# --- Variable._explicit tracking (deferred from Phase 2) ---
+# --- Variable._explicit tracking ---
 def test_variable_records_explicit_fields():
     v = Variable("c", np.zeros((4, 4)), distance_power=0.5)
     assert v._explicit == frozenset({"distance_power"})
@@ -117,7 +111,7 @@ def test_post_processing_defaults():
     assert model.post_processing_variables == []
 
 
-# --- native cleanup execution (ABI rev 6) ---------------------------------
+# --- native cleanup execution (interface revision 7) ---------------------------------
 #
 # The oracle below composes single-node resimulations through the *same* Rust
 # scan engine: with every other cell conditioned, a one-node main pass gathers
@@ -128,7 +122,7 @@ def test_post_processing_defaults():
 # raster order, writing each back before the next (Gauss-Seidel), must
 # reproduce the native cleanup pass. Only the new scheduling (fully-informed
 # cache, reopen/erase, immediate write-back) is under test here; the scan
-# kernel itself is covered by the earlier phases.
+# kernel itself has separate distance regression coverage.
 
 from gstools.mps.simulate import ds_simulate  # noqa: E402
 from gstools.random.rng import RNG  # noqa: E402

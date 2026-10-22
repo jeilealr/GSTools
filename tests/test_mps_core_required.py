@@ -1,8 +1,7 @@
 """MPS is Rust-only: it requires gstools_core>=1.4.0 with the MPS exports.
 
-Replaces the old ``test_mps_optional_core.py`` (which asserted the now-removed
-pure-Python fallback). Here we assert the inverse contract: importing the MPS
-core validator raises a clear error when the Rust core is missing or too old.
+Importing the MPS core validator raises a clear error when the Rust core
+is missing, too old, or incompatible with the required native interface.
 """
 
 import importlib

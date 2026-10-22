@@ -182,7 +182,7 @@ class _DirectSamplingEngine:
             v.name: v.cond_weight for v in training_image.variables
         }
         # An exact identity transform (no rotation, unit scale everywhere) must
-        # reduce events the same way as an absent transform (audit DS07). The
+        # reduce events the same way as an absent transform. The
         # transformed route uses a geometric reduce-to-fit while the stationary
         # route keeps the nearest-neighbour prefix, so they can retain different
         # events despite the identity matrix. Collapsing a globally-identity map
@@ -247,8 +247,8 @@ class _DirectSamplingEngine:
         # The cleanup mask must match the grid exactly: NumPy would otherwise
         # broadcast a (2,), (2,1) or scalar mask against the eligibility grid
         # and silently select a column/row/everything, and a non-broadcastable
-        # shape would only fail after the main pass had consumed randomness
-        # (audit DS11). Validate here, before the main pass runs.
+        # shape would only fail after the main pass had consumed randomness.
+        # Validate here, before the main pass runs.
         if post_processing_mask is not None and tuple(
             np.shape(post_processing_mask)
         ) != tuple(sim_shape):
@@ -271,7 +271,7 @@ class _DirectSamplingEngine:
             _radius_values += list(self._post_max_radius_per_var.values())
         # Any unlimited (None) effective radius makes the shared envelope
         # unlimited — bounded only per axis by the grid extent in
-        # ``_precompute_offsets`` (audit DS06). Dropping None and taking the max
+        # ``_precompute_offsets``. Dropping None and taking the max
         # of the finite siblings would silently cap the unbounded variable's
         # neighbourhood to a smaller radius.
         if any(r is None for r in _radius_values):
@@ -838,7 +838,7 @@ def ds_simulate(
     correction or retained partial conditioning). This preserves the local joint
     relationship cell-by-cell; it does not by itself guarantee exact finite-
     sample joint frequencies or higher-order multipoint statistics over the
-    realization (audit DS16). Variables already known at the node (only ever via
+    realization. Variables already known at the node (only ever via
     conditioning data) act as collocated ``h = 0`` constraints, weighted by
     ``cond_weight``.
 

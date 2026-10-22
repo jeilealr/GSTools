@@ -1,10 +1,4 @@
-"""Phase 2 regressions: per-variable ``distance_power`` / ``cond_weight``.
-
-These lock in the reference-aligned API (both settings live on
-:class:`~gstools.mps.Variable`, with univariate :class:`~gstools.mps.TrainingImage`
-sugar forwarding; :class:`~gstools.mps.MPSModel` no longer carries ``cond_weight``)
-and prove the values reach the Rust engine per variable (native ABI rev 2).
-"""
+"""Training-image construction, per-variable settings, views, and penalties."""
 
 import numpy as np
 import pytest
@@ -158,7 +152,7 @@ def test_non_uniform_cond_weight_changes_output():
 
 
 # ----------------------------------------------------------------------
-# penalty_matrix (stored + validated now; engine use guarded until Phase 4)
+# penalty_matrix validation
 # ----------------------------------------------------------------------
 def test_penalty_matrix_accepted_and_frozen():
     v = Variable(
@@ -209,7 +203,7 @@ def test_penalty_matrix_rejects_out_of_range_codes():
 
 
 def test_penalty_matrix_simulation_runs():
-    # As of Phase 4 the native engine applies the categorical penalty distance,
+    # The native engine applies the categorical penalty distance,
     # so a simulation with a penalty_matrix runs (no NotImplementedError).
     ti = gs.mps.TrainingImage(
         Variable(

@@ -9,7 +9,7 @@ smoothed version of the same image. This page follows the bivariate experiment
 in `Mariethoz et al. (2010) <https://doi.org/10.1029/2008WR007621>`_ and
 provides another check that the implementation reproduces the expected joint
 patterns. See the
-:ref:`context-variable example <sphx_glr_examples_13_mps_08_multivariate_context.py>`
+:ref:`context-variable example <sphx_glr_examples_13_mps_09_multivariate_context.py>`
 for the case where the secondary field is known everywhere and only facies are
 simulated.
 

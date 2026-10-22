@@ -746,7 +746,7 @@ class TestDirectSampling(unittest.TestCase):
     def test_regression_1d(self):
         ds = DirectSampling(MPSModel(self.ti1d, scan_fraction=1.0))
         field = ds([self.x1d], seed=42)
-        # Intentional DS10 stream change: ds-seedsequence-mt19937-v1.
+        # Random-stream contract: ds-seedsequence-mt19937-v1.
         self.assertAlmostEqual(field[0], 0.0)
         self.assertAlmostEqual(field[5], 1.0)
         self.assertAlmostEqual(field[9], 1.0)
@@ -1631,7 +1631,7 @@ class TestMultivariateDirectSampling(unittest.TestCase):
         np.testing.assert_array_equal(field["b"], field["a"] + 100)
 
     def test_mv_custom_store_name_raises(self):
-        # Finding #6: a custom store name has no single field to bind to for a
+        # a custom store name has no single field to bind to for a
         # multivariate run; reject it instead of silently dropping it.
         rng = np.random.default_rng(0)
         ti = TrainingImage(
@@ -1845,7 +1845,7 @@ class TestNonstationarity(unittest.TestCase):
 
 
 class TestFullArraySnapshot(unittest.TestCase):
-    # Goldens regenerated for ds-seedsequence-mt19937-v1 (DS10).
+    # Goldens regenerated for ds-seedsequence-mt19937-v1.
     """Bit-identical full-array regression pins — the step-by-step acceptance gate.
 
     These arrays are captured from the pre-refactoring engine with fixed seeds and
@@ -2089,7 +2089,7 @@ class TestNaNTrainingImage(unittest.TestCase):
     """
 
     def test_nan_excluded_from_dmax(self):
-        # Finding #1: a NaN must not collapse d_max to the 1.0 fallback.
+        # a NaN must not collapse d_max to the 1.0 fallback.
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             ti = TrainingImage(
@@ -2106,7 +2106,7 @@ class TestNaNTrainingImage(unittest.TestCase):
             )
 
     def test_partial_nan_continuous_runs_finite(self):
-        # Finding #2: a NaN patch must not crash (was IndexError) and must
+        # a NaN patch must not crash (was IndexError) and must
         # produce finite output within the defined data range.
         data = np.random.RandomState(0).rand(20, 20)
         data[5:8, 5:8] = np.nan
@@ -2121,7 +2121,7 @@ class TestNaNTrainingImage(unittest.TestCase):
         self.assertLessEqual(field.max(), np.nanmax(data))
 
     def test_partial_nan_categorical_runs_subset(self):
-        # Finding #2: categorical NaN patch must not crash (was "produced NaN"
+        # categorical NaN patch must not crash (was "produced NaN"
         # ValueError) and output must be a subset of the *defined* categories.
         data = np.random.RandomState(0).randint(0, 2, (20, 20)).astype(float)
         data[5:8, 5:8] = np.nan
@@ -2328,8 +2328,7 @@ class TestMVTransformsAndReporting(unittest.TestCase):
 class TestReturnTypeContract(unittest.TestCase):
     """0a — Return-type contract: univariate returns ndarray; MV returns dict.
 
-    These are PHASE 0 regression guards: they must pass on the current code and
-    will catch any refactor that accidentally changes the public return type.
+    These guards catch any refactor that accidentally changes the public return type.
     """
 
     @classmethod

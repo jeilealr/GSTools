@@ -52,7 +52,13 @@ def _mps_assets(subdir, suffixes):
     return sorted(
         path
         for path in asset_dir.iterdir()
-        if path.is_file() and path.suffix in suffixes
+        if path.is_file() and (
+            path.suffix in suffixes or (
+                subdir == "output" and path.name in {
+                    "herten_nonstationary.npz", "herten_nonstationary.json"
+                }
+            )
+        )
     )
 
 

@@ -26,7 +26,7 @@ Rust backend installed:
 .. code-block:: bash
 
     GSTOOLS_GENERATE_EXAMPLE_OUTPUT=1 PYTHONPATH=src \
-      python examples/13_mps/13_3d_fluvsim_multifacies.py
+      python examples/13_mps/14_3d_fluvsim_multifacies.py
 
 Regeneration writes the figures into ``examples/13_mps/output/``. The full
 settings are retained to preserve the five-facies structure; the faster tuning

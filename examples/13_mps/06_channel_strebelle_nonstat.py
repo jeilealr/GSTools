@@ -7,6 +7,9 @@ simulated with spatially varying rotation and anisotropy maps, so the local
 data-event geometry changes across the simulation grid while the training image
 itself stays fixed.
 
+Continue with :ref:`sphx_glr_examples_13_mps_07_herten_nonstationary.py`
+for a rotation-only comparison with several facies.
+
 .. note::
 
     This example reuses the bundled Strebelle TI stored in

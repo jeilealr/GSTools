@@ -17,7 +17,6 @@ import time
 import warnings
 from pathlib import Path
 
-import matplotlib.pyplot as plt
 import numpy as np
 from scipy.ndimage import label
 
@@ -100,7 +99,7 @@ def construct(case):
 
 
 def metrics(field, categorical, categories=()):
-    """Per-realization metrics with a FIXED category schema (finding F2).
+    """Per-realization metrics with a FIXED category schema.
 
     ``categories`` is the declared category universe for this variable (from the
     TI/zone TIs, fixed before sampling). Every category emits the same keys in
@@ -140,7 +139,7 @@ def category_universe(ti, zones, name):
 
     Union of the finite category codes in the primary TI variable and every
     zone TI's matching variable, so a category that is rare or absent in a given
-    realization still has a fixed schema slot (finding F2).
+    realization still has a fixed schema slot.
     """
     sources = [ti.variable(name) if ti.multivariate else ti.variable()]
     for zone in zones:
@@ -158,7 +157,7 @@ def main():
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--count", type=int, default=100)
     args = parser.parse_args()
-    # Validate the count BEFORE creating the study directory (finding F2). The
+    # Validate the count BEFORE creating the study directory. The
     # sample-SD Monte Carlo interval needs at least two realizations; one
     # realization is a smoke profile with intervals disabled.
     if args.count < 1:
@@ -189,7 +188,7 @@ def main():
         interpretation="Diagnostic flags fixed before sampling; not calibrated scientific equivalence limits. No release-ready conclusion. TI whole-grid metrics have different support; finite-grid variability not calibrated.",
         intervals="Mean +/-1.96 sample_SD/sqrt(realizations); approximate Monte Carlo intervals, no multiple-comparison equivalence claim.",
     )
-    # Declare the per-case category universe BEFORE sampling (finding F2), so
+    # Declare the per-case category universe BEFORE sampling, so
     # the metric schema is fixed independently of any realization's draw.
     universes = {}
     for case in CASES:
@@ -203,7 +202,7 @@ def main():
         universes[case] = case_universe
     design["category_universes"] = universes
     (args.out / "design.json").write_text(json.dumps(design, indent=2))
-    # Provenance written up front with a running status (finding F2); the
+    # Provenance written up front with a running status; the
     # completed manifest below overwrites it on success.
     (args.out / "manifest.json").write_text(
         json.dumps({"status": "running", "count": args.count}, indent=2)
@@ -300,7 +299,7 @@ def main():
                 )
         summary = {}
         # Iterate the union of all realizations' keys, not the first row's
-        # (finding F2): with the fixed schema every row shares keys, but the
+        #: with the fixed schema every row shares keys, but the
         # union is robust and also covers the case-specific extra columns.
         metric_keys = sorted(set().union(*(r.keys() for r in case_rows)))
         for key in metric_keys:
@@ -359,6 +358,8 @@ def main():
             indent=2,
         )
     )
+    import matplotlib.pyplot as plt
+
     fig, axes = plt.subplots(1, 2, figsize=(10, 4))
     for j, metric in enumerate(("field_mean", "field_semivar_x")):
         selected = [case for case in CASES if metric in summaries[case]]

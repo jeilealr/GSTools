@@ -64,8 +64,15 @@ image: the Strebelle channels** repeats the conditional workflow on a classic
 MPS benchmark, and **Direct Sampling parameters: n_neighbors, scan_fraction,
 threshold** then isolates the three quality/speed knobs and the DSBC-versus-DS
 choice on that image. **Nonstationary geometry with the Strebelle channels**
-and **Radial nonstationarity** keep the same TI but change the local data-event
-geometry with rotation and anisotropy maps.
+introduces rotation and scale. Next,
+:ref:`Herten outcrop: multi-facies simulation with a rotation gradient
+<sphx_glr_examples_13_mps_07_herten_nonstationary.py>` compares stationary and
+rotated search geometry on one categorical variable with eight facies in the
+selected crop. Its default offline preview displays precomputed results; the
+page documents explicit regeneration. Continue with
+:ref:`Radial nonstationarity
+<sphx_glr_examples_13_mps_08_channel_strebelle_radial.py>` for radial rotation
+and spatial scaling before introducing multiple variables.
 
 The remaining 2D examples broaden the data model. **Multivariate channels with
 a context variable** follows a published example and uses an exhaustive

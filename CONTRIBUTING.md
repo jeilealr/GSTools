@@ -36,3 +36,10 @@ with your idea or suggestion and we'd love to discuss about it.
 - Add an example showing your new feature in one of the examples sub-folders if possible.
   Follow this [Sphinx-Gallary guide](https://sphinx-gallery.github.io/stable/syntax.html#embed-rst-in-your-example-python-files).
 - Push to your fork and submit a pull request.
+
+Direct Sampling release maintenance tools and isolated paired-wheel validation
+are documented in [scripts/README.md](scripts/README.md). Keep package versions
+and native interface checks synchronized with supported signatures. Exact build
+identity requires artifact/source hashes. Publication requires a separate check
+of registry filename availability and supported platform/dependency profiles;
+local validation does not establish hosted CI or publication approval.

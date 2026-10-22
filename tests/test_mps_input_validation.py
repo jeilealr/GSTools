@@ -1,12 +1,4 @@
-"""Phase 1 (correctness/native-boundary hardening) regressions for the MPS
-Rust-backend migration.
-
-These port the *accepted* validation behavior from the reference
-(n0228a/GSTools @ 293e034) into the target, restricted to the subset that fits
-the target's current public API (no penalty_matrix / cond_weight / per-variable
-distance_power yet — those arrive in later phases). Each test documents the
-finding it guards.
-"""
+"""Input validation, missing data, conditioning positions, and warnings."""
 
 import numpy as np
 import pytest
@@ -15,7 +7,7 @@ import gstools as gs
 from gstools.mps import Variable
 
 
-# --- P1-8: infinite TI data must be rejected (use NaN for undefined) ---
+# --- infinite TI data must be rejected (use NaN for undefined) ---
 def test_inf_training_image_data_rejected_variable():
     with pytest.raises(ValueError, match="inf"):
         Variable("c", np.full((3, 3), np.inf), categorical=False)
@@ -42,7 +34,7 @@ def test_nan_training_image_data_still_allowed():
     assert var.has_nan is True
 
 
-# --- P1-5: variable weight must be finite and >= 0 ---
+# --- variable weight must be finite and >= 0 ---
 @pytest.mark.parametrize("bad", [-1.0, -0.001, np.inf, np.nan])
 def test_variable_weight_rejects_nonfinite_or_negative(bad):
     with pytest.raises(ValueError, match="weight"):
@@ -81,7 +73,7 @@ def test_variation_exponent_rejects_nonfinite_or_nonpositive(dist):
         Variable("c", np.zeros((3, 3)), categorical=False, distance=dist)
 
 
-# --- P2: conditioning positions must be finite (set_condition) ---
+# --- conditioning positions must be finite (set_condition) ---
 @pytest.mark.parametrize("bad", [np.inf, -np.inf, np.nan])
 def test_set_condition_rejects_nonfinite_position(bad):
     ds = gs.mps.DirectSampling(
@@ -91,7 +83,7 @@ def test_set_condition_rejects_nonfinite_position(bad):
         ds.set_condition([[bad], [0.0]], [0.0])
 
 
-# --- P2: out-of-grid conditioning warns when snapped to an edge node ---
+# --- out-of-grid conditioning warns when snapped to an edge node ---
 def test_out_of_grid_conditioning_warns_when_snapped():
     ds = gs.mps.DirectSampling(
         gs.mps.MPSModel(gs.mps.TrainingImage(np.zeros((9, 9))))

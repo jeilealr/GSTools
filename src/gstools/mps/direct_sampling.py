@@ -26,7 +26,7 @@ __all__ = ["DirectSampling"]
 
 
 def _is_unset(value):
-    """True for an unset seed control: ``None`` or NaN (audit DS13)."""
+    """True for an unset seed control: ``None`` or NaN."""
     if value is None:
         return True
     try:
@@ -251,7 +251,7 @@ class DirectSampling(Field):
         name, save = self.get_store_config(store)
         pos, shape = self.pre_pos(pos, mesh_type)
         # Reject non-finite grid coordinates before snapping, coordinate maps or
-        # stored field metadata can use them (audit DS15). Nonuniform *finite*
+        # stored field metadata can use them. Nonuniform *finite*
         # axes remain allowed; their spacing is interpreted in index space.
         for axis in self.pos:
             if not np.all(np.isfinite(np.asarray(axis, dtype=np.double))):
@@ -508,7 +508,7 @@ class DirectSampling(Field):
             ``{variable: numpy.ndarray}`` mapping (use ``numpy.nan`` for a
             variable that is not conditioned at a given point).
         """
-        # Conditioning updates are transactional (audit DS08): everything is
+        # Conditioning updates are transactional: everything is
         # converted and validated into locals first, and ``self._cond_pos`` /
         # ``self._cond_val`` are reassigned only after every check passes, so a
         # rejected update never corrupts the state a later simulation reuses.
@@ -531,7 +531,7 @@ class DirectSampling(Field):
                 arr = _condition_values(a, self._ti.variable(v))
                 # Require exactly one scalar per conditioning position; reject an
                 # (N, k) array up front instead of failing later in snapping with
-                # an ambiguous-truth error (audit DS08).
+                # an ambiguous-truth error.
                 if arr.ndim != 1:
                     raise ValueError(
                         f"DirectSampling: cond_val[{v!r}] must be a 1-D array "
@@ -545,7 +545,7 @@ class DirectSampling(Field):
                         f"{arr.shape[0]} for {v!r}."
                     )
                 local_val[v] = arr
-            self._check_penalty_codes(local_val)  # DS09
+            self._check_penalty_codes(local_val)
             self._cond_pos = cond_pos_arr
             self._cond_val = local_val
         elif self._ti.multivariate:
@@ -557,7 +557,7 @@ class DirectSampling(Field):
             from gstools.krige.tools import set_condition as _gs_set_condition
 
             # Validate into locals BEFORE storing so a non-finite position does
-            # not leave invalid conditioning installed (audit DS08 univariate).
+            # not leave invalid conditioning installed.
             local_pos, local_val = _gs_set_condition(
                 cond_pos,
                 _condition_values(cond_val, self._ti.variables[0]),
@@ -567,11 +567,11 @@ class DirectSampling(Field):
             uv_name = self._ti.variables[0].name
             self._check_penalty_codes(
                 {uv_name: np.asarray(local_val, dtype=np.double)}
-            )  # DS09
+            )
             self._cond_pos, self._cond_val = local_pos, local_val
 
     def _check_penalty_codes(self, values_by_name, include_cleanup=True):
-        """Screen hard category codes against active penalty matrices (DS09).
+        """Screen hard category codes against active penalty matrices.
 
         A categorical penalty matrix is indexed by the hard code during the
         scan, so a non-integer, negative, or out-of-range code would silently

@@ -51,7 +51,7 @@ def _data_range(arr):
 
     Integer extrema are subtracted as Python integers before float conversion.
     Floating extrema are each widened before subtraction, so their dtype cannot
-    overflow the subtraction (audit DS02): e.g. ``int8`` ``[-128, 127]`` yields
+    overflow the subtraction: e.g. ``int8`` ``[-128, 127]`` yields
     ``255`` rather than the ``1`` that ``int8(127) - int8(-128)`` wraps to, and
     ``float32`` extrema do not saturate to ``inf``. A genuinely non-constant
     range that still exceeds float64 is a hard error rather than a silent
@@ -654,8 +654,8 @@ class TrainingImage:
                 "Either specify weight on every Variable or on none."
             )
         else:
-            # Normalize after scaling by the largest positive weight (audit
-            # DS15): summing raw weights first overflows to inf for large finite
+            # Normalize after scaling by the largest positive weight: summing
+            # raw weights first overflows to inf for large finite
             # inputs such as [1e308, 1e308] and then normalizes to [0, 0],
             # violating the sum-to-one joint-distance contract. Dividing by the
             # max keeps every term in [0, 1]; the result is invariant to a
@@ -686,7 +686,7 @@ class TrainingImage:
 
         A univariate TI built from a named ``Variable`` is keyed by that name,
         not ``None``, so the univariate conveniences must look the variable up
-        by identity rather than assuming the ``None`` key (audit DS12).
+        by identity rather than assuming the ``None`` key.
         """
         return next(iter(self._var_map.values()))
 

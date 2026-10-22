@@ -184,3 +184,6 @@ recover distinctions already lost in an input converted to floating point.
 them through float. Integral floats and booleans remain accepted for
 compatibility; fractional values, strings, and nonfinite numbers are rejected.
 Neighbor counts must be positive; cleanup pass counts may be zero.
+
+For a rotation-only comparison with one categorical variable and several facies,
+see :ref:`sphx_glr_examples_13_mps_07_herten_nonstationary.py`.

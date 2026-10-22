@@ -135,3 +135,6 @@ docs/source/sg_execution_times.rst
 !examples/13_mps/input/
 !examples/13_mps/input/*.npz
 !examples/13_mps/input/*.txt
+
+# Curated Herten raw fields are an intentional offline gallery asset.
+!examples/13_mps/output/herten_nonstationary.npz

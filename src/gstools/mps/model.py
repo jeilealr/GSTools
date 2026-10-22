@@ -25,9 +25,8 @@ _VALID_POST_PATH = ("same", "random", "sequential")
 def _validate_post_processing(value):
     """Validate the post-processing pass count: a non-negative integer.
 
-    Rejects a fractional value *before* truncating it (audit DS15): the earlier
-    ``int(value)`` silently turned ``0.9`` into ``0`` and ``1.9`` into ``1``
-    despite the integer-count API. ``bool`` is accepted as an explicit 0/1, and
+    Reject fractional values before integer conversion to preserve the
+    integer-count API. ``bool`` is accepted as an explicit 0/1, and
     NumPy integer types are supported without conversion through float64.
     """
     return exact_count(value, minimum=0, context="MPSModel: post_processing")
@@ -168,8 +167,7 @@ def _validate_threshold(value):
     """Validate threshold: finite and >= 0, warn if > 1; return float.
 
     ``None`` selects DSBC (best-candidate) mode and maps to the native
-    ``threshold <= 0`` sentinel, i.e. ``0.0`` (audit DS13; the PR #416 review
-    asked for the ``None``/zero distinction). ``0.0`` is also accepted and is
+    ``threshold <= 0`` sentinel, i.e. ``0.0``. ``0.0`` is also accepted and is
     equivalent to ``None`` (both select DSBC) — a deliberate, documented
     departure from the pure-Python reference, which rejects ``0`` to force
     ``None``; keeping ``0`` preserves the existing backend default and API.
@@ -480,7 +478,7 @@ class MPSModel:
     @zones.setter
     def zones(self, value):
         new_zones = _validate_zones(value, self._ti)
-        # DS14: a later assignment must honour the same cleanup-override
+        # A later assignment must honour the same cleanup-override
         # penalty-code invariant the constructor enforces, so re-screen the new
         # zones against the resolved post-processing overrides. A rejected
         # assignment leaves the previous configuration untouched.
@@ -572,7 +570,7 @@ class MPSModel:
             if val != default:
                 args.append(f"{name}={val!r}")
         # Cleanup path/overrides/mask and the nonstationary maps can make two
-        # materially different models look identical (audit DS16); show concise
+        # materially different models look identical; show concise
         # non-default markers without dumping full arrays.
         if self._post_processing_path is not None:
             args.append(f"post_processing_path={self._post_processing_path!r}")

@@ -1,11 +1,4 @@
-"""Phase 5 regressions: TI scan order (``scan_path``) and RNG contract.
-
-``scan_path="sequential"`` (default) is a wrap-around walk from a random start;
-``scan_path="random"`` visits ``scan_fraction``'s worth of DISTINCT window cells
-in a node-local random order. Both must be reproducible and thread-count
-independent. The sampler's distinctness is pinned by the Rust unit test
-``random_scan_positions_are_distinct_and_in_range``.
-"""
+"""TI scan-order validation, repeatability, and thread invariance."""
 
 import numpy as np
 import pytest

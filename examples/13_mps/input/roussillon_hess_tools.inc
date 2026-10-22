@@ -13,17 +13,17 @@ that executes automatically during documentation builds.
 
 Typical usage from the repository root::
 
-    python examples/13_mps/12_roussillon_hess_reproduction.py audit \
+    python examples/13_mps/15_roussillon_hess_reproduction.py audit \
         --archive /private/tmp/roussillon_mps_2020_dallalba.zip
 
-    python examples/13_mps/12_roussillon_hess_reproduction.py small \
+    python examples/13_mps/15_roussillon_hess_reproduction.py small \
         --archive /private/tmp/roussillon_mps_2020_dallalba.zip \
         --realizations 2 --num-threads 4
 
-    python examples/13_mps/12_roussillon_hess_reproduction.py figures \
+    python examples/13_mps/15_roussillon_hess_reproduction.py figures \
         --archive /private/tmp/roussillon_mps_2020_dallalba.zip
 
-    python examples/13_mps/12_roussillon_hess_reproduction.py full \
+    python examples/13_mps/15_roussillon_hess_reproduction.py full \
         --archive /private/tmp/roussillon_mps_2020_dallalba.zip \
         --realizations 50 --num-threads 8
 

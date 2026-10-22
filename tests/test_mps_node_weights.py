@@ -1,9 +1,8 @@
-"""F1 regression: event-node weight normalization under overflow/underflow.
+"""Robust event-node weight normalization under overflow/underflow.
 
 ``compute_node_weights`` must not collapse to a uniform event when a finite
 ``cond_weight`` overflows the raw sum, nor to an all-zero event when a large
-``distance_power`` underflows the far nodes. Ordinary inputs keep the historical
-direct normalization bit-for-bit. The native Rust helper carries the same
+``distance_power`` underflows the far nodes. Ordinary inputs preserve direct normalization arithmetic order. The native Rust helper carries the same
 policy (see GSTools-Core mps_engine::compute_node_weights unit test).
 """
 
@@ -12,7 +11,7 @@ import numpy as np
 from gstools.mps.distance import compute_node_weights
 
 
-def test_f1_overflow_preserves_relative_weights():
+def test_overflow_preserves_relative_node_weights():
     w = compute_node_weights(
         3,
         np.array([1.0, 1.0, 1.0]),
@@ -20,20 +19,20 @@ def test_f1_overflow_preserves_relative_weights():
         cond_mask=np.array([True, True, False]),
         cond_weight=1e308,
     )
-    # Two hard nodes share the mass; the far node keeps a tiny positive weight.
+    # Two hard nodes share the mass; the unconditioned node keeps a tiny positive weight.
     assert abs(w[0] - 0.5) < 1e-9
     assert abs(w[1] - 0.5) < 1e-9
     assert 0.0 < w[2] < 1e-300
     assert abs(w.sum() - 1.0) < 1e-12
 
 
-def test_f1_underflow_keeps_informative_event():
+def test_underflow_keeps_informative_event():
     w = compute_node_weights(2, np.array([2.0, 3.0]), distance_power=2048.0)
     # Normalized weights tend to [1, 0] in float64, not an all-zero event.
     np.testing.assert_array_equal(w, [1.0, 0.0])
 
 
-def test_f1_ordinary_path_is_bit_identical():
+def test_ordinary_node_weights_preserve_direct_normalization():
     w = compute_node_weights(
         3,
         np.array([1.0, 2.0, 3.0]),
@@ -45,7 +44,7 @@ def test_f1_ordinary_path_is_bit_identical():
     np.testing.assert_array_equal(w, raw / raw.sum())
 
 
-def test_f1_candidate_selection_flips_to_correct_anchor():
+def test_large_conditioning_weight_prefers_conditioned_match():
     # Event [0, 0, 1] with two hard nodes (huge cond_weight) and one soft node.
     # Uniform weights would tie candidate B=[1,0,1] (distance 1/3) with
     # A=[0,0,0] (distance 1/3); correct weights make A win by a wide margin.

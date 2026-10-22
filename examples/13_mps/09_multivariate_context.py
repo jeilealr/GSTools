@@ -13,7 +13,7 @@ serves as a reproducibility example for the implementation.
 
 **Only the channel variable is simulated here** — the context variable is
 *known everywhere* and merely guides the match. Later in this gallery, the
-:ref:`bivariate joint simulation example <sphx_glr_examples_13_mps_11_bivariate_joint.py>`
+:ref:`bivariate joint simulation example <sphx_glr_examples_13_mps_12_bivariate_joint.py>`
 has no exhaustive secondary field and simulates **both** variables together.
 
 The bundled figure uses a 250x250 grid, 30 channel neighbors, one context

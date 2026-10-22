@@ -1,16 +1,10 @@
-"""Phase 6 regressions: zonated simulation (Zone API, selector, native engine).
-
-Covers the ``Zone`` public API + validation, the ``build_zone_selector`` fold,
-and the native multi-TI engine: each node scans its zone's TI (selected inside
-Rust via ``node_domain``) while neighbours are still gathered across zone
-boundaries. The no-zone path stays bit-identical to the single-TI engine.
-"""
+"""Zone construction, selection, compatibility, and native integration."""
 
 import numpy as np
 import pytest
 
 import gstools as gs
-from gstools.mps import Variable, Zone
+from gstools.mps import Zone
 from gstools.mps.nonstationary import build_zone_selector, resolve_where
 
 
