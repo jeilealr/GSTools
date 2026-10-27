@@ -245,6 +245,18 @@ class Variable:
     max_radius : float or None, optional
         Exclude SG neighbours beyond this Euclidean distance from the data
         event. ``None`` → no limit (default).
+    penalty_matrix : array_like or None, optional
+        Categorical only: a ``C x C`` matrix of per-pair mismatch costs
+        ``T[sim_code, ti_code]`` replacing the plain 0/1 mismatch (zero
+        diagonal; off-diagonal in ``(0, 1]``; may be asymmetric). ``None``
+        (default) → plain categorical distance.
+    distance_power : float, optional
+        Exponent δ for spatial-decay weighting of neighbours (Mariethoz2010
+        Eq. 3). ``0.0`` (default) → uniform node weights; larger values weight
+        closer neighbours more heavily.
+    cond_weight : float, optional
+        Weight multiplier applied to conditioning (hard-data) nodes of this
+        variable. Default: ``1.0``.
     """
 
     @_record_explicit
@@ -537,9 +549,11 @@ class TrainingImage:
 
     Parameters
     ----------
-    data : :class:`numpy.ndarray` or list of :class:`Variable`
-        Training image data. Pass a numpy array for a univariate TI; pass a
-        non-empty list of :class:`Variable` objects for a multivariate TI.
+    data : :class:`numpy.ndarray`, :class:`Variable`, or list of :class:`Variable`
+        Training image data. Pass a numpy array or a single :class:`Variable`
+        for a univariate TI (``TrainingImage(Variable("facies", ...))`` stays
+        univariate); pass a non-empty list of :class:`Variable` objects for a
+        multivariate TI.
     categorical : :class:`bool`, optional
         Whether the variable is categorical (univariate TIs only). Default: ``True``.
     distance : :class:`str`, optional
@@ -553,7 +567,7 @@ class TrainingImage:
     distance_power : :class:`float`, optional
         Exponent δ for spatial-decay weighting of neighbours
         (Mariethoz2010 Eq. 3). Applied to **all** distance types.
-        ``0.0`` → uniform weights (oracle-compatible default).
+        ``0.0`` (the default) → uniform node weights.
         ``1.0`` → closer neighbours weighted more heavily. Bare-array
         (univariate) sugar only — set it on each :class:`Variable` otherwise.
     cond_weight : :class:`float`, optional
@@ -714,7 +728,7 @@ class TrainingImage:
 
     @property
     def variables(self):
-        """:class:`list` of :class:`Variable`: All variables (univariate has one anonymous entry)."""
+        """:class:`list` of :class:`Variable`: All configured variables; a univariate TI contains one, named or anonymous."""
         return list(self._variables)
 
     @property

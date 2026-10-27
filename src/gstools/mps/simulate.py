@@ -12,7 +12,7 @@ import numpy as np
 from gstools import config
 
 # MPS is Rust-only: the complete engine comes from gstools.mps._core, which
-# hard-imports and version-checks gstools_core (MPS is Rust-only).
+# hard-imports and version-checks gstools_core.
 from gstools.mps._core import mps_cleanup_pass as _mps_cleanup_pass_gsc
 from gstools.mps._core import mps_simulate as _mps_simulate_gsc
 from gstools.mps.neighbors import _lag_transform_matrix, _precompute_offsets
@@ -546,10 +546,9 @@ class _DirectSamplingEngine:
         return self.sg
 
     def run(self, num_threads=None):
-        # GSTools-Core is the only numerical backend (Cython was dropped
-        # upstream), so there is no backend flag to check — MPS always runs
-        # through the Rust engine. The required core version/exports are
-        # enforced at import time by gstools.mps._core.
+        # MPS always executes through the checked Rust core; there is no
+        # backend selection. The required core version/exports are enforced at
+        # import time by gstools.mps._core.
         n_threads = (
             num_threads
             if num_threads is not None
@@ -827,12 +826,14 @@ def ds_simulate(
 ):
     """Node-wise multivariate Direct Sampling (Mariethoz2010 §3, Eq. 8).
 
-    Co-simulates every variable of a dict-valued :class:`TrainingImage` on one
-    structured grid, treating all variables equally. The path visits every
-    *node* with at least one unknown variable; at each node a single joint scan
-    finds the TI cell ``y`` minimising the weighted distance ``Σ_k w_k d_k`` over
-    all variables, and that one cell's whole vector ``{TI[v][y]}`` is copied to
-    the node's *uninformed* variables. Because every variable at a node is drawn
+    Co-simulates every variable of a :class:`TrainingImage` on one structured
+    grid (both univariate and multivariate TIs are supported), treating all
+    variables equally. The path visits every *node* with at least one unknown
+    variable; at each node a single joint scan evaluates the weighted distance
+    ``Σ_k w_k d_k`` over all variables and accepts the first TI cell ``y``
+    visited below a positive threshold, otherwise returns the best cell visited
+    within the DSBC/DS scan budget. That one cell's whole vector ``{TI[v][y]}``
+    is copied to the node's *uninformed* variables. Because every variable at a node is drawn
     from the same TI cell, the collocated cross-variable tuple pasted at that
     node is exactly a tuple that occurs in the TI (when copied without variation
     correction or retained partial conditioning). This preserves the local joint
@@ -882,6 +883,28 @@ def ds_simulate(
         Canonical per-node scale map, shape ``grid_shape + (dim,)`` from
         :func:`~gstools.mps.nonstationary.resolve_spec`. ``None`` → no dilation.
         All values must be positive.
+    scan_path : str, optional
+        TI-window scan order: ``"sequential"`` (default) or ``"random"``; see
+        :class:`~gstools.mps.MPSModel`.
+    zones : list of Zone or None, optional
+        Zone definitions whose regions scan their own TI instead of the primary
+        one; ``None`` → no zonation. See :class:`~gstools.mps.MPSModel`.
+    zone_selector : numpy.ndarray or None, optional
+        Per-node domain selector (``0`` = primary, ``i+1`` = ``zones[i]``)
+        resolved from ``zones`` against the grid; ``None`` → primary everywhere.
+    post_processing : int, optional
+        Number of post-processing (cleanup) passes after the main path; ``0``
+        (default) → none. See :class:`~gstools.mps.MPSModel`.
+    post_processing_factor : float, optional
+        Divides the per-pass ``n_neighbors``/``scan_fraction`` effort.
+        Default: ``1.0``.
+    post_processing_path : str, array-like, or None, optional
+        Cleanup visit order; ``None`` inherits the main-path mode.
+    post_processing_variables : list of Variable or None, optional
+        Per-variable search-config overrides applied only during cleanup.
+    post_processing_mask : numpy.ndarray of bool or None, optional
+        Grid-shaped mask selecting which nodes cleanup may re-simulate; ``None``
+        → every non-conditioned node.
     Returns
     -------
     dict

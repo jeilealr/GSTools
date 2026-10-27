@@ -13,12 +13,11 @@ background facies dominates the TI. To keep the multi-facies structure visible,
 this example samples sparse hard data from a nearest-neighbor rescaling of the
 TI crop and conditions the Direct Sampling realization on those values.
 
-The bundled output was regenerated on a 64x64x48 grid with 1020 conditioning
+The bundled output was generated on a 64x64x48 grid with 1020 conditioning
 points, ``n_neighbors=100``, ``max_radius=20``, ``scan_fraction=0.5``,
-``threshold=0.0``, ``cond_weight=3``, seed 11, and four threads. The simulation
-took approximately **41 minutes on our machine with four threads** in the
-previous full regeneration. Runtime depends on the hardware and installed
-backend. Normal gallery execution displays the bundled precomputed figures.
+``threshold=0.0``, ``cond_weight=3``, seed 11, and four threads. Full opt-in
+regeneration is computationally expensive and strongly hardware-dependent.
+Normal gallery execution displays the bundled precomputed figures.
 You can reproduce the simulation and regenerate all four figures by running
 this command from the repository root in an environment with GSTools and its
 Rust backend installed:
@@ -29,8 +28,7 @@ Rust backend installed:
       python examples/13_mps/14_3d_fluvsim_multifacies.py
 
 Regeneration writes the figures into ``examples/13_mps/output/``. The full
-settings are retained to preserve the five-facies structure; the faster tuning
-candidates distorted facies proportions and secondary-facies geometry.
+settings are retained to preserve the five-facies structure.
 
 .. note::
 
@@ -532,5 +530,5 @@ show_saved_figure(output_paths["correlation"], width=9.5)
 # These four figures show the results of one Direct Sampling realization.
 # Normal gallery execution displays the saved PNGs; it does not run the 3D
 # simulation. Set ``GSTOOLS_GENERATE_EXAMPLE_OUTPUT=1`` to generate the field
-# and refresh all four figures. The previous run took about 41 minutes on our
-# machine with four threads.
+# and refresh all four figures; full regeneration is computationally expensive
+# and hardware-dependent.

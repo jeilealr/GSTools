@@ -21,10 +21,8 @@ components) or ``(n_nodes, n_comp)`` (the trailing component axis is what
 per-node indexing consumes).
 
 It also resolves zonation (:func:`resolve_where` / :func:`build_zone_selector`,
-mapping each node to its ``Zone``), and is **stricter** than the upstream source
-on rotation/scale: all resolved values must be finite, and ``scale`` must
-additionally be strictly positive (the upstream ``> 0`` check alone admits
-``+inf``).
+mapping each node to its ``Zone``). All resolved rotation/scale values must be
+finite, and ``scale`` values must additionally be strictly positive.
 """
 
 import numpy as np

@@ -95,9 +95,10 @@ class DirectSampling(Field):
     ----------
     model : MPSModel
         Algorithm configuration: training image, scan fraction, threshold,
-        conditioning weight, and boundary strategy. Neighbour count and
-        maximum search radius live on each :class:`Variable` inside the
-        :class:`TrainingImage`. Build one with
+        and boundary strategy. Neighbour count, maximum search radius, and the
+        per-variable conditioning-node weight (``cond_weight``) live on each
+        :class:`Variable` inside the :class:`TrainingImage` (set via the
+        univariate construction sugar for a bare-array TI). Build one with
         ``MPSModel(ti, scan_fraction=…, threshold=…)``.
     seed : int, None or nan, optional
         Master RNG seed. ``None`` or the default ``nan`` initializes from
@@ -223,8 +224,16 @@ class DirectSampling(Field):
             Default: :any:`True`
         store : :class:`bool` or :class:`str`, optional
             Whether to store the field (``True``), not store it (``False``),
-            or store it under a custom name (string).
-            Default: :any:`True`
+            or store it under a custom name (string). A custom string name is
+            rejected for a multivariate training image, where each variable is
+            stored under its own name. Default: :any:`True`
+        num_threads : :class:`int` or None, optional
+            Worker count for the node-dependency scheduler. ``None`` (default)
+            resolves to the instance :attr:`num_threads`, then
+            :any:`gstools.config.NUM_THREADS`, then a single thread; paths
+            shorter than 512 nodes run serially regardless. Results are
+            deterministic across thread counts within a fixed build and
+            dependency environment. Default: :any:`None`
         Returns
         -------
         field : :class:`numpy.ndarray` or :class:`dict`

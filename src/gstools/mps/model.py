@@ -166,14 +166,11 @@ def _validate_scan_fraction(value):
 def _validate_threshold(value):
     """Validate threshold: finite and >= 0, warn if > 1; return float.
 
-    ``None`` selects DSBC (best-candidate) mode and maps to the native
-    ``threshold <= 0`` sentinel, i.e. ``0.0``. ``0.0`` is also accepted and is
-    equivalent to ``None`` (both select DSBC) — a deliberate, documented
-    departure from the pure-Python reference, which rejects ``0`` to force
-    ``None``; keeping ``0`` preserves the existing backend default and API.
-
-    NaN/inf are rejected up front (a NaN threshold would otherwise slip past
-    the ``< 0`` / ``> 1`` comparisons; cf. GeoStat-Framework/GSTools#416).
+    ``None`` and ``0.0`` are equivalent and both select DSBC (best-candidate)
+    mode, mapping to the native ``threshold <= 0`` sentinel. A positive
+    threshold accepts the first candidate whose distance falls below it. NaN and
+    infinity are rejected up front (a NaN threshold would otherwise slip past
+    the ``< 0`` / ``> 1`` comparisons).
     """
     if value is None:
         return 0.0
